@@ -1,0 +1,9 @@
+services:
+  pool_sv2:
+    image: luskabalieiro/pool_sv2:v1.5.0
+    environment:
+      - CONFIG_FILE=/app/config.toml
+    volumes:
+      - ./config/my-custom-pool-config.toml:/app/config.toml:ro
+    restart: unless-stopped
+
