@@ -1,0 +1,115 @@
+services:
+  # Bitcoin SV2 Service
+  bitcoin_sv2:
+    build: template_provider
+    container_name: bitcoin_sv2
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.10
+    volumes:
+      - ${BITCOIN_DATA_DIR:-~/.bitcoin}:/root/.bitcoin
+    ports:
+      - "8442:8442"
+    environment:
+      - BITCOIN_CONF_PATH=/root/.bitcoin/bitcoin.conf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:8442/"]
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
+    profiles:
+      - template_provider
+      - pool_apps
+      - miner_apps
+
+  # Pool SV2 Service
+  pool_sv2:
+    image: luskabalieiro/pool_sv2:v1.5.0
+    container_name: pool_sv2
+    environment:
+      - CONFIG_FILE=/app/config.toml
+    volumes:
+      - ./config/my-custom-pool-config.toml:/app/config.toml:ro
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.11
+    depends_on:
+      - bitcoin_sv2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://bitcoin_sv2:8442/"]
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
+    profiles:
+      - pool_apps
+
+  # JD Server SV2 Service
+  jds_sv2:
+    image: luskabalieiro/jd_server:v1.5.0
+    container_name: jd_server_sv2
+    environment:
+      - CONFIG_FILE=/app/config.toml
+    volumes:
+      - ./config/my-custom-jds-config.toml:/app/config.toml:ro
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.12
+    depends_on:
+      - bitcoin_sv2
+    restart: unless-stopped
+    profiles:
+      - pool_apps
+
+  # JD Client SV2 Service
+  jd_client_sv2:
+    image: luskabalieiro/jd_client:v1.5.0
+    container_name: jd_client_sv2
+    environment:
+      - CONFIG_FILE=/app/config.toml
+    volumes:
+      - ./config/my-custom-jdc-config.toml:/app/config.toml:ro
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.13
+    depends_on:
+      - bitcoin_sv2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://bitcoin_sv2:8442/"]
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
+    profiles:
+      - miner_apps  # Only included in the miner_apps profile
+
+  # Translator Proxy SV2 Service
+  tproxy_sv2:
+    image: luskabalieiro/translator_sv2:v1.5.0
+    container_name: tproxy_sv2
+    environment:
+      - CONFIG_FILE=/app/config.toml
+    volumes:
+      - ./config/my-custom-tproxy-config.toml:/app/config.toml:ro
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.14
+    depends_on:
+      - jd_client_sv2
+      - bitcoin_sv2
+    restart: unless-stopped
+    profiles:
+      - miner_apps  # Only included in the miner_apps profile
+
+networks:
+  sv2_apps:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+
