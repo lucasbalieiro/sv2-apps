@@ -1,0 +1,29 @@
+services:
+  bitcoin_sv2:
+    build: .
+    container_name: bitcoin_sv2
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.10
+    volumes:
+      - ${BITCOIN_DATA_DIR:-~/.bitcoin}:/root/.bitcoin
+    ports:
+      - "8442:8442"
+    environment:
+      - BITCOIN_CONF_PATH=/root/.bitcoin/bitcoin.conf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:8442/"]
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
+
+networks:
+  sv2_apps:
+    name: sv2_apps
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
