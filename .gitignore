@@ -21,3 +21,6 @@ cobertura.xml
 **/template-provider
 stratum-message-generator
 *.log
+docker/.bitcoin/*
+!docker/.bitcoin/bitcoin.conf
+**/.DS_Store

@@ -1,0 +1,39 @@
+FROM debian:trixie-slim
+
+# Build arguments
+ARG SV2_APP
+ARG TARGETPLATFORM
+ARG GITHUB_REPO
+ARG VERSION
+
+ENV SV2_APP=${SV2_APP}
+ENV CONFIG_FILE=""
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Download correct binary for platform
+RUN set -eux; \
+    case "$TARGETPLATFORM" in \
+        "linux/amd64") ARCH="x86_64-linux-gnu" ;; \
+        "linux/arm64") ARCH="aarch64-linux-gnu" ;; \
+        *) echo "Unsupported arch: $TARGETPLATFORM" && exit 1 ;; \
+    esac; \
+    curl -L -o /app/${SV2_APP} \
+        https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${SV2_APP}-$ARCH; \
+    chmod +x /app/${SV2_APP}
+
+# Ensure user always provides a config file
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD [ \
+    "if [ -z \"$CONFIG_FILE\" ] || [ ! -f \"$CONFIG_FILE\" ]; then \
+        echo 'Error: CONFIG_FILE environment variable not set or file does not exist.'; \
+        exit 1; \
+    fi; \
+    echo 'Using config file:' $CONFIG_FILE; \
+    exec /app/${SV2_APP} --config \"$CONFIG_FILE\"" \
+]
+
