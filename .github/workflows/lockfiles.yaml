@@ -1,8 +1,10 @@
 name: Lockfiles
 
-# Trigger the workflow on pull request events for the main branch
 on:
   pull_request:
+    branches:
+      - main
+  push:
     branches:
       - main
 
@@ -21,6 +23,6 @@ jobs:
 
       - name: Build with locked dependencies
         run: |
-          cargo build --manifest-path=roles/Cargo.toml --locked
-          cargo build --manifest-path=utils/Cargo.toml --locked
-          cargo build --manifest-path=test/integration-tests/Cargo.toml --locked
+          cargo build --manifest-path=pool-apps/Cargo.toml --locked
+          cargo build --manifest-path=miner-apps/Cargo.toml --locked
+          cargo build --manifest-path=integration-tests/Cargo.toml --locked
