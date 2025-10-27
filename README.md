@@ -95,7 +95,7 @@ SRI contributors are independently, financially supported by following entities:
 This software is licensed under Apache 2.0 or MIT, at your option.
 
 ## 🦀 MSRV
-Minimum Supported Rust Version: 1.75.0
+Minimum Supported Rust Version: 1.85.0
 
 ---
 
