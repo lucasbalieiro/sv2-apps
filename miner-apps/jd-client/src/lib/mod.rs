@@ -1,7 +1,13 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use async_channel::{unbounded, Receiver, Sender};
-use stratum_apps::{key_utils::Secp256k1PublicKey, stratum_core::bitcoin::consensus::Encodable};
+use stratum_apps::{
+    key_utils::Secp256k1PublicKey,
+    stratum_core::{
+        bitcoin::consensus::Encodable,
+        parsers_sv2::{JobDeclaration, Mining},
+    },
+};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
@@ -15,7 +21,7 @@ use crate::{
     task_manager::TaskManager,
     template_receiver::TemplateReceiver,
     upstream::Upstream,
-    utils::{SV2Frame, ShutdownMessage, UpstreamState},
+    utils::{ShutdownMessage, UpstreamState},
 };
 
 mod channel_manager;
@@ -68,24 +74,20 @@ impl JobDeclaratorClient {
         let (status_sender, status_receiver) = async_channel::unbounded::<Status>();
 
         let (channel_manager_to_upstream_sender, channel_manager_to_upstream_receiver) =
-            unbounded::<SV2Frame>();
+            unbounded();
         let (upstream_to_channel_manager_sender, upstream_to_channel_manager_receiver) =
-            unbounded::<SV2Frame>();
+            unbounded();
 
-        let (channel_manager_to_jd_sender, channel_manager_to_jd_receiver) =
-            unbounded::<SV2Frame>();
-        let (jd_to_channel_manager_sender, jd_to_channel_manager_receiver) =
-            unbounded::<SV2Frame>();
+        let (channel_manager_to_jd_sender, channel_manager_to_jd_receiver) = unbounded();
+        let (jd_to_channel_manager_sender, jd_to_channel_manager_receiver) = unbounded();
 
         let (channel_manager_to_downstream_sender, _channel_manager_to_downstream_receiver) =
             broadcast::channel(10);
         let (downstream_to_channel_manager_sender, downstream_to_channel_manager_receiver) =
             unbounded();
 
-        let (channel_manager_to_tp_sender, channel_manager_to_tp_receiver) =
-            unbounded::<SV2Frame>();
-        let (tp_to_channel_manager_sender, tp_to_channel_manager_receiver) =
-            unbounded::<SV2Frame>();
+        let (channel_manager_to_tp_sender, channel_manager_to_tp_receiver) = unbounded();
+        let (tp_to_channel_manager_sender, tp_to_channel_manager_receiver) = unbounded();
 
         debug!("Channels initialized.");
 
@@ -350,10 +352,10 @@ impl JobDeclaratorClient {
     pub async fn initialize_jd(
         &self,
         upstreams: &mut [(SocketAddr, SocketAddr, Secp256k1PublicKey, bool)],
-        channel_manager_to_upstream_receiver: Receiver<SV2Frame>,
-        upstream_to_channel_manager_sender: Sender<SV2Frame>,
-        channel_manager_to_jd_receiver: Receiver<SV2Frame>,
-        jd_to_channel_manager_sender: Sender<SV2Frame>,
+        channel_manager_to_upstream_receiver: Receiver<Mining<'static>>,
+        upstream_to_channel_manager_sender: Sender<Mining<'static>>,
+        channel_manager_to_jd_receiver: Receiver<JobDeclaration<'static>>,
+        jd_to_channel_manager_sender: Sender<JobDeclaration<'static>>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         status_sender: Sender<Status>,
         mode: ConfigJDCMode,
@@ -429,10 +431,10 @@ impl JobDeclaratorClient {
 #[allow(clippy::too_many_arguments)]
 async fn try_initialize_single(
     upstream_addr: &(SocketAddr, SocketAddr, Secp256k1PublicKey, bool),
-    upstream_to_channel_manager_sender: Sender<SV2Frame>,
-    channel_manager_to_upstream_receiver: Receiver<SV2Frame>,
-    jd_to_channel_manager_sender: Sender<SV2Frame>,
-    channel_manager_to_jd_receiver: Receiver<SV2Frame>,
+    upstream_to_channel_manager_sender: Sender<Mining<'static>>,
+    channel_manager_to_upstream_receiver: Receiver<Mining<'static>>,
+    jd_to_channel_manager_sender: Sender<JobDeclaration<'static>>,
+    channel_manager_to_jd_receiver: Receiver<JobDeclaration<'static>>,
     notify_shutdown: broadcast::Sender<ShutdownMessage>,
     status_sender: Sender<Status>,
     mode: ConfigJDCMode,

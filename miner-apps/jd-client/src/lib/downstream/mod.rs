@@ -13,7 +13,7 @@ use stratum_apps::{
         },
         common_messages_sv2::MESSAGE_TYPE_SETUP_CONNECTION,
         handlers_sv2::HandleCommonMessagesFromClientAsync,
-        parsers_sv2::{AnyMessage, IsSv2Message},
+        parsers_sv2::{AnyMessage, Mining},
     },
 };
 
@@ -58,8 +58,8 @@ pub struct DownstreamData {
 /// - `downstream_receiver`: receives frames from the downstream.
 #[derive(Clone)]
 pub struct DownstreamChannel {
-    channel_manager_sender: Sender<(u32, SV2Frame)>,
-    channel_manager_receiver: broadcast::Sender<(u32, Message)>,
+    channel_manager_sender: Sender<(u32, Mining<'static>)>,
+    channel_manager_receiver: broadcast::Sender<(u32, Mining<'static>)>,
     downstream_sender: Sender<SV2Frame>,
     downstream_receiver: Receiver<SV2Frame>,
 }
@@ -76,8 +76,8 @@ impl Downstream {
     /// Creates a new [`Downstream`] instance and spawns the necessary I/O tasks.
     pub fn new(
         downstream_id: u32,
-        channel_manager_sender: Sender<(u32, SV2Frame)>,
-        channel_manager_receiver: broadcast::Sender<(u32, Message)>,
+        channel_manager_sender: Sender<(u32, Mining<'static>)>,
+        channel_manager_receiver: broadcast::Sender<(u32, Mining<'static>)>,
         noise_stream: NoiseTcpStream<Message>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         task_manager: Arc<TaskManager>,
@@ -212,9 +212,9 @@ impl Downstream {
     // Handles messages sent from the channel manager to this downstream.
     async fn handle_channel_manager_message(
         self,
-        receiver: &mut broadcast::Receiver<(u32, AnyMessage<'static>)>,
+        receiver: &mut broadcast::Receiver<(u32, Mining<'static>)>,
     ) -> Result<(), JDCError> {
-        let (downstream_id, frame) = match receiver.recv().await {
+        let (downstream_id, message) = match receiver.recv().await {
             Ok(msg) => msg,
             Err(e) => {
                 warn!(?e, "Broadcast receive failed");
@@ -230,18 +230,12 @@ impl Downstream {
             return Ok(());
         }
 
-        let message_type = frame.message_type();
-        let std_frame = match StdFrame::from_message(frame, message_type, 0, true) {
-            Some(f) => f,
-            None => {
-                debug!("Invalid frame conversion; skipping message");
-                return Ok(());
-            }
-        };
+        let message = AnyMessage::Mining(message);
+        let sv2_frame: StdFrame = message.try_into()?;
 
         self.downstream_channel
             .downstream_sender
-            .send(std_frame)
+            .send(sv2_frame)
             .await
             .map_err(|e| {
                 error!(?e, "Downstream send failed");
@@ -255,7 +249,7 @@ impl Downstream {
 
     // Handles incoming messages from the downstream peer.
     async fn handle_downstream_message(self) -> Result<(), JDCError> {
-        let sv2_frame = self.downstream_channel.downstream_receiver.recv().await?;
+        let mut sv2_frame = self.downstream_channel.downstream_receiver.recv().await?;
 
         let Some(message_type) = sv2_frame.get_header().map(|h| h.msg_type()) else {
             return Ok(());
@@ -269,10 +263,13 @@ impl Downstream {
             return Ok(());
         }
 
+        let message = Mining::try_from((message_type, sv2_frame.payload()))?.into_static();
+
         debug!("Received mining SV2 frame from downstream.");
+
         self.downstream_channel
             .channel_manager_sender
-            .send((self.downstream_id, sv2_frame))
+            .send((self.downstream_id, message))
             .await
             .map_err(|e| {
                 error!(error=?e, "Failed to send mining message to channel manager.");

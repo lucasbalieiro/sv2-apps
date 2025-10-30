@@ -8,7 +8,7 @@ use stratum_apps::stratum_core::{
     },
     handlers_sv2::{HandleMiningMessagesFromServerAsync, SupportedChannelTypes},
     mining_sv2::*,
-    parsers_sv2::{AnyMessage, Mining, TemplateDistribution},
+    parsers_sv2::{Mining, TemplateDistribution},
     template_distribution_sv2::RequestTransactionData,
 };
 use tracing::{debug, error, info, warn};
@@ -21,7 +21,7 @@ use crate::{
     error::{ChannelSv2Error, JDCError},
     jd_mode::{get_jd_mode, JdMode},
     status::{State, Status},
-    utils::{create_close_channel_msg, PendingChannelRequest, StdFrame, UpstreamState},
+    utils::{create_close_channel_msg, PendingChannelRequest, UpstreamState},
 };
 
 impl HandleMiningMessagesFromServerAsync for ChannelManager {
@@ -210,15 +210,13 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         if channel_state == UpstreamState::Connected {
             if get_jd_mode() == JdMode::FullTemplate {
                 if let Some(template) = template {
-                    let tx_data_request = AnyMessage::TemplateDistribution(
+                    let tx_data_request =
                         TemplateDistribution::RequestTransactionData(RequestTransactionData {
                             template_id: template.template_id,
-                        }),
-                    );
-                    let frame: StdFrame = tx_data_request.try_into()?;
+                        });
                     self.channel_manager_channel
                         .tp_sender
-                        .send(frame)
+                        .send(tx_data_request)
                         .await
                         .map_err(|_e| JDCError::ChannelErrorSender)?;
                 }
@@ -226,11 +224,10 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
             if get_jd_mode() == JdMode::CoinbaseOnly {
                 if let Some(custom_job) = custom_job {
-                    let set_custom_job = AnyMessage::Mining(Mining::SetCustomMiningJob(custom_job));
-                    let frame: StdFrame = set_custom_job.try_into()?;
+                    let set_custom_job = Mining::SetCustomMiningJob(custom_job);
                     self.channel_manager_channel
-                        .jd_sender
-                        .send(frame)
+                        .upstream_sender
+                        .send(set_custom_job)
                         .await
                         .map_err(|_e| JDCError::ChannelErrorSender)?;
                     _ = self.allocate_tokens(1).await;
@@ -253,11 +250,10 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         // In case of failure, close the channel with upstream.
         if let Some(close_channel) = close_channel {
-            let close_channel = AnyMessage::Mining(Mining::CloseChannel(close_channel));
-            let frame: StdFrame = close_channel.try_into()?;
+            let close_channel = Mining::CloseChannel(close_channel);
             self.channel_manager_channel
                 .upstream_sender
-                .send(frame)
+                .send(close_channel)
                 .await
                 .map_err(|_e| JDCError::ChannelErrorSender)?;
             _ = self.allocate_tokens(1).await;

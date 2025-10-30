@@ -39,7 +39,7 @@ use stratum_apps::{
             MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
         },
         noise_sv2::Responder,
-        parsers_sv2::{AnyMessage, JobDeclaration, Mining},
+        parsers_sv2::{JobDeclaration, Mining, TemplateDistribution},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
     },
 };
@@ -53,10 +53,7 @@ use crate::{
     error::JDCError,
     status::{handle_error, Status, StatusSender},
     task_manager::TaskManager,
-    utils::{
-        AtomicUpstreamState, Message, PendingChannelRequest, SV2Frame, ShutdownMessage, StdFrame,
-        UpstreamState,
-    },
+    utils::{AtomicUpstreamState, Message, PendingChannelRequest, ShutdownMessage, UpstreamState},
 };
 mod downstream_message_handler;
 mod jd_message_handler;
@@ -217,14 +214,14 @@ impl ChannelManagerData {
 
 #[derive(Clone)]
 pub struct ChannelManagerChannel {
-    upstream_sender: Sender<SV2Frame>,
-    upstream_receiver: Receiver<SV2Frame>,
-    jd_sender: Sender<SV2Frame>,
-    jd_receiver: Receiver<SV2Frame>,
-    tp_sender: Sender<SV2Frame>,
-    tp_receiver: Receiver<SV2Frame>,
-    downstream_sender: broadcast::Sender<(u32, Message)>,
-    downstream_receiver: Receiver<(u32, SV2Frame)>,
+    upstream_sender: Sender<Mining<'static>>,
+    upstream_receiver: Receiver<Mining<'static>>,
+    jd_sender: Sender<JobDeclaration<'static>>,
+    jd_receiver: Receiver<JobDeclaration<'static>>,
+    tp_sender: Sender<TemplateDistribution<'static>>,
+    tp_receiver: Receiver<TemplateDistribution<'static>>,
+    downstream_sender: broadcast::Sender<(u32, Mining<'static>)>,
+    downstream_receiver: Receiver<(u32, Mining<'static>)>,
     status_sender: Sender<Status>,
 }
 
@@ -252,14 +249,14 @@ impl ChannelManager {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: JobDeclaratorClientConfig,
-        upstream_sender: Sender<SV2Frame>,
-        upstream_receiver: Receiver<SV2Frame>,
-        jd_sender: Sender<SV2Frame>,
-        jd_receiver: Receiver<SV2Frame>,
-        tp_sender: Sender<SV2Frame>,
-        tp_receiver: Receiver<SV2Frame>,
-        downstream_sender: broadcast::Sender<(u32, Message)>,
-        downstream_receiver: Receiver<(u32, SV2Frame)>,
+        upstream_sender: Sender<Mining<'static>>,
+        upstream_receiver: Receiver<Mining<'static>>,
+        jd_sender: Sender<JobDeclaration<'static>>,
+        jd_receiver: Receiver<JobDeclaration<'static>>,
+        tp_sender: Sender<TemplateDistribution<'static>>,
+        tp_receiver: Receiver<TemplateDistribution<'static>>,
+        downstream_sender: broadcast::Sender<(u32, Mining<'static>)>,
+        downstream_receiver: Receiver<(u32, Mining<'static>)>,
         status_sender: Sender<Status>,
         coinbase_outputs: Vec<u8>,
     ) -> Result<Self, JDCError> {
@@ -340,8 +337,8 @@ impl ChannelManager {
         task_manager: Arc<TaskManager>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         status_sender: Sender<Status>,
-        channel_manager_sender: Sender<(u32, SV2Frame)>,
-        channel_manager_receiver: broadcast::Sender<(u32, Message)>,
+        channel_manager_sender: Sender<(u32, Mining<'static>)>,
+        channel_manager_receiver: broadcast::Sender<(u32, Mining<'static>)>,
     ) -> Result<(), JDCError> {
         info!("Starting downstream server at {listening_address}");
         let server = TcpListener::bind(listening_address).await.map_err(|e| {
@@ -579,17 +576,9 @@ impl ChannelManager {
     ///   message handler.
     /// - If the frame contains any unsupported message type, an error is returned.
     async fn handle_jds_message(&mut self) -> Result<(), JDCError> {
-        if let Ok(mut sv2_frame) = self.channel_manager_channel.jd_receiver.recv().await {
-            let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
-                return Ok(());
-            };
-
-            self.handle_job_declaration_message_frame_from_server(
-                None,
-                message_type,
-                sv2_frame.payload(),
-            )
-            .await?;
+        if let Ok(message) = self.channel_manager_channel.jd_receiver.recv().await {
+            self.handle_job_declaration_message_from_server(None, message)
+                .await?;
         }
         Ok(())
     }
@@ -601,12 +590,8 @@ impl ChannelManager {
     ///   handler.
     /// - If the frame contains any unsupported message type, an error is returned.
     async fn handle_pool_message(&mut self) -> Result<(), JDCError> {
-        if let Ok(mut sv2_frame) = self.channel_manager_channel.upstream_receiver.recv().await {
-            let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
-                return Ok(());
-            };
-
-            self.handle_mining_message_frame_from_server(None, message_type, sv2_frame.payload())
+        if let Ok(message) = self.channel_manager_channel.upstream_receiver.recv().await {
+            self.handle_mining_message_from_server(None, message)
                 .await?;
         }
         Ok(())
@@ -619,16 +604,9 @@ impl ChannelManager {
     //   distribution message handler.
     // - If the frame contains any unsupported message type, an error is returned.
     async fn handle_template_provider_message(&mut self) -> Result<(), JDCError> {
-        if let Ok(mut sv2_frame) = self.channel_manager_channel.tp_receiver.recv().await {
-            let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
-                return Ok(());
-            };
-            self.handle_template_distribution_message_frame_from_server(
-                None,
-                message_type,
-                sv2_frame.payload(),
-            )
-            .await?;
+        if let Ok(message) = self.channel_manager_channel.tp_receiver.recv().await {
+            self.handle_template_distribution_message_from_server(None, message)
+                .await?;
         }
         Ok(())
     }
@@ -669,23 +647,14 @@ impl ChannelManager {
     // - After the upstream channel is established, all new downstream requests bypass the pending
     //   mechanism and are sent directly to the mining handler.
     async fn handle_downstream_message(&mut self) -> Result<(), JDCError> {
-        if let Ok((downstream_id, mut sv2_frame)) = self
+        if let Ok((downstream_id, message)) = self
             .channel_manager_channel
             .downstream_receiver
             .recv()
             .await
         {
-            let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
-                return Err(JDCError::UnexpectedMessage(0));
-            };
-
-            match message_type {
-                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL => {
-                    let message: Mining = (message_type, sv2_frame.payload()).try_into()?;
-                    let Mining::OpenExtendedMiningChannel(mut downstream_channel_request) = message
-                    else {
-                        return Err(JDCError::UnexpectedMessage(message_type));
-                    };
+            match message {
+                Mining::OpenExtendedMiningChannel(mut downstream_channel_request) => {
                     let user_identity = format!(
                         "{}#{}",
                         downstream_channel_request.user_identity.as_utf8_or_hex(),
@@ -713,15 +682,13 @@ impl ChannelManager {
                                 upstream_message.request_id = 1;
                                 upstream_message.min_extranonce_size +=
                                     JDC_SEARCH_SPACE_BYTES as u16;
-                                let upstream_message = AnyMessage::Mining(
+                                let upstream_message =
                                     Mining::OpenExtendedMiningChannel(upstream_message)
-                                        .into_static(),
-                                );
-                                let frame: StdFrame = upstream_message.try_into()?;
+                                        .into_static();
 
                                 self.channel_manager_channel
                                     .upstream_sender
-                                    .send(frame)
+                                    .send(upstream_message)
                                     .await
                                     .map_err(|_| JDCError::ChannelErrorSender)?;
                             }
@@ -735,26 +702,20 @@ impl ChannelManager {
                         UpstreamState::Connected => {
                             self.send_open_channel_request_to_mining_handler(
                                 Mining::OpenExtendedMiningChannel(downstream_msg),
-                                message_type,
+                                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
                             )
                             .await?;
                         }
                         UpstreamState::SoloMining => {
                             self.send_open_channel_request_to_mining_handler(
                                 Mining::OpenExtendedMiningChannel(downstream_msg),
-                                message_type,
+                                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
                             )
                             .await?;
                         }
                     }
                 }
-                MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL => {
-                    let message: Mining = (message_type, sv2_frame.payload()).try_into()?;
-                    let Mining::OpenStandardMiningChannel(mut downstream_channel_request) = message
-                    else {
-                        return Err(JDCError::UnexpectedMessage(message_type));
-                    };
-
+                Mining::OpenStandardMiningChannel(mut downstream_channel_request) => {
                     let user_identity = format!(
                         "{:?}#{}",
                         downstream_channel_request.user_identity, downstream_id
@@ -783,13 +744,11 @@ impl ChannelManager {
                                     min_extranonce_size: JDC_SEARCH_SPACE_BYTES as u16,
                                 };
 
-                                let frame: StdFrame = AnyMessage::Mining(
-                                    Mining::OpenExtendedMiningChannel(upstream_open).into_static(),
-                                )
-                                .try_into()?;
+                                let message =
+                                    Mining::OpenExtendedMiningChannel(upstream_open).into_static();
                                 self.channel_manager_channel
                                     .upstream_sender
-                                    .send(frame)
+                                    .send(message)
                                     .await
                                     .map_err(|_| JDCError::ChannelErrorSender)?;
                             }
@@ -803,26 +762,22 @@ impl ChannelManager {
                         UpstreamState::Connected => {
                             self.send_open_channel_request_to_mining_handler(
                                 Mining::OpenStandardMiningChannel(downstream_msg),
-                                message_type,
+                                MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
                             )
                             .await?;
                         }
                         UpstreamState::SoloMining => {
                             self.send_open_channel_request_to_mining_handler(
                                 Mining::OpenStandardMiningChannel(downstream_msg),
-                                message_type,
+                                MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
                             )
                             .await?;
                         }
                     }
                 }
                 _ => {
-                    self.handle_mining_message_frame_from_client(
-                        None,
-                        message_type,
-                        sv2_frame.payload(),
-                    )
-                    .await?;
+                    self.handle_mining_message_from_client(None, message)
+                        .await?;
                 }
             }
         }
@@ -895,16 +850,9 @@ impl ChannelManager {
                 request_id,
             });
 
-            let frame: StdFrame = AnyMessage::JobDeclaration(message)
-                .try_into()
-                .map_err(|e| {
-                    info!(error = ?e, "Failed to convert AllocateMiningJobToken to frame");
-                    e
-                })?;
-
             self.channel_manager_channel
                 .jd_sender
-                .send(frame)
+                .send(message)
                 .await
                 .map_err(|e| {
                     info!(error = ?e, "Failed to send AllocateMiningJobToken frame");

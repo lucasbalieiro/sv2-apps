@@ -7,7 +7,7 @@ use stratum_apps::stratum_core::{
     handlers_sv2::HandleTemplateDistributionMessagesFromServerAsync,
     job_declaration_sv2::DeclareMiningJob,
     mining_sv2::SetNewPrevHash as SetNewPrevHashMp,
-    parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution},
+    parsers_sv2::{JobDeclaration, Mining, TemplateDistribution},
     template_distribution_sv2::*,
 };
 use tracing::{error, info, warn};
@@ -16,7 +16,6 @@ use crate::{
     channel_manager::{downstream_message_handler::RouteMessageTo, ChannelManager, DeclaredJob},
     error::JDCError,
     jd_mode::{get_jd_mode, JdMode},
-    utils::StdFrame,
 };
 
 impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
@@ -54,15 +53,14 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             .map_err(|_| JDCError::ChannelManagerHasBadCoinbaseOutputs)?;
 
         if get_jd_mode() == JdMode::FullTemplate {
-            let tx_data_request = AnyMessage::TemplateDistribution(
+            let tx_data_request =
                 TemplateDistribution::RequestTransactionData(RequestTransactionData {
                     template_id: msg.template_id,
-                }),
-            );
-            let frame: StdFrame = tx_data_request.try_into()?;
+                });
+
             self.channel_manager_channel
                 .tp_sender
-                .send(frame)
+                .send(tx_data_request)
                 .await
                 .map_err(|_e| JDCError::ChannelErrorSender)?;
         }
@@ -384,11 +382,8 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
         }
 
         if let Some(declare_job) = declare_job {
-            let frame: StdFrame =
-                AnyMessage::JobDeclaration(JobDeclaration::DeclareMiningJob(declare_job))
-                    .try_into()?;
-
-            _ = self.channel_manager_channel.jd_sender.send(frame).await;
+            let message = JobDeclaration::DeclareMiningJob(declare_job);
+            _ = self.channel_manager_channel.jd_sender.send(message).await;
         }
 
         Ok(())
@@ -438,12 +433,11 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
         if get_jd_mode() == JdMode::FullTemplate {
             if let Some(Some(job)) = declare_job {
-                let frame: StdFrame =
-                    AnyMessage::JobDeclaration(JobDeclaration::DeclareMiningJob(job)).try_into()?;
+                let message = JobDeclaration::DeclareMiningJob(job);
 
                 self.channel_manager_channel
                     .jd_sender
-                    .send(frame)
+                    .send(message)
                     .await
                     .map_err(|_e| JDCError::ChannelErrorSender)?;
             }
