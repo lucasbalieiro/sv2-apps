@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use async_channel::unbounded;
-use stratum_apps::stratum_core::{
-    bitcoin::consensus::Encodable, parsers_sv2::TemplateDistribution,
+use bitcoin_core_sv2::CancellationToken;
+use stratum_apps::{
+    stratum_core::{bitcoin::consensus::Encodable, parsers_sv2::TemplateDistribution},
+    tp_type::TemplateProviderType,
 };
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -13,7 +15,10 @@ use crate::{
     error::PoolResult,
     status::{State, Status},
     task_manager::TaskManager,
-    template_receiver::TemplateReceiver,
+    template_receiver::{
+        bitcoin_core::{connect_to_bitcoin_core, BitcoinCoreSv2Config},
+        sv2_tp::Sv2Tp,
+    },
     utils::ShutdownMessage,
 };
 
@@ -70,7 +75,7 @@ impl PoolSv2 {
 
         let channel_manager = ChannelManager::new(
             self.config.clone(),
-            channel_manager_to_tp_sender,
+            channel_manager_to_tp_sender.clone(),
             tp_to_channel_manager_receiver,
             channel_manager_to_downstream_sender.clone(),
             downstream_to_channel_manager_receiver,
@@ -80,32 +85,62 @@ impl PoolSv2 {
 
         let channel_manager_clone = channel_manager.clone();
 
-        // Initialize the template Receiver
-        let tp_address = self.config.tp_address().to_string();
-        let tp_pubkey = self.config.tp_authority_public_key().copied();
+        match self.config.template_provider_type().clone() {
+            TemplateProviderType::Sv2Tp {
+                address,
+                public_key,
+            } => {
+                let sv2_tp = Sv2Tp::new(
+                    address.clone(),
+                    public_key,
+                    channel_manager_to_tp_receiver,
+                    tp_to_channel_manager_sender,
+                    notify_shutdown.clone(),
+                    task_manager.clone(),
+                    status_sender.clone(),
+                )
+                .await?;
 
-        let template_receiver = TemplateReceiver::new(
-            tp_address.clone(),
-            tp_pubkey,
-            channel_manager_to_tp_receiver,
-            tp_to_channel_manager_sender,
-            notify_shutdown.clone(),
-            task_manager.clone(),
-            status_sender.clone(),
-        )
-        .await?;
+                sv2_tp
+                    .start(
+                        address,
+                        notify_shutdown.clone(),
+                        status_sender.clone(),
+                        task_manager.clone(),
+                        encoded_outputs,
+                    )
+                    .await?;
 
-        info!("Template provider setup done");
+                info!("Sv2 Template Provider setup done");
+            }
+            TemplateProviderType::BitcoinCoreIpc {
+                unix_socket_path,
+                fee_threshold,
+            } => {
+                // incoming and outgoing TDP channels from the perspective of BitcoinCoreSv2
+                let incoming_tdp_receiver = channel_manager_to_tp_receiver.clone();
+                let incoming_tdp_sender = channel_manager_to_tp_sender.clone();
+                let outgoing_tdp_sender = tp_to_channel_manager_sender.clone();
 
-        template_receiver
-            .start(
-                tp_address,
-                notify_shutdown.clone(),
-                status_sender.clone(),
-                task_manager.clone(),
-                encoded_outputs,
-            )
-            .await?;
+                let bitcoin_core_config = BitcoinCoreSv2Config {
+                    unix_socket_path,
+                    fee_threshold,
+                    incoming_tdp_receiver,
+                    outgoing_tdp_sender,
+                    cancellation_token: CancellationToken::new(),
+                };
+
+                connect_to_bitcoin_core(
+                    bitcoin_core_config,
+                    incoming_tdp_sender,
+                    notify_shutdown.clone(),
+                    task_manager.clone(),
+                    status_sender.clone(),
+                    coinbase_outputs,
+                )
+                .await;
+            }
+        }
 
         channel_manager
             .start(

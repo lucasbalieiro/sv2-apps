@@ -89,6 +89,12 @@ pub enum PoolError {
     ParseInt(std::num::ParseIntError),
     /// Failed to create group channel
     FailedToCreateGroupChannel(GroupChannelError),
+    /// Failed to create BitcoinCore tokio runtime
+    FailedToCreateBitcoinCoreTokioRuntime,
+    /// Failed to send CoinbaseOutputConstraints message
+    FailedToSendCoinbaseOutputConstraints,
+    /// BitcoinCoreSv2 cancellation token activated
+    BitcoinCoreSv2CancellationTokenActivated,
 }
 
 impl std::fmt::Display for PoolError {
@@ -138,6 +144,15 @@ impl std::fmt::Display for PoolError {
             }
             FailedToCreateGroupChannel(ref e) => {
                 write!(f, "Failed to create group channel: {e:?}")
+            }
+            FailedToCreateBitcoinCoreTokioRuntime => {
+                write!(f, "Failed to create BitcoinCore tokio runtime")
+            }
+            FailedToSendCoinbaseOutputConstraints => {
+                write!(f, "Failed to send CoinbaseOutputConstraints message")
+            }
+            BitcoinCoreSv2CancellationTokenActivated => {
+                write!(f, "BitcoinCoreSv2 cancellation token activated")
             }
         }
     }
