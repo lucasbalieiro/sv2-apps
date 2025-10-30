@@ -6,9 +6,9 @@ use stratum_apps::stratum_core::{
 };
 use tracing::{error, info};
 
-use crate::{error::PoolError, template_receiver::TemplateReceiver};
+use crate::{error::PoolError, template_receiver::sv2_tp::Sv2Tp};
 
-impl HandleCommonMessagesFromServerAsync for TemplateReceiver {
+impl HandleCommonMessagesFromServerAsync for Sv2Tp {
     type Error = PoolError;
 
     async fn handle_setup_connection_success(
