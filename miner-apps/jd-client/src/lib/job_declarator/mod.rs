@@ -6,8 +6,11 @@ use stratum_apps::{
     key_utils::Secp256k1PublicKey,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
-        codec_sv2::HandshakeRole, framing_sv2, handlers_sv2::HandleCommonMessagesFromServerAsync,
+        codec_sv2::HandshakeRole,
+        framing_sv2,
+        handlers_sv2::HandleCommonMessagesFromServerAsync,
         noise_sv2::Initiator,
+        parsers_sv2::{AnyMessage, JobDeclaration},
     },
 };
 use tokio::{
@@ -35,8 +38,8 @@ pub struct JobDeclaratorData;
 /// Holds all channels required for Job Declarator communication.
 #[derive(Clone)]
 pub struct JobDeclaratorChannel {
-    channel_manager_sender: Sender<SV2Frame>,
-    channel_manager_receiver: Receiver<SV2Frame>,
+    channel_manager_sender: Sender<JobDeclaration<'static>>,
+    channel_manager_receiver: Receiver<JobDeclaration<'static>>,
     jds_sender: Sender<SV2Frame>,
     jds_receiver: Receiver<SV2Frame>,
 }
@@ -63,8 +66,8 @@ impl JobDeclarator {
     /// - Spawns background IO tasks for reading/writing frames.
     pub async fn new(
         upstreams: &(SocketAddr, SocketAddr, Secp256k1PublicKey, bool),
-        channel_manager_sender: Sender<SV2Frame>,
-        channel_manager_receiver: Receiver<SV2Frame>,
+        channel_manager_sender: Sender<JobDeclaration<'static>>,
+        channel_manager_receiver: Receiver<JobDeclaration<'static>>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         mode: ConfigJDCMode,
         task_manager: Arc<TaskManager>,
@@ -254,9 +257,11 @@ impl JobDeclarator {
         {
             Ok(msg) => {
                 debug!("Forwarding message from channel manager to JDS.");
+                let message = AnyMessage::JobDeclaration(msg);
+                let sv2_frame: StdFrame = message.try_into()?;
                 self.job_declarator_channel
                     .jds_sender
-                    .send(msg)
+                    .send(sv2_frame)
                     .await
                     .map_err(|e| {
                         error!("Failed to send message to outbound channel: {:?}", e);
@@ -294,9 +299,11 @@ impl JobDeclarator {
                 .await?;
             }
             MessageType::JobDeclaration => {
+                let message =
+                    JobDeclaration::try_from((message_type, sv2_frame.payload()))?.into_static();
                 self.job_declarator_channel
                     .channel_manager_sender
-                    .send(sv2_frame)
+                    .send(message)
                     .await
                     .map_err(|e| {
                         error!(error=?e, "Failed to send Job declaration message to channel manager.");

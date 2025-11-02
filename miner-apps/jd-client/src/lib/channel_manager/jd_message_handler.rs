@@ -10,7 +10,7 @@ use stratum_apps::stratum_core::{
         AllocateMiningJobTokenSuccess, DeclareMiningJobError, DeclareMiningJobSuccess,
         ProvideMissingTransactions, ProvideMissingTransactionsSuccess,
     },
-    parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution},
+    parsers_sv2::{JobDeclaration, Mining, TemplateDistribution},
     template_distribution_sv2::CoinbaseOutputConstraints,
 };
 use tracing::{debug, error, info, warn};
@@ -19,7 +19,6 @@ use crate::{
     channel_manager::ChannelManager,
     error::JDCError,
     status::{State, Status},
-    utils::StdFrame,
 };
 
 impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
@@ -80,18 +79,15 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
                 max_additional_sigops, "Computed coinbase output constraints"
             );
 
-            let coinbase_output_contraints_message = AnyMessage::TemplateDistribution(
+            let coinbase_output_constraints_message =
                 TemplateDistribution::CoinbaseOutputConstraints(CoinbaseOutputConstraints {
                     coinbase_output_max_additional_size: max_additional_size as u32,
                     coinbase_output_max_additional_sigops: max_additional_sigops,
-                }),
-            );
-
-            let frame: StdFrame = coinbase_output_contraints_message.try_into()?;
+                });
 
             self.channel_manager_channel
                 .tp_sender
-                .send(frame)
+                .send(coinbase_output_constraints_message)
                 .await
                 .map_err(|_e| JDCError::ChannelErrorSender)?;
 
@@ -208,12 +204,11 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
         let channel_id = custom_job.channel_id;
 
         debug!("Sending SetCustomMiningJob to the upstream with channel_id: {channel_id}");
-        let message = AnyMessage::Mining(Mining::SetCustomMiningJob(custom_job)).into_static();
-        let frame: StdFrame = message.try_into()?;
+        let message = Mining::SetCustomMiningJob(custom_job).into_static();
 
         self.channel_manager_channel
             .upstream_sender
-            .send(frame)
+            .send(message)
             .await
             .map_err(|_e| JDCError::ChannelErrorSender)?;
 
@@ -277,13 +272,11 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
             transaction_list: binary_sv2::Seq064K::new(missing_txns)
                 .map_err(JDCError::BinarySv2)?,
         };
-        let frame: StdFrame =
-            AnyMessage::JobDeclaration(JobDeclaration::ProvideMissingTransactionsSuccess(response))
-                .try_into()?;
+        let message = JobDeclaration::ProvideMissingTransactionsSuccess(response);
 
         self.channel_manager_channel
             .jd_sender
-            .send(frame)
+            .send(message)
             .await
             .map_err(|_e| JDCError::ChannelErrorSender)?;
 

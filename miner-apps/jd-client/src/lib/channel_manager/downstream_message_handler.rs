@@ -19,7 +19,7 @@ use stratum_apps::stratum_core::{
     handlers_sv2::{HandleMiningMessagesFromClientAsync, SupportedChannelTypes},
     job_declaration_sv2::PushSolution,
     mining_sv2::*,
-    parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution},
+    parsers_sv2::{JobDeclaration, Mining, TemplateDistribution},
     template_distribution_sv2::SubmitSolution,
 };
 use tracing::{debug, error, info, warn};
@@ -28,7 +28,6 @@ use crate::{
     channel_manager::{ChannelManager, ChannelManagerChannel},
     error::{ChannelSv2Error, JDCError},
     jd_mode::{get_jd_mode, JdMode},
-    utils::StdFrame,
 };
 
 /// `RouteMessageTo` is an abstraction used to route protocol messages
@@ -91,32 +90,32 @@ impl RouteMessageTo<'_> {
     /// - [`RouteMessageTo::JobDeclarator`] → Sends the job declaration message to the JDS.
     /// - [`RouteMessageTo::TemplateProvider`] → Sends the template distribution message to the
     ///   template provider.
-    ///
-    /// Messages are automatically converted into the appropriate
-    /// [`AnyMessage`] variant and wrapped into a [`StdFrame`].
     pub async fn forward(self, channel_manager_channel: &ChannelManagerChannel) {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
                 _ = channel_manager_channel
                     .downstream_sender
-                    .send((downstream_id, AnyMessage::Mining(message).into_static()));
+                    .send((downstream_id, message.into_static()));
             }
             RouteMessageTo::Upstream(message) => {
                 if get_jd_mode() != JdMode::SoloMining {
-                    let message = AnyMessage::Mining(message).into_static();
-                    let frame: StdFrame = message.try_into().unwrap();
-                    _ = channel_manager_channel.upstream_sender.send(frame).await;
+                    _ = channel_manager_channel
+                        .upstream_sender
+                        .send(message.into_static())
+                        .await;
                 }
             }
             RouteMessageTo::JobDeclarator(message) => {
-                let message = AnyMessage::JobDeclaration(message).into_static();
-                let frame: StdFrame = message.try_into().unwrap();
-                _ = channel_manager_channel.jd_sender.send(frame).await;
+                _ = channel_manager_channel
+                    .jd_sender
+                    .send(message.into_static())
+                    .await;
             }
             RouteMessageTo::TemplateProvider(message) => {
-                let message = AnyMessage::TemplateDistribution(message).into_static();
-                let frame: StdFrame = message.try_into().unwrap();
-                _ = channel_manager_channel.tp_sender.send(frame).await;
+                _ = channel_manager_channel
+                    .tp_sender
+                    .send(message.into_static())
+                    .await;
             }
         }
     }

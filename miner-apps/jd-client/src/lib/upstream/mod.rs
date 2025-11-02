@@ -17,8 +17,11 @@ use stratum_apps::{
     key_utils::Secp256k1PublicKey,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
-        codec_sv2::HandshakeRole, framing_sv2, handlers_sv2::HandleCommonMessagesFromServerAsync,
+        codec_sv2::HandshakeRole,
+        framing_sv2,
+        handlers_sv2::HandleCommonMessagesFromServerAsync,
         noise_sv2::Initiator,
+        parsers_sv2::{AnyMessage, Mining},
     },
 };
 use tokio::{
@@ -50,8 +53,8 @@ pub struct UpstreamData;
 /// - `inbound_rx` → receives frames inbound from upstream
 #[derive(Clone)]
 pub struct UpstreamChannel {
-    channel_manager_sender: Sender<SV2Frame>,
-    channel_manager_receiver: Receiver<SV2Frame>,
+    channel_manager_sender: Sender<Mining<'static>>,
+    channel_manager_receiver: Receiver<Mining<'static>>,
     upstream_sender: Sender<SV2Frame>,
     upstream_receiver: Receiver<SV2Frame>,
 }
@@ -73,8 +76,8 @@ impl Upstream {
     /// - Spawns IO tasks to handle inbound/outbound traffic
     pub async fn new(
         upstreams: &(SocketAddr, SocketAddr, Secp256k1PublicKey, bool),
-        channel_manager_sender: Sender<SV2Frame>,
-        channel_manager_receiver: Receiver<SV2Frame>,
+        channel_manager_sender: Sender<Mining<'static>>,
+        channel_manager_receiver: Receiver<Mining<'static>>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         task_manager: Arc<TaskManager>,
         status_sender: Sender<Status>,
@@ -279,9 +282,10 @@ impl Upstream {
                 .await?;
             }
             MessageType::Mining => {
+                let message = Mining::try_from((message_type, sv2_frame.payload()))?.into_static();
                 self.upstream_channel
                     .channel_manager_sender
-                    .send(sv2_frame)
+                    .send(message)
                     .await
                     .map_err(|e| {
                         error!(error=?e, "Failed to send mining message to channel manager.");
@@ -301,10 +305,12 @@ impl Upstream {
     async fn handle_channel_manager_message(&mut self) -> Result<(), JDCError> {
         match self.upstream_channel.channel_manager_receiver.recv().await {
             Ok(msg) => {
+                let message = AnyMessage::Mining(msg);
+                let sv2_frame: SV2Frame = message.try_into()?;
                 debug!("Received message from channel manager, forwarding upstream.");
                 self.upstream_channel
                     .upstream_sender
-                    .send(msg)
+                    .send(sv2_frame)
                     .await
                     .map_err(|e| {
                         error!(error=?e, "Failed to send outbound message to upstream.");

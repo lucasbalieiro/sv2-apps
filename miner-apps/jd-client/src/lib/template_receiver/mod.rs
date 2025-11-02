@@ -57,8 +57,8 @@ pub struct TemplateReceiverData;
 /// - `inbound_rx` → receives frames from the template provider
 #[derive(Clone)]
 pub struct TemplateReceiverChannel {
-    channel_manager_sender: Sender<SV2Frame>,
-    channel_manager_receiver: Receiver<SV2Frame>,
+    channel_manager_sender: Sender<TemplateDistribution<'static>>,
+    channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
     tp_sender: Sender<SV2Frame>,
     tp_receiver: Receiver<SV2Frame>,
 }
@@ -93,8 +93,8 @@ impl TemplateReceiver {
     pub async fn new(
         tp_address: String,
         public_key: Option<Secp256k1PublicKey>,
-        channel_manager_receiver: Receiver<SV2Frame>,
-        channel_manager_sender: Sender<SV2Frame>,
+        channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
+        channel_manager_sender: Sender<TemplateDistribution<'static>>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         task_manager: Arc<TaskManager>,
         status_sender: Sender<Status>,
@@ -273,6 +273,7 @@ impl TemplateReceiver {
         let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
             return Ok(());
         };
+
         match protocol_message_type(message_type) {
             MessageType::Common => {
                 info!(
@@ -287,9 +288,11 @@ impl TemplateReceiver {
                 .await?;
             }
             MessageType::TemplateDistribution => {
+                let message = TemplateDistribution::try_from((message_type, sv2_frame.payload()))?
+                    .into_static();
                 self.template_receiver_channel
                     .channel_manager_sender
-                    .send(sv2_frame)
+                    .send(message)
                     .await
                     .map_err(|e| {
                         error!(error=?e, "Failed to send template distribution message to channel manager.");
@@ -307,15 +310,17 @@ impl TemplateReceiver {
     ///
     /// Forwards outbound frames upstream
     pub async fn handle_channel_manager_message(&self) -> Result<(), JDCError> {
-        let msg = self
-            .template_receiver_channel
-            .channel_manager_receiver
-            .recv()
-            .await?;
+        let msg = AnyMessage::TemplateDistribution(
+            self.template_receiver_channel
+                .channel_manager_receiver
+                .recv()
+                .await?,
+        );
         debug!("Forwarding message from channel manager to outbound_tx");
+        let sv2_frame: SV2Frame = msg.try_into()?;
         self.template_receiver_channel
             .tp_sender
-            .send(msg)
+            .send(sv2_frame)
             .await
             .map_err(|_| JDCError::ChannelErrorSender)?;
 
