@@ -45,10 +45,10 @@ use crate::{
 
 mod message_handler;
 
-/// Placeholder for future template receiver–specific state.
-pub struct TemplateReceiverData;
+/// Placeholder for future Sv2Tp–specific state.
+pub struct Sv2TpData;
 
-/// Holds communication channels between the template receiver, channel manager,
+/// Holds communication channels between the Sv2Tp, channel manager,
 /// and upstream template provider.
 ///
 /// - `channel_manager_sender` → sends frames to the channel manager
@@ -56,7 +56,7 @@ pub struct TemplateReceiverData;
 /// - `outbound_tx` → sends frames upstream to the template provider
 /// - `inbound_rx` → receives frames from the template provider
 #[derive(Clone)]
-pub struct TemplateReceiverChannel {
+pub struct Sv2TpChannel {
     channel_manager_sender: Sender<TemplateDistribution<'static>>,
     channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
     tp_sender: Sender<SV2Frame>,
@@ -73,16 +73,16 @@ pub struct TemplateReceiverChannel {
 /// - Handles shutdown/fallback notifications
 #[allow(warnings)]
 #[derive(Clone)]
-pub struct TemplateReceiver {
+pub struct Sv2Tp {
     /// Internal state
-    template_receiver_data: Arc<Mutex<TemplateReceiverData>>,
+    sv2_tp_data: Arc<Mutex<Sv2TpData>>,
     /// Messaging channels to/from the channel manager and TP.
-    template_receiver_channel: TemplateReceiverChannel,
+    sv2_tp_channel: Sv2TpChannel,
     /// Address of the template provider (string form)
     tp_address: String,
 }
 
-impl TemplateReceiver {
+impl Sv2Tp {
     /// Establish a new connection to a Template Provider.
     ///
     /// - Opens a TCP connection
@@ -98,7 +98,7 @@ impl TemplateReceiver {
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         task_manager: Arc<TaskManager>,
         status_sender: Sender<Status>,
-    ) -> Result<TemplateReceiver, JDCError> {
+    ) -> Result<Sv2Tp, JDCError> {
         const MAX_RETRIES: usize = 3;
 
         for attempt in 1..=MAX_RETRIES {
@@ -149,8 +149,8 @@ impl TemplateReceiver {
                                 status_sender,
                             );
 
-                            let template_receiver_data = Arc::new(Mutex::new(TemplateReceiverData));
-                            let template_receiver_channel = TemplateReceiverChannel {
+                            let template_receiver_data = Arc::new(Mutex::new(Sv2TpData));
+                            let template_receiver_channel = Sv2TpChannel {
                                 channel_manager_receiver,
                                 channel_manager_sender,
                                 tp_receiver: inbound_rx,
@@ -158,9 +158,9 @@ impl TemplateReceiver {
                             };
 
                             info!(attempt, "TemplateReceiver initialized successfully");
-                            return Ok(TemplateReceiver {
-                                template_receiver_channel,
-                                template_receiver_data,
+                            return Ok(Sv2Tp {
+                                sv2_tp_channel: template_receiver_channel,
+                                sv2_tp_data: template_receiver_data,
                                 tp_address,
                             });
                         }
@@ -267,7 +267,7 @@ impl TemplateReceiver {
     /// - `TemplateDistribution` messages → forwarded to channel manager
     /// - Unsupported messages → logged and ignored
     pub async fn handle_template_provider_message(&mut self) -> Result<(), JDCError> {
-        let mut sv2_frame = self.template_receiver_channel.tp_receiver.recv().await?;
+        let mut sv2_frame = self.sv2_tp_channel.tp_receiver.recv().await?;
 
         debug!("Received SV2 frame from Template provider.");
         let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
@@ -290,7 +290,7 @@ impl TemplateReceiver {
             MessageType::TemplateDistribution => {
                 let message = TemplateDistribution::try_from((message_type, sv2_frame.payload()))?
                     .into_static();
-                self.template_receiver_channel
+                self.sv2_tp_channel
                     .channel_manager_sender
                     .send(message)
                     .await
@@ -311,14 +311,11 @@ impl TemplateReceiver {
     /// Forwards outbound frames upstream
     pub async fn handle_channel_manager_message(&self) -> Result<(), JDCError> {
         let msg = AnyMessage::TemplateDistribution(
-            self.template_receiver_channel
-                .channel_manager_receiver
-                .recv()
-                .await?,
+            self.sv2_tp_channel.channel_manager_receiver.recv().await?,
         );
         debug!("Forwarding message from channel manager to outbound_tx");
         let sv2_frame: SV2Frame = msg.try_into()?;
-        self.template_receiver_channel
+        self.sv2_tp_channel
             .tp_sender
             .send(sv2_frame)
             .await
@@ -371,7 +368,7 @@ impl TemplateReceiver {
 
         let frame: StdFrame = msg.try_into()?;
         info!("Sending CoinbaseOutputConstraints message upstream");
-        self.template_receiver_channel
+        self.sv2_tp_channel
             .tp_sender
             .send(frame)
             .await
@@ -395,7 +392,7 @@ impl TemplateReceiver {
         let frame: StdFrame = Message::Common(setup_msg.into()).try_into()?;
 
         info!("Sending setup connection message to upstream");
-        self.template_receiver_channel
+        self.sv2_tp_channel
             .tp_sender
             .send(frame)
             .await
@@ -405,17 +402,12 @@ impl TemplateReceiver {
             })?;
 
         info!("Waiting for upstream handshake response");
-        let mut incoming: StdFrame = self
-            .template_receiver_channel
-            .tp_receiver
-            .recv()
-            .await
-            .map_err(|e| {
-                error!(?e, "Upstream connection closed during handshake");
-                JDCError::CodecNoise(
-                    stratum_apps::stratum_core::noise_sv2::Error::ExpectedIncomingHandshakeMessage,
-                )
-            })?;
+        let mut incoming: StdFrame = self.sv2_tp_channel.tp_receiver.recv().await.map_err(|e| {
+            error!(?e, "Upstream connection closed during handshake");
+            JDCError::CodecNoise(
+                stratum_apps::stratum_core::noise_sv2::Error::ExpectedIncomingHandshakeMessage,
+            )
+        })?;
 
         let msg_type = incoming
             .get_header()

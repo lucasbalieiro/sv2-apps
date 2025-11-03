@@ -116,6 +116,9 @@ pub enum JDCError {
     ChannelSv2(ChannelSv2Error),
     /// Extranonce prefix error
     ExtranoncePrefixFactoryError(ExtendedExtranonceError),
+    BitcoinCoreSv2CancellationTokenActivated,
+    FailedToCreateBitcoinCoreTokioRuntime,
+    FailedToSendCoinbaseOutputConstraints,
 }
 
 impl std::error::Error for JDCError {}
@@ -203,6 +206,15 @@ impl fmt::Display for JDCError {
             }
             ChannelSv2(channel_error) => {
                 write!(f, "Channel error: {channel_error:?}")
+            }
+            BitcoinCoreSv2CancellationTokenActivated => {
+                write!(f, "BitcoinCoreSv2 cancellation token activated")
+            }
+            FailedToCreateBitcoinCoreTokioRuntime => {
+                write!(f, "Failed to create BitcoinCoreSv2 tokio runtime")
+            }
+            FailedToSendCoinbaseOutputConstraints => {
+                write!(f, "Failed to send CoinbaseOutputConstraints message")
             }
         }
     }
