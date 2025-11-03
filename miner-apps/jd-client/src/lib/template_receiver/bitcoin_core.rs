@@ -69,8 +69,8 @@ pub async fn connect_to_bitcoin_core(
     let status_sender_clone = status_sender.clone();
 
     // spawn a dedicated thread to run the BitcoinCoreSv2 instance
-    // because we're limited to tokio::task::LocalSet due to the use of `capnp` clients, which are
-    // not `Send`
+    // because we're limited to tokio::task::LocalSet due to the use of `capnp` clients on
+    // `bitcoin-core-sv2`, which are not `Send`
     std::thread::spawn(move || {
         // we need a dedicated runtime so we can spawn an async task inside the LocalSet
         let rt = match tokio::runtime::Runtime::new() {
