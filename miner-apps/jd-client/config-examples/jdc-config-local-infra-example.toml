@@ -25,12 +25,6 @@ share_batch_size = 10
 # "COINBASEONLY" - coinbase-only mining
 mode = "FULLTEMPLATE"
 
-# Template Provider config
-# Local TP (this is pointing to localhost so you must run a TP locally for this configuration to work)
-tp_address = "127.0.0.1:8442"
-# Hosted testnet TP 
-# tp_address = "75.119.150.111:8442"
-
 # string to be added into the Coinbase scriptSig
 jdc_signature = "Sv2MinerSignature"
 
@@ -64,3 +58,7 @@ pool_address = "75.119.150.111"
 pool_port = "34254"
 jds_address = "75.119.150.111"
 jds_port = "34264"
+
+# Local Sv2 Template Provider config
+[template_provider_type.Sv2Tp]
+address = "127.0.0.1:8442"
