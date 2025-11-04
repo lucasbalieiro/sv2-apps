@@ -142,7 +142,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                                     }
                                     let standard_job_id = standard_channel.get_future_template_to_job_id().get(&msg.template_id).expect("job_id must exist");
                                     let standard_job = standard_channel.get_future_jobs().get(standard_job_id).expect("standard job must exist");
-                                    channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*channel_id, *standard_job_id), msg.template_id);
+                                    channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*downstream_id, *channel_id, *standard_job_id).into(), msg.template_id);
                                     let standard_job_message = standard_job.get_job_message();
                                     messages.push((*downstream_id, Mining::NewMiningJob(standard_job_message.clone())).into());
                                 }
@@ -175,7 +175,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                                     .get(extended_job_id)
                                     .expect("extended job must exist");
 
-                                channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*channel_id, *extended_job_id), msg.template_id);
+                                channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*downstream_id, *channel_id, *extended_job_id).into(), msg.template_id);
                                 let extended_job_message = extended_job.get_job_message();
 
                                 messages.push((*downstream_id,Mining::NewExtendedMiningJob(extended_job_message.clone())).into());
@@ -189,7 +189,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                                         continue;
                                     }
                                     let standard_job = standard_channel.get_active_job().expect("standard job must exist");
-                                    channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*channel_id, standard_job.get_job_id()), msg.template_id);
+                                    channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*downstream_id, *channel_id, standard_job.get_job_id()).into(), msg.template_id);
                                     let standard_job_message = standard_job.get_job_message();
                                     messages.push((*downstream_id, Mining::NewMiningJob(standard_job_message.clone())).into());
                                 }
@@ -216,7 +216,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                                     .get_active_job()
                                     .expect("extended job must exist");
 
-                                channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*channel_id, extended_job.get_job_id()), msg.template_id);
+                                channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((*downstream_id, *channel_id, extended_job.get_job_id()).into(), msg.template_id);
                                 let extended_job_message = extended_job.get_job_message();
 
                                 messages.push((*downstream_id,Mining::NewExtendedMiningJob(extended_job_message.clone())).into());

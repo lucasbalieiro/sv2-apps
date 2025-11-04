@@ -8,14 +8,14 @@
 
 use tracing::{debug, error, warn};
 
-use crate::error::JDCError;
+use crate::{error::JDCError, utils::DownstreamId};
 
 /// Sender type for propagating status updates from different system components.
 #[derive(Debug, Clone)]
 pub enum StatusSender {
     /// Status updates from a specific downstream connection.
     Downstream {
-        downstream_id: u32,
+        downstream_id: DownstreamId,
         tx: async_channel::Sender<Status>,
     },
     /// Status updates from the template receiver.
@@ -32,7 +32,7 @@ pub enum StatusSender {
 #[derive(Debug, PartialEq, Eq)]
 pub enum StatusType {
     /// A downstream connection identified by its ID.
-    Downstream(u32),
+    Downstream(DownstreamId),
     /// The template receiver component.
     TemplateReceiver,
     /// The channel manager component.
@@ -94,7 +94,7 @@ impl StatusSender {
 pub enum State {
     /// A downstream connection has shut down with a reason.
     DownstreamShutdown {
-        downstream_id: u32,
+        downstream_id: DownstreamId,
         reason: JDCError,
     },
     /// Template receiver has shut down with a reason.

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicU32, Arc},
+};
 
 use async_channel::{unbounded, Receiver, Sender};
 use stratum_apps::{
@@ -25,8 +28,8 @@ use crate::{
     status::{handle_error, Status, StatusSender},
     task_manager::TaskManager,
     utils::{
-        protocol_message_type, spawn_io_tasks, Message, MessageType, SV2Frame, ShutdownMessage,
-        StdFrame,
+        protocol_message_type, spawn_io_tasks, ChannelId, DownstreamId, Message, MessageType,
+        SV2Frame, ShutdownMessage, StdFrame,
     },
 };
 
@@ -43,9 +46,10 @@ pub struct DownstreamData {
     pub require_std_job: bool,
     pub group_channels: Option<GroupChannel<'static, DefaultJobStore<ExtendedJob<'static>>>>,
     pub extended_channels:
-        HashMap<u32, ExtendedChannel<'static, DefaultJobStore<ExtendedJob<'static>>>>,
+        HashMap<ChannelId, ExtendedChannel<'static, DefaultJobStore<ExtendedJob<'static>>>>,
     pub standard_channels:
-        HashMap<u32, StandardChannel<'static, DefaultJobStore<StandardJob<'static>>>>,
+        HashMap<ChannelId, StandardChannel<'static, DefaultJobStore<StandardJob<'static>>>>,
+    pub channel_id_factory: AtomicU32,
 }
 
 /// Communication layer for a downstream connection.
@@ -58,8 +62,8 @@ pub struct DownstreamData {
 /// - `downstream_receiver`: receives frames from the downstream.
 #[derive(Clone)]
 pub struct DownstreamChannel {
-    channel_manager_sender: Sender<(u32, Mining<'static>)>,
-    channel_manager_receiver: broadcast::Sender<(u32, Mining<'static>)>,
+    channel_manager_sender: Sender<(DownstreamId, Mining<'static>)>,
+    channel_manager_receiver: broadcast::Sender<(DownstreamId, Mining<'static>)>,
     downstream_sender: Sender<SV2Frame>,
     downstream_receiver: Receiver<SV2Frame>,
 }
@@ -69,15 +73,15 @@ pub struct DownstreamChannel {
 pub struct Downstream {
     pub downstream_data: Arc<Mutex<DownstreamData>>,
     downstream_channel: DownstreamChannel,
-    pub downstream_id: u32,
+    pub downstream_id: DownstreamId,
 }
 
 impl Downstream {
     /// Creates a new [`Downstream`] instance and spawns the necessary I/O tasks.
     pub fn new(
-        downstream_id: u32,
-        channel_manager_sender: Sender<(u32, Mining<'static>)>,
-        channel_manager_receiver: broadcast::Sender<(u32, Mining<'static>)>,
+        downstream_id: DownstreamId,
+        channel_manager_sender: Sender<(DownstreamId, Mining<'static>)>,
+        channel_manager_receiver: broadcast::Sender<(DownstreamId, Mining<'static>)>,
         noise_stream: NoiseTcpStream<Message>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         task_manager: Arc<TaskManager>,
@@ -111,6 +115,7 @@ impl Downstream {
             extended_channels: HashMap::new(),
             standard_channels: HashMap::new(),
             group_channels: None,
+            channel_id_factory: AtomicU32::new(0),
         }));
         Downstream {
             downstream_channel,
@@ -212,7 +217,7 @@ impl Downstream {
     // Handles messages sent from the channel manager to this downstream.
     async fn handle_channel_manager_message(
         self,
-        receiver: &mut broadcast::Receiver<(u32, Mining<'static>)>,
+        receiver: &mut broadcast::Receiver<(DownstreamId, Mining<'static>)>,
     ) -> Result<(), JDCError> {
         let (downstream_id, message) = match receiver.recv().await {
             Ok(msg) => msg,
