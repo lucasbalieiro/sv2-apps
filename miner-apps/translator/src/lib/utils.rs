@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
+use async_channel::{Receiver, Sender};
 use stratum_apps::{
     custom_mutex::Mutex,
+    network_helpers::noise_stream::{NoiseTcpReadHalf, NoiseTcpWriteHalf},
     stratum_core::{
         binary_sv2::{Sv2DataType, U256},
         bitcoin::{
@@ -7,19 +11,63 @@ use stratum_apps::{
             hashes::Hash,
             CompactTarget, Target, TxMerkleNode,
         },
-        buffer_sv2::Slice,
+        buffer_sv2,
         channels_sv2::{
             merkle_root::merkle_root_from_path,
             target::{bytes_to_hex, u256_to_block_hash},
         },
-        framing_sv2::framing::Frame,
-        parsers_sv2::{AnyMessage, CommonMessages},
+        codec_sv2::StandardSv2Frame,
+        framing_sv2::framing::{Frame, Sv2Frame},
+        parsers_sv2::AnyMessage,
         sv1_api::{client_to_server, utils::HexU32Be},
     },
 };
-use tracing::{debug, error};
 
-use crate::error::TproxyError;
+use stratum_apps::stratum_core::{
+    common_messages_sv2::{
+        MESSAGE_TYPE_CHANNEL_ENDPOINT_CHANGED, MESSAGE_TYPE_RECONNECT,
+        MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+        MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+    },
+    job_declaration_sv2::{
+        MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
+        MESSAGE_TYPE_DECLARE_MINING_JOB, MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR,
+        MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS, MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS,
+        MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS, MESSAGE_TYPE_PUSH_SOLUTION,
+    },
+    mining_sv2::{
+        MESSAGE_TYPE_CLOSE_CHANNEL, MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+        MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_NEW_MINING_JOB,
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
+        MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
+        MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
+        MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+        MESSAGE_TYPE_SET_EXTRANONCE_PREFIX, MESSAGE_TYPE_SET_GROUP_CHANNEL,
+        MESSAGE_TYPE_SET_TARGET, MESSAGE_TYPE_SUBMIT_SHARES_ERROR,
+        MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, MESSAGE_TYPE_SUBMIT_SHARES_STANDARD,
+        MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS, MESSAGE_TYPE_UPDATE_CHANNEL,
+        MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
+    },
+    template_distribution_sv2::{
+        MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS, MESSAGE_TYPE_NEW_TEMPLATE,
+        MESSAGE_TYPE_REQUEST_TRANSACTION_DATA, MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_ERROR,
+        MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_SUCCESS, MESSAGE_TYPE_SET_NEW_PREV_HASH,
+        MESSAGE_TYPE_SUBMIT_SOLUTION,
+    },
+};
+
+use tokio::sync::broadcast;
+use tracing::{debug, error, trace, warn, Instrument};
+
+use crate::{error::TproxyError, task_manager::TaskManager};
+
+/// Type alias for SV2 messages with static lifetime
+pub type Message = AnyMessage<'static>;
+/// Type alias for standard SV2 frames
+pub type StdFrame = StandardSv2Frame<Message>;
+/// Type alias for sv2 frame
+pub type SV2Frame = Sv2Frame<Message, buffer_sv2::Slice>;
 
 /// Validates an SV1 share against the target difficulty and job parameters.
 ///
@@ -158,85 +206,6 @@ pub fn proxy_extranonce_prefix_len(
     channel_rollable_extranonce_size - downstream_rollable_extranonce_size
 }
 
-/// Extracts message type, payload, and parsed message from an SV2 frame.
-///
-/// This function processes an SV2 frame and extracts the essential components:
-/// - Message type identifier
-/// - Raw payload bytes
-/// - Parsed message structure
-///
-/// # Arguments
-/// * `frame` - The SV2 frame to process
-///
-/// # Returns
-/// A tuple containing (message_type, payload, parsed_message) on success,
-/// or a TproxyError if the frame is invalid or cannot be parsed
-pub fn message_from_frame(
-    frame: &mut Frame<AnyMessage<'static>, Slice>,
-) -> Result<(u8, Vec<u8>, AnyMessage<'static>), TproxyError> {
-    match frame {
-        Frame::Sv2(frame) => {
-            let header = frame
-                .get_header()
-                .ok_or(TproxyError::UnexpectedMessage(0))?;
-            let message_type = header.msg_type();
-            let mut payload = frame.payload().to_vec();
-            let message: Result<AnyMessage<'_>, _> =
-                (message_type, payload.as_mut_slice()).try_into();
-            match message {
-                Ok(message) => {
-                    let message = into_static(message)?;
-                    Ok((message_type, payload.to_vec(), message))
-                }
-                Err(_) => {
-                    error!("Received frame with invalid payload or message type: {frame:?}");
-                    Err(TproxyError::UnexpectedMessage(message_type))
-                }
-            }
-        }
-        Frame::HandShake(f) => {
-            error!("Received unexpected handshake frame: {f:?}");
-            Err(TproxyError::UnexpectedMessage(0))
-        }
-    }
-}
-
-/// Converts a borrowed AnyMessage to a static lifetime version.
-///
-/// This function takes an AnyMessage with a borrowed lifetime and converts it to
-/// a static lifetime version, which is necessary for storing messages across
-/// async boundaries and in data structures.
-///
-/// # Arguments
-/// * `m` - The AnyMessage to convert to static lifetime
-///
-/// # Returns
-/// A static lifetime version of the message, or TproxyError if the message
-/// type is not supported for static conversion
-pub fn into_static(m: AnyMessage<'_>) -> Result<AnyMessage<'static>, TproxyError> {
-    match m {
-        AnyMessage::Mining(m) => Ok(AnyMessage::Mining(m.into_static())),
-        AnyMessage::Common(m) => match m {
-            CommonMessages::ChannelEndpointChanged(m) => Ok(AnyMessage::Common(
-                CommonMessages::ChannelEndpointChanged(m.into_static()),
-            )),
-            CommonMessages::SetupConnection(m) => Ok(AnyMessage::Common(
-                CommonMessages::SetupConnection(m.into_static()),
-            )),
-            CommonMessages::SetupConnectionError(m) => Ok(AnyMessage::Common(
-                CommonMessages::SetupConnectionError(m.into_static()),
-            )),
-            CommonMessages::SetupConnectionSuccess(m) => Ok(AnyMessage::Common(
-                CommonMessages::SetupConnectionSuccess(m.into_static()),
-            )),
-            CommonMessages::Reconnect(m) => Ok(AnyMessage::Common(CommonMessages::Reconnect(
-                m.into_static(),
-            ))),
-        },
-        _ => Err(TproxyError::UnexpectedMessage(0)),
-    }
-}
-
 /// Messages used for coordinating shutdown across different components.
 ///
 /// This enum defines the different types of shutdown signals that can be sent
@@ -251,6 +220,212 @@ pub enum ShutdownMessage {
     DownstreamShutdown(u32),
     /// Reset channel manager state and shutdown downstreams due to upstream reconnection
     UpstreamReconnectedResetAndShutdownDownstreams,
+}
+
+#[track_caller]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_io_tasks(
+    task_manager: Arc<TaskManager>,
+    mut reader: NoiseTcpReadHalf<Message>,
+    mut writer: NoiseTcpWriteHalf<Message>,
+    outbound_rx: Receiver<SV2Frame>,
+    inbound_tx: Sender<SV2Frame>,
+    notify_shutdown: broadcast::Sender<ShutdownMessage>,
+) {
+    let caller = std::panic::Location::caller();
+    let inbound_tx_clone = inbound_tx.clone();
+    let outbound_rx_clone = outbound_rx.clone();
+    {
+        let mut shutdown_rx = notify_shutdown.subscribe();
+        task_manager.spawn(
+            async move {
+                trace!("Reader task started");
+                loop {
+                    tokio::select! {
+                        message = shutdown_rx.recv() => {
+                            if let Ok(ShutdownMessage::ShutdownAll) = message {
+                                trace!("Received global shutdown");
+                                inbound_tx.close();
+                                break;
+                            }
+                        }
+                        res = reader.read_frame() => {
+                            match res {
+                                Ok(frame) => {
+                                    match frame {
+                                        Frame::HandShake(frame) => {
+                                            error!(?frame, "Received handshake frame");
+                                            drop(frame);
+                                            break;
+                                        },
+                                        Frame::Sv2(sv2_frame) => {
+                                            trace!("Received inbound frame");
+                                            if let Err(e) = inbound_tx.send(sv2_frame).await {
+                                                inbound_tx.close();
+                                                error!(error=?e, "Failed to forward inbound frame");
+                                                break;
+                                            }
+                                        },
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error=?e, "Reader error");
+                                    inbound_tx.close();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                inbound_tx.close();
+                outbound_rx_clone.close();
+                drop(inbound_tx);
+                drop(outbound_rx_clone);
+                warn!("Reader task exited.");
+            }
+            .instrument(tracing::trace_span!(
+                "reader_task",
+                spawned_at = %format!("{}:{}", caller.file(), caller.line())
+            )),
+        );
+    }
+
+    {
+        let mut shutdown_rx = notify_shutdown.subscribe();
+
+        task_manager.spawn(
+            async move {
+                trace!("Writer task started");
+                loop {
+                    tokio::select! {
+                        message = shutdown_rx.recv() => {
+                            if let Ok(ShutdownMessage::ShutdownAll) = message {
+                                trace!("Received global shutdown");
+                                inbound_tx_clone.close();
+                                break;
+                            }
+                        }
+                        res = outbound_rx.recv() => {
+                            match res {
+                                Ok(frame) => {
+                                    trace!("Sending outbound frame");
+                                    if let Err(e) = writer.write_frame(frame.into()).await {
+                                        error!(error=?e, "Writer error");
+                                        outbound_rx.close();
+                                        break;
+                                    }
+                                }
+                                Err(_) => {
+                                    outbound_rx.close();
+                                    warn!("Outbound channel closed");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                outbound_rx.close();
+                inbound_tx_clone.close();
+                drop(outbound_rx);
+                drop(inbound_tx_clone);
+                warn!("Writer task exited.");
+            }
+            .instrument(tracing::trace_span!(
+                "writer_task",
+                spawned_at = %format!("{}:{}", caller.file(), caller.line())
+            )),
+        );
+    }
+}
+
+pub fn is_common_message(message_type: u8) -> bool {
+    matches!(
+        message_type,
+        MESSAGE_TYPE_SETUP_CONNECTION
+            | MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS
+            | MESSAGE_TYPE_SETUP_CONNECTION_ERROR
+            | MESSAGE_TYPE_CHANNEL_ENDPOINT_CHANGED
+            | MESSAGE_TYPE_RECONNECT
+    )
+}
+
+pub fn is_mining_message(message_type: u8) -> bool {
+    matches!(
+        message_type,
+        MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL
+            | MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS
+            | MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR
+            | MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL
+            | MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS
+            | MESSAGE_TYPE_NEW_MINING_JOB
+            | MESSAGE_TYPE_UPDATE_CHANNEL
+            | MESSAGE_TYPE_UPDATE_CHANNEL_ERROR
+            | MESSAGE_TYPE_CLOSE_CHANNEL
+            | MESSAGE_TYPE_SET_EXTRANONCE_PREFIX
+            | MESSAGE_TYPE_SUBMIT_SHARES_STANDARD
+            | MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED
+            | MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS
+            | MESSAGE_TYPE_SUBMIT_SHARES_ERROR
+            // | MESSAGE_TYPE_RESERVED
+            | 0x1e
+            | MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+            | MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH
+            | MESSAGE_TYPE_SET_TARGET
+            | MESSAGE_TYPE_SET_CUSTOM_MINING_JOB
+            | MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS
+            | MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR
+            | MESSAGE_TYPE_SET_GROUP_CHANNEL
+    )
+}
+
+pub fn is_job_declaration_message(message_type: u8) -> bool {
+    matches!(
+        message_type,
+        MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN
+            | MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS
+            | MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS
+            | MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS
+            | MESSAGE_TYPE_DECLARE_MINING_JOB
+            | MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS
+            | MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR
+            | MESSAGE_TYPE_PUSH_SOLUTION
+    )
+}
+
+pub fn is_template_distribution_message(message_type: u8) -> bool {
+    matches!(
+        message_type,
+        MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS
+            | MESSAGE_TYPE_NEW_TEMPLATE
+            | MESSAGE_TYPE_SET_NEW_PREV_HASH
+            | MESSAGE_TYPE_REQUEST_TRANSACTION_DATA
+            | MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_SUCCESS
+            | MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_ERROR
+            | MESSAGE_TYPE_SUBMIT_SOLUTION
+    )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MessageType {
+    Common,
+    Mining,
+    JobDeclaration,
+    TemplateDistribution,
+    Unknown,
+}
+
+pub fn protocol_message_type(message_type: u8) -> MessageType {
+    if is_common_message(message_type) {
+        MessageType::Common
+    } else if is_mining_message(message_type) {
+        MessageType::Mining
+    } else if is_job_declaration_message(message_type) {
+        MessageType::JobDeclaration
+    } else if is_template_distribution_message(message_type) {
+        MessageType::TemplateDistribution
+    } else {
+        MessageType::Unknown
+    }
 }
 
 #[cfg(test)]
