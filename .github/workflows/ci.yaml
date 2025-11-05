@@ -83,10 +83,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust nightly
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          override: true
           components: rustfmt
 
       - name: Check formatting
