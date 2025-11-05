@@ -52,7 +52,7 @@ pub enum RouteMessageTo<'a> {
     /// Route to the template provider subsystem.
     TemplateProvider(TemplateDistribution<'a>),
     /// Route to a specific downstream client by ID, along with its mining message.
-    Downstream((u32, Mining<'a>)),
+    Downstream((usize, Mining<'a>)),
 }
 
 impl<'a> From<Mining<'a>> for RouteMessageTo<'a> {
@@ -73,8 +73,8 @@ impl<'a> From<TemplateDistribution<'a>> for RouteMessageTo<'a> {
     }
 }
 
-impl<'a> From<(u32, Mining<'a>)> for RouteMessageTo<'a> {
-    fn from(value: (u32, Mining<'a>)) -> Self {
+impl<'a> From<(usize, Mining<'a>)> for RouteMessageTo<'a> {
+    fn from(value: (usize, Mining<'a>)) -> Self {
         Self::Downstream(value)
     }
 }
@@ -144,28 +144,20 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     // - If not found, return an appropriate error.
     async fn handle_close_channel(
         &mut self,
-        _client_id: Option<usize>,
+        client_id: Option<usize>,
         msg: CloseChannel<'_>,
     ) -> Result<(), Self::Error> {
         info!("Received: {}", msg);
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
         self.channel_manager_data
             .super_safe_lock(|channel_manager_data| {
-                let Some(downstream_id) = channel_manager_data
-                    .channel_id_to_downstream_id
-                    .get(&msg.channel_id)
-                else {
-                    error!(
-                        "No downstream_id related to channel_id: {:?}, found",
-                        msg.channel_id
-                    );
-                    return Err(JDCError::DownstreamNotFoundWithChannelId(msg.channel_id));
-                };
-                let Some(downstream) = channel_manager_data.downstream.get(downstream_id) else {
+                let Some(downstream) = channel_manager_data.downstream.get(&downstream_id) else {
                     error!(
                         "No downstream with channel_id: {:?} and downstream_id: {:?}, found",
                         msg.channel_id, downstream_id
                     );
-                    return Err(JDCError::DownstreamNotFound(*downstream_id));
+                    return Err(JDCError::DownstreamNotFound(downstream_id));
                 };
                 downstream.downstream_data.super_safe_lock(|data| {
                     data.extended_channels.remove(&msg.channel_id);
@@ -173,7 +165,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 });
                 channel_manager_data
                     .vardiff
-                    .remove(&(msg.channel_id, *downstream_id));
+                    .remove(&(downstream_id, msg.channel_id).into());
                 Ok(())
             })
     }
@@ -198,11 +190,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     // or failure to apply updates to channels.
     async fn handle_open_standard_mining_channel(
         &mut self,
-        _client_id: Option<usize>,
+        client_id: Option<usize>,
         msg: OpenStandardMiningChannel<'_>,
     ) -> Result<(), Self::Error> {
         let request_id = msg.get_request_id_as_u32();
-        let user_string = msg.user_identity.as_utf8_or_hex();
+        let user_identity = msg.user_identity.as_utf8_or_hex();
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
 
         let coinbase_outputs = self
             .channel_manager_data
@@ -210,23 +204,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
         let mut coinbase_outputs = deserialize_outputs(coinbase_outputs)
             .map_err(|_| JDCError::ChannelManagerHasBadCoinbaseOutputs)?;
-
-        let (user_identity, downstream_id) = match user_string.rsplit_once('#') {
-            Some((user_identity, id)) => match id.parse::<u32>() {
-                Ok(id) => (user_identity, id),
-                Err(e) => {
-                    warn!(
-                        ?e,
-                        user_string, "Failed to parse downstream_id from user_identity"
-                    );
-                    return Err(JDCError::ParseInt(e));
-                }
-            },
-            None => {
-                warn!(user_string, "User identity missing downstream_id");
-                return Err(JDCError::DownstreamIdNotFound);
-            }
-        };
 
         info!(downstream_id, "Received: {}", msg);
 
@@ -266,9 +243,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         let mut messages: Vec<RouteMessageTo> = vec![];
 
                         if !data.require_std_job && data.group_channels.is_none() {
-                            let group_channel_id = channel_manager_data
-                                .channel_id_factory
-                                .fetch_add(1, Ordering::Relaxed);
+                            let group_channel_id =
+                                data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
                             let job_store = DefaultJobStore::new();
                             let full_extranonce_size = channel_manager_data
                                 .upstream_channel
@@ -322,9 +298,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             .as_ref()
                             .map(|gc| gc.get_group_channel_id())
                             .unwrap_or(0);
-                        let standard_channel_id = channel_manager_data
-                            .channel_id_factory
-                            .fetch_add(1, Ordering::Relaxed);
+                        let standard_channel_id =
+                            data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
 
                         let extranonce_prefix = match channel_manager_data
                             .extranonce_prefix_factory_standard
@@ -461,17 +436,14 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                         channel_manager_data
                             .vardiff
-                            .insert((standard_channel_id, downstream_id), vardiff);
+                            .insert((downstream_id, standard_channel_id).into(), vardiff);
                         data.standard_channels
                             .insert(standard_channel_id, standard_channel);
-                        channel_manager_data
-                            .channel_id_to_downstream_id
-                            .insert(standard_channel_id, downstream_id);
 
                         channel_manager_data
                             .downstream_channel_id_and_job_id_to_template_id
                             .insert(
-                                (standard_channel_id, future_standard_job_id),
+                                (downstream_id, standard_channel_id, future_standard_job_id).into(),
                                 last_future_template.template_id,
                             );
                         if let Some(group_channel) = data.group_channels.as_mut() {
@@ -506,23 +478,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     // or if extended channel creation fails.
     async fn handle_open_extended_mining_channel(
         &mut self,
-        _client_id: Option<usize>,
+        client_id: Option<usize>,
         msg: OpenExtendedMiningChannel<'_>,
     ) -> Result<(), Self::Error> {
-        let user_string = msg.user_identity.as_utf8_or_hex();
-        let (user_identity, downstream_id) = match user_string.rsplit_once('#') {
-            Some((user_identity, id)) => match id.parse::<u32>() {
-                Ok(v) => (user_identity, v),
-                Err(e) => {
-                    warn!(?e, user_string, "Invalid downstream_id in user_identity");
-                    return Err(JDCError::ParseInt(e));
-                }
-            },
-            None => {
-                warn!(user_string, "Missing downstream_id in user_identity");
-                return Err(JDCError::DownstreamIdNotFound);
-            }
-        };
+        let user_identity = msg.user_identity.as_utf8_or_hex();
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
 
         info!(downstream_id, "Received: {}", msg);
         let request_id = msg.get_request_id_as_u32();
@@ -543,6 +504,16 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             self.channel_manager_data
                 .super_safe_lock(|channel_manager_data| {
 
+                    let Some(last_future_template) = channel_manager_data.last_future_template.clone() else {
+                        error!("No template to share");
+                        return Err(JDCError::FutureTemplateNotPresent);
+                    };
+
+                    let Some(last_new_prev_hash) = channel_manager_data.last_new_prev_hash.clone() else {
+                        error!("No prevhash in system");
+                        return Err(JDCError::LastNewPrevhashNotFound);
+                    };
+
                     let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) else {
                         error!(downstream_id, "Downstream not found");
                         return Err(JDCError::DownstreamNotFound(downstream_id));
@@ -551,7 +522,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                    downstream.downstream_data.super_safe_lock(|data| {
 
                         let mut messages: Vec<RouteMessageTo> = vec![];
-                        let extended_channel_id = channel_manager_data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
+                        let extended_channel_id = data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
 
                         let extranonce_prefix = match channel_manager_data.extranonce_prefix_factory_extended
                             .next_prefix_extended(requested_min_rollable_extranonce_size.into())
@@ -563,15 +534,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             }
                         };
 
-                        let Some(last_future_template) = channel_manager_data.last_future_template.clone() else {
-                            error!("No template to share");
-                            return Err(JDCError::FutureTemplateNotPresent);
-                        };
-
-                        let Some(last_new_prev_hash) = channel_manager_data.last_new_prev_hash.clone() else {
-                            error!("No prevhash in system");
-                            return Err(JDCError::LastNewPrevhashNotFound);
-                        };
 
                         let job_store = DefaultJobStore::new();
 
@@ -693,11 +655,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         let vardiff = VardiffState::new().expect("Vardiff should instantiate.");
                         data.extended_channels.insert(extended_channel_id, extended_channel);
 
-                        channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((extended_channel_id, future_extended_job_id), last_future_template.template_id);
-                        channel_manager_data
-                            .channel_id_to_downstream_id
-                            .insert(extended_channel_id, downstream_id);
-                        channel_manager_data.vardiff.insert((extended_channel_id, downstream_id), vardiff);
+                        channel_manager_data.downstream_channel_id_and_job_id_to_template_id.insert((downstream_id, extended_channel_id, future_extended_job_id).into(), last_future_template.template_id);
+                        channel_manager_data.vardiff.insert((downstream_id, extended_channel_id).into(), vardiff);
 
                         Ok(messages)
                     })
@@ -726,7 +685,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     // validation fails.
     async fn handle_update_channel(
         &mut self,
-        _client_id: Option<usize>,
+        client_id: Option<usize>,
         msg: UpdateChannel<'_>,
     ) -> Result<(), Self::Error> {
         info!("Received: {}", msg);
@@ -734,25 +693,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         let new_nominal_hash_rate = msg.nominal_hash_rate;
         let requested_maximum_target =
             Target::from_le_bytes(msg.maximum_target.inner_as_ref().try_into().unwrap());
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
 
         let messages = self
             .channel_manager_data
             .super_safe_lock(|channel_manager_data| {
                 let mut messages: Vec<RouteMessageTo> = vec![];
-
-                let downstream_id = match channel_manager_data
-                    .channel_id_to_downstream_id
-                    .get(&channel_id)
-                {
-                    Some(id) => *id,
-                    None => {
-                        error!(
-                            channel_id,
-                            "UpdateChannelError: invalid-channel-id (no downstream_id mapping)"
-                        );
-                        return Err(JDCError::DownstreamNotFoundWithChannelId(channel_id));
-                    }
-                };
 
                 if let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) {
                     messages.extend_from_slice(&downstream.downstream_data.super_safe_lock(
@@ -902,8 +849,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     )
                 }
 
-                Ok(messages)
-            })?;
+                messages
+            });
 
         for messages in messages {
             messages.forward(&self.channel_manager_channel).await;
@@ -925,12 +872,14 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     //    - Forward valid shares (or block solutions) upstream.
     async fn handle_submit_shares_standard(
         &mut self,
-        _client_id: Option<usize>,
+        client_id: Option<usize>,
         msg: SubmitSharesStandard,
     ) -> Result<(), Self::Error> {
         info!("Received SubmitSharesStandard");
         let channel_id = msg.channel_id;
         let job_id = msg.job_id;
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
 
         let build_error = |code: &str| {
             Mining::SubmitSharesError(SubmitSharesError {
@@ -941,13 +890,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         };
 
         let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
-            let Some(downstream_id) = channel_manager_data.channel_id_to_downstream_id.get(&channel_id) else {
-                warn!("No downstream_id found for channel_id={channel_id}");
-                return Err(JDCError::DownstreamNotFoundWithChannelId(channel_id))
-            };
-            let Some(downstream) = channel_manager_data.downstream.get_mut(downstream_id) else {
+            let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) else {
                 warn!("No downstream found for downstream_id={downstream_id}");
-                return Err(JDCError::DownstreamNotFound(*downstream_id));
+                return Err(JDCError::DownstreamNotFound(downstream_id));
             };
             let Some(prev_hash) = channel_manager_data.last_new_prev_hash.as_ref() else {
                 warn!("No prev_hash available yet, ignoring share");
@@ -959,11 +904,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                 let Some(standard_channel) = data.standard_channels.get_mut(&channel_id) else {
                     error!("SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: invalid-channel-id", msg.sequence_number);
-                    return Ok(vec![(*downstream_id, build_error("invalid-channel-id")).into()]);
+                    return Ok(vec![(downstream_id, build_error("invalid-channel-id")).into()]);
                 };
 
-                let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(channel_id, *downstream_id)) else {
-                    return Err(JDCError::VardiffNotFound(channel_id));
+                let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
+                    return Err(JDCError::VardiffNotFound((downstream_id, channel_id).into()));
                 };
                 vardiff.increment_shares_since_last_update();
                 let res = standard_channel.validate_share(msg.clone());
@@ -1025,7 +970,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             _ => unreachable!(),
                         };
                         error!("❌ SubmitSharesError: ch={}, seq={}, error={code}", channel_id, msg.sequence_number);
-                        messages.push((*downstream_id, build_error(code)).into());
+                        messages.push((downstream_id, build_error(code)).into());
                     }
                 }
 
@@ -1041,12 +986,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                     let upstream_message = channel_manager_data
                     .downstream_channel_id_and_job_id_to_template_id
-                    .get(&(channel_id, job_id))
+                    .get(&(downstream_id, channel_id, job_id).into())
                     .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(tid))
                     .map(|&upstream_job_id| {
                         SubmitSharesExtended {
                             channel_id: upstream_channel.get_channel_id(),
-                            job_id: upstream_job_id as u32,
+                            job_id: upstream_job_id,
                             extranonce: extranonce_parts.try_into().unwrap(),
                             nonce: msg.nonce,
                             ntime: msg.ntime,
@@ -1121,12 +1066,14 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     //    - Forward valid shares (or block solutions) upstream.
     async fn handle_submit_shares_extended(
         &mut self,
-        _client_id: Option<usize>,
+        client_id: Option<usize>,
         msg: SubmitSharesExtended<'_>,
     ) -> Result<(), Self::Error> {
         info!("Received SubmitSharesExtended");
         let channel_id = msg.channel_id;
         let job_id = msg.job_id;
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
 
         let build_error = |code: &str| {
             Mining::SubmitSharesError(SubmitSharesError {
@@ -1137,13 +1084,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         };
 
         let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
-            let Some(downstream_id) = channel_manager_data.channel_id_to_downstream_id.get(&channel_id) else {
-                warn!("No downstream_id found for channel_id={channel_id}");
-                return Err(JDCError::DownstreamNotFoundWithChannelId(channel_id));
-            };
-            let Some(downstream) = channel_manager_data.downstream.get_mut(downstream_id) else {
+            let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) else {
                 warn!("No downstream found for downstream_id={downstream_id}");
-                return Err(JDCError::DownstreamNotFound(*downstream_id));
+                return Err(JDCError::DownstreamNotFound(downstream_id));
             };
             let Some(prev_hash) = channel_manager_data.last_new_prev_hash.as_ref() else {
                 warn!("No prev_hash available yet, ignoring share");
@@ -1154,11 +1097,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                 let Some(extended_channel) = data.extended_channels.get_mut(&channel_id) else {
                     error!("SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: invalid-channel-id", msg.sequence_number);
-                    return Ok(vec![(*downstream_id, build_error("invalid-channel-id")).into()]);
+                    return Ok(vec![(downstream_id, build_error("invalid-channel-id")).into()]);
                 };
 
-                let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(channel_id, *downstream_id)) else {
-                    return Err(JDCError::VardiffNotFound(channel_id));
+                let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
+                    return Err(JDCError::VardiffNotFound((downstream_id, channel_id).into()));
                 };
                 vardiff.increment_shares_since_last_update();
                 let res = extended_channel.validate_share(msg.clone());
@@ -1219,7 +1162,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             _ => unreachable!(),
                         };
                         error!("❌ SubmitSharesError on downstream channel: ch={}, seq={}, error={code}", channel_id, msg.sequence_number);
-                        messages.push((*downstream_id, build_error(code)).into());
+                        messages.push((downstream_id, build_error(code)).into());
                     }
                 }
 
@@ -1235,12 +1178,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                     let upstream_message = channel_manager_data
                     .downstream_channel_id_and_job_id_to_template_id
-                    .get(&(channel_id, job_id))
+                    .get(&(downstream_id, channel_id, job_id).into())
                     .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(tid))
                     .map(|&upstream_job_id| {
                         let mut new_msg = msg.clone();
                         new_msg.channel_id = upstream_channel.get_channel_id();
-                        new_msg.job_id = upstream_job_id as u32;
+                        new_msg.job_id = upstream_job_id;
                         // We assign sequence number later, when we validate the share
                         // and send it to upstream.
                         new_msg.sequence_number = 0;

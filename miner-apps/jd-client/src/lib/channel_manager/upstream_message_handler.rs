@@ -21,7 +21,7 @@ use crate::{
     error::{ChannelSv2Error, JDCError},
     jd_mode::{get_jd_mode, JdMode},
     status::{State, Status},
-    utils::{create_close_channel_msg, PendingChannelRequest, UpstreamState},
+    utils::{create_close_channel_msg, UpstreamState},
 };
 
 impl HandleMiningMessagesFromServerAsync for ChannelManager {
@@ -95,10 +95,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                     return (self.upstream_state.get(), None, None, Some(close_channel));
                 };
 
-                let hashrate = match pending_request {
-                    PendingChannelRequest::ExtendedChannel(m) => m.nominal_hash_rate,
-                    PendingChannelRequest::StandardChannel(m) => m.nominal_hash_rate,
-                };
+                let hashrate = pending_request.hashrate();
 
                 let prefix_len = msg.extranonce_prefix.len();
 
@@ -238,11 +235,10 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 .channel_manager_data
                 .super_safe_lock(|data| std::mem::take(&mut data.pending_downstream_requests));
 
-            for pending_downstream in pending_downstreams {
-                let message_type = pending_downstream.message_type();
+            for pending_downstream_message in pending_downstreams {
                 self.send_open_channel_request_to_mining_handler(
-                    pending_downstream.into(),
-                    message_type,
+                    pending_downstream_message.downstream_id(),
+                    pending_downstream_message.message(),
                 )
                 .await?;
             }
@@ -540,7 +536,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                     .retain(|_, job| job.template.template_id != template_id);
 
                 data.template_id_to_upstream_job_id
-                    .insert(last_declare_job.template.template_id, msg.job_id as u64);
+                    .insert(last_declare_job.template.template_id, msg.job_id);
                 debug!(job_id = msg.job_id, "Mapped custom job into template store");
                 if let (Some(upstream_channel), Some(set_custom_job)) = (
                     data.upstream_channel.as_mut(),

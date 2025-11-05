@@ -84,7 +84,7 @@ pub enum ShutdownMessage {
     /// Shutdown all downstream connections
     DownstreamShutdownAll,
     /// Shutdown a specific downstream connection by ID
-    DownstreamShutdown(u32),
+    DownstreamShutdown(usize),
     /// Shutdown Upstream and JD part of JDC during fallback
     JobDeclaratorShutdownFallback((Vec<u8>, tokio::sync::mpsc::Sender<()>)),
     /// Shutdown Upstream and JD part during fallback
@@ -448,37 +448,72 @@ impl AtomicUpstreamState {
 /// - [`OpenStandardMiningChannel`] for standard mining channels
 pub enum PendingChannelRequest {
     /// A request to open an extended mining channel.
-    ExtendedChannel(OpenExtendedMiningChannel<'static>),
+    ExtendedChannel {
+        downstream_id: DownstreamId,
+        message: OpenExtendedMiningChannel<'static>,
+    },
     /// A request to open a standard mining channel.
-    StandardChannel(OpenStandardMiningChannel<'static>),
+    StandardChannel {
+        downstream_id: DownstreamId,
+        message: OpenStandardMiningChannel<'static>,
+    },
 }
 
-impl From<OpenExtendedMiningChannel<'static>> for PendingChannelRequest {
-    fn from(value: OpenExtendedMiningChannel<'static>) -> Self {
-        PendingChannelRequest::ExtendedChannel(value)
+impl From<(DownstreamId, OpenExtendedMiningChannel<'static>)> for PendingChannelRequest {
+    fn from(value: (DownstreamId, OpenExtendedMiningChannel<'static>)) -> Self {
+        PendingChannelRequest::ExtendedChannel {
+            downstream_id: value.0,
+            message: value.1,
+        }
     }
 }
 
-impl From<OpenStandardMiningChannel<'static>> for PendingChannelRequest {
-    fn from(value: OpenStandardMiningChannel<'static>) -> Self {
-        PendingChannelRequest::StandardChannel(value)
-    }
-}
-
-impl From<PendingChannelRequest> for Mining<'_> {
-    fn from(value: PendingChannelRequest) -> Self {
-        match value {
-            PendingChannelRequest::ExtendedChannel(m) => Mining::OpenExtendedMiningChannel(m),
-            PendingChannelRequest::StandardChannel(m) => Mining::OpenStandardMiningChannel(m),
+impl From<(DownstreamId, OpenStandardMiningChannel<'static>)> for PendingChannelRequest {
+    fn from(value: (DownstreamId, OpenStandardMiningChannel<'static>)) -> Self {
+        PendingChannelRequest::StandardChannel {
+            downstream_id: value.0,
+            message: value.1,
         }
     }
 }
 
 impl PendingChannelRequest {
-    pub fn message_type(&self) -> u8 {
+    pub fn downstream_id(&self) -> usize {
         match self {
-            PendingChannelRequest::ExtendedChannel(_) => MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
-            PendingChannelRequest::StandardChannel(_) => MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
+            PendingChannelRequest::ExtendedChannel {
+                downstream_id,
+                message: _,
+            } => *downstream_id,
+            PendingChannelRequest::StandardChannel {
+                downstream_id,
+                message: _,
+            } => *downstream_id,
+        }
+    }
+
+    pub fn message(self) -> Mining<'static> {
+        match self {
+            PendingChannelRequest::ExtendedChannel {
+                downstream_id: _,
+                message: open_channel_message,
+            } => Mining::OpenExtendedMiningChannel(open_channel_message),
+            PendingChannelRequest::StandardChannel {
+                downstream_id: _,
+                message: open_channel_message,
+            } => Mining::OpenStandardMiningChannel(open_channel_message),
+        }
+    }
+
+    pub fn hashrate(&self) -> f32 {
+        match self {
+            PendingChannelRequest::ExtendedChannel {
+                downstream_id: _,
+                message: m,
+            } => m.nominal_hash_rate,
+            PendingChannelRequest::StandardChannel {
+                downstream_id: _,
+                message: m,
+            } => m.nominal_hash_rate,
         }
     }
 }
@@ -487,7 +522,7 @@ impl PendingChannelRequest {
 ///
 /// The `msg` is converted into a [`Str0255`] reason code.  
 /// If conversion fails, this function will panic.
-pub(crate) fn create_close_channel_msg(channel_id: u32, msg: &str) -> CloseChannel<'_> {
+pub(crate) fn create_close_channel_msg(channel_id: ChannelId, msg: &str) -> CloseChannel<'_> {
     CloseChannel {
         channel_id,
         reason_code: Str0255::try_from(msg.to_string()).expect("Could not convert message."),
@@ -581,5 +616,44 @@ pub fn protocol_message_type(message_type: u8) -> MessageType {
         MessageType::TemplateDistribution
     } else {
         MessageType::Unknown
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct VardiffKey {
+    pub downstream_id: DownstreamId,
+    pub channel_id: ChannelId,
+}
+
+impl From<(DownstreamId, ChannelId)> for VardiffKey {
+    fn from(value: (DownstreamId, ChannelId)) -> Self {
+        VardiffKey {
+            downstream_id: value.0,
+            channel_id: value.1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DownstreamChannelJobId {
+    pub downstream_id: DownstreamId,
+    pub channel_id: ChannelId,
+    pub job_id: JobId,
+}
+
+pub type TemplateId = u64;
+pub type UpstreamJobId = u32;
+pub type JobId = u32;
+pub type DownstreamId = usize;
+pub type RequestId = u32;
+pub type ChannelId = u32;
+
+impl From<(DownstreamId, ChannelId, JobId)> for DownstreamChannelJobId {
+    fn from(value: (DownstreamId, ChannelId, JobId)) -> Self {
+        DownstreamChannelJobId {
+            downstream_id: value.0,
+            channel_id: value.1,
+            job_id: value.2,
+        }
     }
 }

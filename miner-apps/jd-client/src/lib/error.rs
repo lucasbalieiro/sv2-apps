@@ -33,6 +33,8 @@ use stratum_apps::{
 };
 use tokio::{sync::broadcast, time::error::Elapsed};
 
+use crate::utils::{DownstreamId, JobId, RequestId, TemplateId, VardiffKey};
+
 #[derive(Debug)]
 pub enum ChannelSv2Error {
     ExtendedChannelClientSide(ExtendedChannelClientError),
@@ -79,16 +81,15 @@ pub enum JDCError {
     BitcoinEncodeError(bitcoin::consensus::encode::Error),
     InvalidSocketAddress(String),
     Timeout,
-    LastDeclareJobNotFound(u32),
-    ActiveJobNotFound(u32),
+    LastDeclareJobNotFound(RequestId),
+    ActiveJobNotFound(JobId),
     TokenNotFound,
-    TemplateNotFound(u64),
-    DownstreamNotFoundWithChannelId(u32),
-    DownstreamNotFound(u32),
+    TemplateNotFound(TemplateId),
+    DownstreamNotFound(DownstreamId),
     DownstreamIdNotFound,
     FutureTemplateNotPresent,
     LastNewPrevhashNotFound,
-    VardiffNotFound(u32),
+    VardiffNotFound(VardiffKey),
     TxDataError,
     FrameConversionError,
     FailedToCreateCustomJob,
@@ -145,9 +146,6 @@ impl fmt::Display for JDCError {
             TemplateNotFound(template_id) => {
                 write!(f, "Template not found, template_id: {template_id}")
             }
-            DownstreamNotFoundWithChannelId(channel_id) => {
-                write!(f, "Downstream not found with channel id: {channel_id}")
-            }
             DownstreamNotFound(downstream_id) => {
                 write!(
                     f,
@@ -163,8 +161,8 @@ impl fmt::Display for JDCError {
             LastNewPrevhashNotFound => {
                 write!(f, "Last new prevhash not found")
             }
-            VardiffNotFound(channel_id) => {
-                write!(f, "Vardiff not found for channel id: {channel_id:?}")
+            VardiffNotFound(vardiff_key) => {
+                write!(f, "Vardiff not found for vardiff key: {vardiff_key:?}")
             }
             TxDataError => {
                 write!(f, "Transaction data error")
@@ -213,7 +211,6 @@ impl JDCError {
                 | JDCError::ActiveJobNotFound(_)
                 | JDCError::TokenNotFound
                 | JDCError::TemplateNotFound(_)
-                | JDCError::DownstreamNotFoundWithChannelId(_)
                 | JDCError::DownstreamNotFound(_)
                 | JDCError::DownstreamIdNotFound
                 | JDCError::VardiffNotFound(_)
