@@ -1,32 +1,56 @@
 use corepc_node::{types::GetBlockchainInfo, Conf, ConnectParams, Node};
-use std::{env, fs::create_dir_all, path::PathBuf};
+use std::{
+    env,
+    fs::create_dir_all,
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+};
 use stratum_apps::stratum_core::bitcoin::{Address, Amount, Txid};
 use tracing::warn;
 
 use crate::utils::{fs_utils, http, tarball};
 
-const VERSION_TP: &str = "0.1.19";
+const VERSION_SV2_TP: &str = "1.0.3";
+const VERSION_BITCOIN_CORE: &str = "30.0";
 
-fn get_bitcoind_filename(os: &str, arch: &str) -> String {
+fn get_sv2_tp_filename(os: &str, arch: &str) -> String {
     match (os, arch) {
         ("macos", "aarch64") => {
-            format!("bitcoin-sv2-tp-{VERSION_TP}-arm64-apple-darwin-unsigned.tar.gz")
+            format!("sv2-tp-{VERSION_SV2_TP}-arm64-apple-darwin.tar.gz")
         }
         ("macos", "x86_64") => {
-            format!("bitcoin-sv2-tp-{VERSION_TP}-x86_64-apple-darwin-unsigned.tar.gz")
+            format!("sv2-tp-{VERSION_SV2_TP}-x86_64-apple-darwin.tar.gz")
         }
-        ("linux", "x86_64") => format!("bitcoin-sv2-tp-{VERSION_TP}-x86_64-linux-gnu.tar.gz"),
-        ("linux", "aarch64") => format!("bitcoin-sv2-tp-{VERSION_TP}-aarch64-linux-gnu.tar.gz"),
-        _ => format!("bitcoin-sv2-tp-{VERSION_TP}-x86_64-apple-darwin-unsigned.zip"),
+        ("linux", "x86_64") => format!("sv2-tp-{VERSION_SV2_TP}-x86_64-linux-gnu.tar.gz"),
+        ("linux", "aarch64") => format!("sv2-tp-{VERSION_SV2_TP}-aarch64-linux-gnu.tar.gz"),
+        _ => format!("sv2-tp-{VERSION_SV2_TP}-x86_64-apple-darwin.tar.gz"),
     }
 }
 
-/// Represents a template provider node.
+fn get_bitcoin_core_filename(os: &str, arch: &str) -> String {
+    match (os, arch) {
+        ("macos", "aarch64") => {
+            format!("bitcoin-{VERSION_BITCOIN_CORE}-arm64-apple-darwin.tar.gz")
+        }
+        ("macos", "x86_64") => {
+            format!("bitcoin-{VERSION_BITCOIN_CORE}-x86_64-apple-darwin.tar.gz")
+        }
+        ("linux", "x86_64") => format!("bitcoin-{VERSION_BITCOIN_CORE}-x86_64-linux-gnu.tar.gz"),
+        ("linux", "aarch64") => format!("bitcoin-{VERSION_BITCOIN_CORE}-aarch64-linux-gnu.tar.gz"),
+        _ => format!("bitcoin-{VERSION_BITCOIN_CORE}-x86_64-apple-darwin.tar.gz"),
+    }
+}
+
+/// Represents a template provider using Bitcoin Core v30+ with IPC and standalone sv2-tp.
 ///
-/// The template provider is a bitcoin node that implements the Stratum V2 protocol.
+/// This implementation launches two separate processes:
+/// 1. Bitcoin Core v30+ (bitcoin-node) with IPC enabled
+/// 2. Standalone sv2-tp binary that connects to Bitcoin Core via IPC
 #[derive(Debug)]
 pub struct TemplateProvider {
     bitcoind: Node,
+    sv2_tp_process: Child,
+    sv2_port: u16,
 }
 
 /// Represents the consensus difficulty level of the network.
@@ -47,17 +71,19 @@ pub enum DifficultyLevel {
 }
 
 impl TemplateProvider {
-    /// Start a new [`TemplateProvider`] instance.
+    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30+ and standalone sv2-tp.
     pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
         let current_dir: PathBuf = std::env::current_dir().expect("failed to read current dir");
-        let tp_dir = current_dir.join("template-provider");
+        let bin_dir = current_dir.join("template-provider");
+
+        // Use temp dir for Bitcoin datadir to avoid long Unix socket paths in CI
+        let data_dir = std::env::temp_dir().join("sv2-integration-tests");
+
         let mut conf = Conf::default();
         conf.wallet = Some(port.to_string());
 
         let staticdir = format!(".bitcoin-{port}");
-        conf.staticdir = Some(tp_dir.join(staticdir.clone()));
-        let port_arg = format!("-sv2port={port}");
-        let sv2_interval_arg = format!("-sv2interval={sv2_interval}");
+        conf.staticdir = Some(data_dir.join(staticdir.clone()));
 
         match difficulty_level {
             DifficultyLevel::Low => {
@@ -79,7 +105,7 @@ impl TemplateProvider {
                 conf.network = "signet";
 
                 // Create signet datadir
-                let signet_datadir = tp_dir.join(staticdir.clone()).join("signet");
+                let signet_datadir = data_dir.join(staticdir.clone()).join("signet");
                 create_dir_all(signet_datadir.clone()).expect("Failed to create signet directory");
 
                 // Copy high difficulty signet data into signet datadir
@@ -89,76 +115,139 @@ impl TemplateProvider {
             }
         }
 
-        conf.args.extend(vec![
-            "-txindex=1",
-            "-sv2",
-            &port_arg,
-            "-debug=rpc",
-            "-debug=sv2",
-            &sv2_interval_arg,
-            "-sv2feedelta=0",
-            "-loglevel=sv2:trace",
-            "-logtimemicros=1",
-        ]);
+        // Download and setup Bitcoin Core v30 with IPC support
         let os = env::consts::OS;
         let arch = env::consts::ARCH;
-        let download_filename = get_bitcoind_filename(os, arch);
-        let bitcoin_exe_home = tp_dir
-            .join(format!("bitcoin-sv2-tp-{VERSION_TP}"))
-            .join("bin");
+        let bitcoin_filename = get_bitcoin_core_filename(os, arch);
+        let bitcoin_home = bin_dir.join(format!("bitcoin-{VERSION_BITCOIN_CORE}"));
+        let bitcoin_node_bin = bitcoin_home.join("libexec").join("bitcoin-node");
+        let bitcoin_cli_bin = bitcoin_home.join("bin").join("bitcoin-cli");
 
-        if !bitcoin_exe_home.exists() {
-            let tarball_bytes = match env::var("BITCOIND_TARBALL_FILE") {
+        if !bitcoin_node_bin.exists() {
+            let tarball_bytes = match env::var("BITCOIN_CORE_TARBALL_FILE") {
                 Ok(path) => tarball::read_from_file(&path),
                 Err(_) => {
-                    warn!("Downloading template provider for the testing session. This could take a while...");
-                    let download_endpoint =
-                        env::var("BITCOIND_DOWNLOAD_ENDPOINT").unwrap_or_else(|_| {
-                            "https://github.com/Sjors/bitcoin/releases/download".to_owned()
+                    warn!("Downloading Bitcoin Core {} for the testing session. This could take a while...", VERSION_BITCOIN_CORE);
+                    let download_endpoint = env::var("BITCOIN_CORE_DOWNLOAD_ENDPOINT")
+                        .unwrap_or_else(|_| {
+                            "https://bitcoincore.org/bin/bitcoin-core-30.0".to_owned()
                         });
-                    let url =
-                        format!("{download_endpoint}/sv2-tp-{VERSION_TP}/{download_filename}");
+                    let url = format!("{download_endpoint}/{bitcoin_filename}");
                     http::make_get_request(&url, 5)
                 }
             };
 
-            if let Some(parent) = bitcoin_exe_home.parent() {
+            if let Some(parent) = bitcoin_home.parent() {
                 create_dir_all(parent).unwrap();
             }
 
-            tarball::unpack(&tarball_bytes, &tp_dir);
+            tarball::unpack(&tarball_bytes, &bin_dir);
 
             if os == "macos" {
-                let bitcoind_binary = bitcoin_exe_home.join("bitcoind");
-                std::process::Command::new("codesign")
-                    .arg("--sign")
-                    .arg("-")
-                    .arg(&bitcoind_binary)
-                    .output()
-                    .expect("Failed to sign bitcoind binary");
+                // Sign the binaries on macOS
+                for bin in &[&bitcoin_node_bin, &bitcoin_cli_bin] {
+                    std::process::Command::new("codesign")
+                        .arg("--sign")
+                        .arg("-")
+                        .arg(bin)
+                        .output()
+                        .expect("Failed to sign Bitcoin Core binary");
+                }
             }
         }
 
-        env::set_var("BITCOIND_EXE", bitcoin_exe_home.join("bitcoind"));
-        let exe_path = corepc_node::exe_path().expect("Failed to get bitcoind path");
+        // Add IPC and basic args
+        conf.args.extend(vec![
+            "-txindex=1",
+            "-ipcbind=unix", // Enable IPC for sv2-tp to connect
+            "-debug=rpc",
+            "-logtimemicros=1",
+        ]);
 
-        // this timeout is used to avoid potential racing conditions
-        // on the bitcoind executable while executing Integration Tests in parallel
-        // for more context, see https://github.com/stratum-mining/stratum/issues/1278#issuecomment-2692316174
+        // Launch bitcoin-node using corepc-node (which will manage the process for us)
         let timeout = std::time::Duration::from_secs(10);
         let current_time = std::time::Instant::now();
-        loop {
-            match Node::with_conf(&exe_path, &conf) {
+        let bitcoind = loop {
+            match Node::with_conf(&bitcoin_node_bin, &conf) {
                 Ok(bitcoind) => {
-                    break TemplateProvider { bitcoind };
+                    break bitcoind;
                 }
                 Err(e) => {
                     if current_time.elapsed() > timeout {
-                        panic!("Failed to start bitcoind: {e}");
+                        panic!("Failed to start bitcoin-node: {e}");
                     }
-                    println!("Failed to start bitcoind due to {e}");
+                    println!("Failed to start bitcoin-node due to {e}");
                 }
             }
+        };
+
+        // Wait for Bitcoin Core to fully start and create IPC socket
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        // Download and setup sv2-tp binary
+        let sv2_tp_filename = get_sv2_tp_filename(os, arch);
+        let sv2_tp_home = bin_dir.join(format!("sv2-tp-{VERSION_SV2_TP}"));
+        let sv2_tp_bin = sv2_tp_home.join("bin").join("sv2-tp");
+
+        if !sv2_tp_bin.exists() {
+            let tarball_bytes = match env::var("SV2TP_TARBALL_FILE") {
+                Ok(path) => tarball::read_from_file(&path),
+                Err(_) => {
+                    warn!("Downloading sv2-tp for the testing session. This could take a while...");
+                    let download_endpoint =
+                        env::var("SV2TP_DOWNLOAD_ENDPOINT").unwrap_or_else(|_| {
+                            "https://github.com/stratum-mining/sv2-tp/releases/download".to_owned()
+                        });
+                    let url = format!("{download_endpoint}/v{VERSION_SV2_TP}/{sv2_tp_filename}");
+                    http::make_get_request(&url, 5)
+                }
+            };
+
+            if let Some(parent) = sv2_tp_home.parent() {
+                create_dir_all(parent).unwrap();
+            }
+
+            tarball::unpack(&tarball_bytes, &bin_dir);
+
+            if os == "macos" {
+                // Sign the binary on macOS
+                std::process::Command::new("codesign")
+                    .arg("--sign")
+                    .arg("-")
+                    .arg(&sv2_tp_bin)
+                    .output()
+                    .expect("Failed to sign sv2-tp binary");
+            }
+        }
+
+        // Launch sv2-tp process
+        let datadir = conf.staticdir.as_ref().expect("staticdir should be set");
+        let network = if conf.network == "signet" {
+            "-signet"
+        } else {
+            "-regtest"
+        };
+
+        let sv2_tp_process = Command::new(&sv2_tp_bin)
+            .arg(network)
+            .arg(format!("-datadir={}", datadir.display()))
+            .arg(format!("-sv2port={}", port))
+            .arg(format!("-sv2interval={}", sv2_interval))
+            .arg("-sv2feedelta=0")
+            .arg("-debug=sv2")
+            .arg("-loglevel=sv2:trace")
+            .stdout(Stdio::null()) // Suppress output in tests
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("Failed to start sv2-tp process");
+
+        // Wait for sv2-tp to start and connect to Bitcoin Core
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        TemplateProvider {
+            bitcoind,
+            sv2_tp_process,
+            sv2_port: port,
         }
     }
 
@@ -175,7 +264,7 @@ impl TemplateProvider {
             .expect("Failed to generate blocks");
     }
 
-    /// Retrun the node's RPC info.
+    /// Return the node's RPC info.
     pub fn rpc_info(&self) -> &ConnectParams {
         &self.bitcoind.params
     }
@@ -217,6 +306,20 @@ impl TemplateProvider {
         let client = &self.bitcoind.client;
         let block_hash = client.get_best_block_hash()?.0;
         Ok(block_hash)
+    }
+
+    /// Return the sv2 port that sv2-tp is listening on.
+    pub fn sv2_port(&self) -> u16 {
+        self.sv2_port
+    }
+}
+
+impl Drop for TemplateProvider {
+    fn drop(&mut self) {
+        // Kill sv2-tp process first
+        let _ = self.sv2_tp_process.kill();
+        let _ = self.sv2_tp_process.wait();
+        // bitcoin-node is managed by corepc-node::Node and will be cleaned up automatically
     }
 }
 

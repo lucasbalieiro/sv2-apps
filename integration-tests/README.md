@@ -8,10 +8,10 @@ exchanged between the roles, and assert those messages using the `assert_message
 function. For examples on how to use the `Sniffer` helper, you can check the
 `sniffer_integration.rs` module or other tests in the `tests` folder.
 
-All of our tests run in regtest network. We download the Template Provider node from
-https://github.com/Sjors/bitcoin/releases/download. This is a pre-built binary that we use to run an
-Stratum V2 compatible bitcoin node. Note that this is the only external dependency(and Role) that we
-have in our tests.
+All our tests run in either regtest or signet network. We download Bitcoin Core v30 binaries
+from https://bitcoincore.org/bin/bitcoin-core-30.0/ and the Template provider (sv2-tp) binaries
+from https://github.com/stratum-mining/sv2-tp/releases. Bitcoin Core runs via IPC, and sv2-tp
+provides Stratum V2 template distribution. These are the only external dependencies in our tests.
 
 ## Running Instructions
 
@@ -22,9 +22,9 @@ $ git clone git@github.com:stratum-mining/stratum.git
 $ cargo test --manifest-path=integration-tests/Cargo.toml --verbose --test '*' -- --nocapture
 ```
 
-Note: during the execution of the tests, a new directory called `template-provider` is created.
-This directory holds the executable for Template Provider node, as well as the different data 
-directories created for each execution.
+Note: during the execution of the tests, the `template-provider` directory holds the downloaded
+binaries (Bitcoin Core and sv2-tp), while test data directories are created in the system temp
+directory.
 
 ## License
 MIT OR Apache-2.0
