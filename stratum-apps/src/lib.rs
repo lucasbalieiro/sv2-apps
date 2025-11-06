@@ -58,3 +58,8 @@ pub mod rpc;
 /// Provides Secp256k1 key management, serialization/deserialization, and signature services.
 /// Supports both standard and no_std environments.
 pub mod key_utils;
+
+/// Template provider type
+///
+/// Provides the type of template provider that will be used.
+pub mod tp_type;
