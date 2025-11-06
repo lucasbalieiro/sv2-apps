@@ -40,6 +40,7 @@ use stratum_apps::{
         parsers_sv2::{JobDeclaration, Mining, TemplateDistribution},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
     },
+    task_manager::TaskManager,
     utils::types::{
         ChannelId, DownstreamId, Message, RequestId, SharesBatchSize, SharesPerMinute, TemplateId,
         UpstreamJobId,
@@ -54,7 +55,6 @@ use crate::{
     downstream::Downstream,
     error::JDCError,
     status::{handle_error, Status, StatusSender},
-    task_manager::TaskManager,
     utils::{
         AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, ShutdownMessage,
         UpstreamState, VardiffKey,

@@ -18,6 +18,7 @@ use stratum_apps::{
         handlers_sv2::HandleCommonMessagesFromClientAsync,
         parsers_sv2::{AnyMessage, Mining},
     },
+    task_manager::TaskManager,
     utils::types::{DownstreamId, Message, SV2Frame, StdFrame},
 };
 
@@ -27,7 +28,6 @@ use tracing::{debug, error, warn};
 use crate::{
     error::JDCError,
     status::{handle_error, Status, StatusSender},
-    task_manager::TaskManager,
     utils::{protocol_message_type, spawn_io_tasks, MessageType, ShutdownMessage},
 };
 

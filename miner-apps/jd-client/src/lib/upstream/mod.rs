@@ -23,6 +23,7 @@ use stratum_apps::{
         noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, Mining},
     },
+    task_manager::TaskManager,
     utils::types::{Message, SV2Frame, StdFrame},
 };
 use tokio::{
@@ -34,7 +35,6 @@ use tracing::{debug, error, info, warn};
 use crate::{
     error::JDCError,
     status::{handle_error, Status, StatusSender},
-    task_manager::TaskManager,
     utils::{
         get_setup_connection_message, protocol_message_type, spawn_io_tasks, MessageType,
         ShutdownMessage,

@@ -7,6 +7,7 @@ use stratum_apps::{
         bitcoin::consensus::Encodable,
         parsers_sv2::{JobDeclaration, Mining},
     },
+    task_manager::TaskManager,
 };
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
@@ -18,7 +19,6 @@ use crate::{
     jd_mode::{set_jd_mode, JdMode},
     job_declarator::JobDeclarator,
     status::{State, Status},
-    task_manager::TaskManager,
     template_receiver::TemplateReceiver,
     upstream::Upstream,
     utils::{ShutdownMessage, UpstreamState},
@@ -31,7 +31,6 @@ pub mod error;
 pub mod jd_mode;
 mod job_declarator;
 mod status;
-mod task_manager;
 mod template_receiver;
 mod upstream;
 pub mod utils;

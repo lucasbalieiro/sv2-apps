@@ -59,6 +59,7 @@ use stratum_apps::{
             MESSAGE_TYPE_SUBMIT_SOLUTION,
         },
     },
+    task_manager::TaskManager,
     utils::types::{ChannelId, DownstreamId, Hashrate, JobId, Message, SV2Frame},
 };
 use tokio::sync::broadcast;
@@ -68,7 +69,6 @@ use crate::{
     config::ConfigJDCMode,
     error::JDCError,
     status::{StatusSender, StatusType},
-    task_manager::TaskManager,
 };
 
 /// Represents a message that can trigger shutdown of various system components.
