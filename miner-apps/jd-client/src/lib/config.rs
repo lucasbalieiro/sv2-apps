@@ -8,6 +8,7 @@ use stratum_apps::{
     config_helpers::CoinbaseRewardScript,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
     stratum_core::bitcoin::{Amount, TxOut},
+    utils::types::{SharesBatchSize, SharesPerMinute},
 };
 
 #[derive(Debug, Deserialize, Clone)]
@@ -41,9 +42,9 @@ pub struct JobDeclaratorClientConfig {
     /// User Identity
     user_identity: String,
     /// Shares per minute
-    shares_per_minute: f64,
+    shares_per_minute: SharesPerMinute,
     /// share batch size
-    share_batch_size: u64,
+    share_batch_size: SharesBatchSize,
     /// JDC mode: FullTemplate or CoinbaseOnly
     #[serde(deserialize_with = "deserialize_jdc_mode", default)]
     pub mode: ConfigJDCMode,
@@ -55,8 +56,8 @@ impl JobDeclaratorClientConfig {
         listening_address: SocketAddr,
         protocol_config: ProtocolConfig,
         user_identity: String,
-        shares_per_minute: f64,
-        share_batch_size: u64,
+        shares_per_minute: SharesPerMinute,
+        share_batch_size: SharesBatchSize,
         pool_config: PoolConfig,
         tp_config: TPConfig,
         upstreams: Vec<Upstream>,
@@ -156,11 +157,11 @@ impl JobDeclaratorClientConfig {
         &self.user_identity
     }
 
-    pub fn shares_per_minute(&self) -> f64 {
+    pub fn shares_per_minute(&self) -> SharesPerMinute {
         self.shares_per_minute
     }
 
-    pub fn share_batch_size(&self) -> u64 {
+    pub fn share_batch_size(&self) -> SharesBatchSize {
         self.share_batch_size
     }
 }

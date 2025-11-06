@@ -24,14 +24,12 @@ use stratum_apps::{
     network_helpers::noise_stream::{NoiseTcpReadHalf, NoiseTcpWriteHalf},
     stratum_core::{
         binary_sv2::Str0255,
-        buffer_sv2,
-        codec_sv2::{StandardEitherFrame, StandardSv2Frame},
         common_messages_sv2::{
             Protocol, SetupConnection, MESSAGE_TYPE_CHANNEL_ENDPOINT_CHANGED,
             MESSAGE_TYPE_RECONNECT, MESSAGE_TYPE_SETUP_CONNECTION,
             MESSAGE_TYPE_SETUP_CONNECTION_ERROR, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
         },
-        framing_sv2::framing::{Frame, Sv2Frame},
+        framing_sv2::framing::Frame,
         job_declaration_sv2::{
             MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
             MESSAGE_TYPE_DECLARE_MINING_JOB, MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR,
@@ -53,7 +51,7 @@ use stratum_apps::{
             MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS, MESSAGE_TYPE_UPDATE_CHANNEL,
             MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
         },
-        parsers_sv2::{AnyMessage, Mining},
+        parsers_sv2::Mining,
         template_distribution_sv2::{
             MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS, MESSAGE_TYPE_NEW_TEMPLATE,
             MESSAGE_TYPE_REQUEST_TRANSACTION_DATA, MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_ERROR,
@@ -61,6 +59,7 @@ use stratum_apps::{
             MESSAGE_TYPE_SUBMIT_SOLUTION,
         },
     },
+    utils::types::{ChannelId, DownstreamId, Hashrate, JobId, Message, SV2Frame},
 };
 use tokio::sync::broadcast;
 use tracing::{error, trace, warn, Instrument};
@@ -72,10 +71,6 @@ use crate::{
     task_manager::TaskManager,
 };
 
-pub type Message = AnyMessage<'static>;
-pub type StdFrame = StandardSv2Frame<Message>;
-pub type EitherFrame = StandardEitherFrame<Message>;
-pub type SV2Frame = Sv2Frame<Message, buffer_sv2::Slice>;
 /// Represents a message that can trigger shutdown of various system components.
 #[derive(Debug, Clone)]
 pub enum ShutdownMessage {
@@ -84,7 +79,7 @@ pub enum ShutdownMessage {
     /// Shutdown all downstream connections
     DownstreamShutdownAll,
     /// Shutdown a specific downstream connection by ID
-    DownstreamShutdown(usize),
+    DownstreamShutdown(DownstreamId),
     /// Shutdown Upstream and JD part of JDC during fallback
     JobDeclaratorShutdownFallback((Vec<u8>, tokio::sync::mpsc::Sender<()>)),
     /// Shutdown Upstream and JD part during fallback
@@ -478,7 +473,7 @@ impl From<(DownstreamId, OpenStandardMiningChannel<'static>)> for PendingChannel
 }
 
 impl PendingChannelRequest {
-    pub fn downstream_id(&self) -> usize {
+    pub fn downstream_id(&self) -> DownstreamId {
         match self {
             PendingChannelRequest::ExtendedChannel {
                 downstream_id,
@@ -504,7 +499,7 @@ impl PendingChannelRequest {
         }
     }
 
-    pub fn hashrate(&self) -> f32 {
+    pub fn hashrate(&self) -> Hashrate {
         match self {
             PendingChannelRequest::ExtendedChannel {
                 downstream_id: _,
@@ -640,13 +635,6 @@ pub struct DownstreamChannelJobId {
     pub channel_id: ChannelId,
     pub job_id: JobId,
 }
-
-pub type TemplateId = u64;
-pub type UpstreamJobId = u32;
-pub type JobId = u32;
-pub type DownstreamId = usize;
-pub type RequestId = u32;
-pub type ChannelId = u32;
 
 impl From<(DownstreamId, ChannelId, JobId)> for DownstreamChannelJobId {
     fn from(value: (DownstreamId, ChannelId, JobId)) -> Self {

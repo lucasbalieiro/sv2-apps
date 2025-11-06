@@ -1,12 +1,15 @@
-use crate::{downstream::Downstream, error::JDCError, utils::StdFrame};
+use crate::{downstream::Downstream, error::JDCError};
 use std::convert::TryInto;
-use stratum_apps::stratum_core::{
-    common_messages_sv2::{
-        has_requires_std_job, has_work_selection, Protocol, SetupConnection, SetupConnectionError,
-        SetupConnectionSuccess,
+use stratum_apps::{
+    stratum_core::{
+        common_messages_sv2::{
+            has_requires_std_job, has_work_selection, Protocol, SetupConnection,
+            SetupConnectionError, SetupConnectionSuccess,
+        },
+        handlers_sv2::HandleCommonMessagesFromClientAsync,
+        parsers_sv2::AnyMessage,
     },
-    handlers_sv2::HandleCommonMessagesFromClientAsync,
-    parsers_sv2::AnyMessage,
+    utils::types::StdFrame,
 };
 use tracing::info;
 

@@ -6,9 +6,10 @@
 //! and receive status updates via typed channels. Errors are automatically
 //! converted into shutdown signals, allowing coordinated teardown of tasks.
 
+use stratum_apps::utils::types::DownstreamId;
 use tracing::{debug, error, warn};
 
-use crate::{error::JDCError, utils::DownstreamId};
+use crate::error::JDCError;
 
 /// Sender type for propagating status updates from different system components.
 #[derive(Debug, Clone)]

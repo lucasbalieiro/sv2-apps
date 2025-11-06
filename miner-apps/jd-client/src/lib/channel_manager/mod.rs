@@ -40,6 +40,10 @@ use stratum_apps::{
         parsers_sv2::{JobDeclaration, Mining, TemplateDistribution},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
     },
+    utils::types::{
+        ChannelId, DownstreamId, Message, RequestId, SharesBatchSize, SharesPerMinute, TemplateId,
+        UpstreamJobId,
+    },
 };
 use tokio::{net::TcpListener, select, sync::broadcast};
 use tracing::{debug, error, info, warn};
@@ -52,8 +56,7 @@ use crate::{
     status::{handle_error, Status, StatusSender},
     task_manager::TaskManager,
     utils::{
-        AtomicUpstreamState, ChannelId, DownstreamChannelJobId, DownstreamId, Message,
-        PendingChannelRequest, RequestId, ShutdownMessage, TemplateId, UpstreamJobId,
+        AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, ShutdownMessage,
         UpstreamState, VardiffKey,
     },
 };
@@ -226,8 +229,8 @@ pub struct ChannelManager {
     channel_manager_data: Arc<Mutex<ChannelManagerData>>,
     channel_manager_channel: ChannelManagerChannel,
     miner_tag_string: String,
-    share_batch_size: usize,
-    shares_per_minute: f32,
+    share_batch_size: SharesBatchSize,
+    shares_per_minute: SharesPerMinute,
     user_identity: String,
     /// This represent the current state of Upstream channel
     /// 1. NoChannel: No active upstream connection.
@@ -307,8 +310,8 @@ impl ChannelManager {
         let channel_manager = ChannelManager {
             channel_manager_data,
             channel_manager_channel,
-            share_batch_size: config.share_batch_size() as usize,
-            shares_per_minute: config.shares_per_minute() as f32,
+            share_batch_size: config.share_batch_size(),
+            shares_per_minute: config.shares_per_minute(),
             miner_tag_string: config.jdc_signature().to_string(),
             user_identity: config.user_identity().to_string(),
             upstream_state: AtomicUpstreamState::new(UpstreamState::SoloMining),

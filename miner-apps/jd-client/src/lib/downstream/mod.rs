@@ -18,6 +18,7 @@ use stratum_apps::{
         handlers_sv2::HandleCommonMessagesFromClientAsync,
         parsers_sv2::{AnyMessage, Mining},
     },
+    utils::types::{DownstreamId, Message, SV2Frame, StdFrame},
 };
 
 use tokio::sync::broadcast;
@@ -27,11 +28,10 @@ use crate::{
     error::JDCError,
     status::{handle_error, Status, StatusSender},
     task_manager::TaskManager,
-    utils::{
-        protocol_message_type, spawn_io_tasks, ChannelId, DownstreamId, Message, MessageType,
-        SV2Frame, ShutdownMessage, StdFrame,
-    },
+    utils::{protocol_message_type, spawn_io_tasks, MessageType, ShutdownMessage},
 };
+
+use stratum_apps::utils::types::ChannelId;
 
 mod message_handler;
 
