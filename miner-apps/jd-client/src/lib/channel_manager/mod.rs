@@ -43,7 +43,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::types::{
         ChannelId, DownstreamId, Message, RequestId, SharesBatchSize, SharesPerMinute, TemplateId,
-        UpstreamJobId,
+        UpstreamJobId, VardiffKey,
     },
 };
 use tokio::{net::TcpListener, select, sync::broadcast};
@@ -57,7 +57,7 @@ use crate::{
     status::{handle_error, Status, StatusSender},
     utils::{
         AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, ShutdownMessage,
-        UpstreamState, VardiffKey,
+        UpstreamState,
     },
 };
 mod downstream_message_handler;

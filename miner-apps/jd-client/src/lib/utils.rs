@@ -494,21 +494,6 @@ pub(crate) fn create_close_channel_msg(channel_id: ChannelId, msg: &str) -> Clos
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct VardiffKey {
-    pub downstream_id: DownstreamId,
-    pub channel_id: ChannelId,
-}
-
-impl From<(DownstreamId, ChannelId)> for VardiffKey {
-    fn from(value: (DownstreamId, ChannelId)) -> Self {
-        VardiffKey {
-            downstream_id: value.0,
-            channel_id: value.1,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownstreamChannelJobId {
     pub downstream_id: DownstreamId,
