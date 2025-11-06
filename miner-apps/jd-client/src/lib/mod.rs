@@ -28,6 +28,7 @@ mod channel_manager;
 pub mod config;
 mod downstream;
 pub mod error;
+mod io_task;
 pub mod jd_mode;
 mod job_declarator;
 mod status;

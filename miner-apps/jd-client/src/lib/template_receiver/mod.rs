@@ -40,8 +40,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     error::JDCError,
+    io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
-    utils::{get_setup_connection_message_tp, spawn_io_tasks, ShutdownMessage},
+    utils::{get_setup_connection_message_tp, ShutdownMessage},
 };
 
 mod message_handler;
