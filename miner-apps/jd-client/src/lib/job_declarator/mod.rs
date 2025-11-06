@@ -13,7 +13,10 @@ use stratum_apps::{
         parsers_sv2::{AnyMessage, JobDeclaration},
     },
     task_manager::TaskManager,
-    utils::types::{Message, SV2Frame, StdFrame},
+    utils::{
+        protocol_message_type::{protocol_message_type, MessageType},
+        types::{Message, SV2Frame, StdFrame},
+    },
 };
 use tokio::{
     net::TcpStream,
@@ -25,10 +28,7 @@ use crate::{
     config::ConfigJDCMode,
     error::JDCError,
     status::{handle_error, Status, StatusSender},
-    utils::{
-        get_setup_connection_message_jds, protocol_message_type, spawn_io_tasks, MessageType,
-        ShutdownMessage,
-    },
+    utils::{get_setup_connection_message_jds, spawn_io_tasks, ShutdownMessage},
 };
 
 mod message_handler;
