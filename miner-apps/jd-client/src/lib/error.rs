@@ -66,32 +66,55 @@ pub enum JDCError {
     ChannelErrorSender,
     /// Broadcast channel receiver error
     BroadcastChannelErrorReceiver(broadcast::error::RecvError),
+    /// Shutdown
     Shutdown,
+    /// Network helpers error
     NetworkHelpersError(network_helpers::Error),
+    /// Unexpected message
     UnexpectedMessage(u8),
+    /// Invalid user identity
     InvalidUserIdentity(String),
+    /// Bitcoin encode error
     BitcoinEncodeError(bitcoin::consensus::encode::Error),
+    /// Invalid socket address
     InvalidSocketAddress(String),
+    /// Timeout error
     Timeout,
+    /// Declared job corresponding to request Id not found.
     LastDeclareJobNotFound(RequestId),
+    /// No active job with job id
     ActiveJobNotFound(JobId),
+    /// No active token
     TokenNotFound,
+    /// Template not found with template ID
     TemplateNotFound(TemplateId),
+    /// Downstream not found with downstream ID
     DownstreamNotFound(DownstreamId),
     /// Future template not present
     FutureTemplateNotPresent,
+    /// Last new prevhash not found
     LastNewPrevhashNotFound,
+    /// Vardiff not found
     VardiffNotFound(VardiffKey),
+    /// Tx data error
     TxDataError,
+    /// Frame conversion error
     FrameConversionError,
+    /// Failed to create custom Job
     FailedToCreateCustomJob,
+    /// Allocate Mining job token coinbase output error
     AllocateMiningJobTokenSuccessCoinbaseOutputsError,
+    /// Channel manager has bad coinbase outputs.
     ChannelManagerHasBadCoinbaseOutputs,
+    /// Declared job has bad coinbase outputs.
     DeclaredJobHasBadCoinbaseOutputs,
+    /// Extranonce size is too large
     ExtranonceSizeTooLarge,
+    /// Could not create group channel
     FailedToCreateGroupChannel(GroupChannelError),
     ///Channel Errors
     ChannelSv2(ChannelSv2Error),
+    /// Extranonce prefix error
     ExtranoncePrefixFactoryError(ExtendedExtranonceError),
 }
 
