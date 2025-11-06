@@ -45,8 +45,6 @@ pub enum ChannelSv2Error {
 
 #[derive(Debug)]
 pub enum JDCError {
-    #[allow(dead_code)]
-    VecToSlice32(Vec<u8>),
     /// Errors on bad CLI argument input.
     BadCliArgs,
     /// Errors on bad `config` TOML deserialize.
@@ -61,12 +59,6 @@ pub enum JDCError {
     Io(std::io::Error),
     /// Errors on bad `String` to `int` conversion.
     ParseInt(std::num::ParseIntError),
-    #[allow(dead_code)]
-    SubprotocolMining(String),
-    // Locking Errors
-    PoisonLock,
-    TokioChannelErrorRecv(tokio::sync::broadcast::error::RecvError),
-    Infallible(std::convert::Infallible),
     Parser(ParserError),
     /// Channel receiver error
     ChannelErrorReceiver(async_channel::RecvError),
@@ -86,7 +78,7 @@ pub enum JDCError {
     TokenNotFound,
     TemplateNotFound(TemplateId),
     DownstreamNotFound(DownstreamId),
-    DownstreamIdNotFound,
+    /// Future template not present
     FutureTemplateNotPresent,
     LastNewPrevhashNotFound,
     VardiffNotFound(VardiffKey),
@@ -116,12 +108,7 @@ impl fmt::Display for JDCError {
             FramingSv2(ref e) => write!(f, "Framing SV2 error: `{e:?}`"),
             Io(ref e) => write!(f, "I/O error: `{e:?}"),
             ParseInt(ref e) => write!(f, "Bad convert from `String` to `int`: `{e:?}`"),
-            SubprotocolMining(ref e) => write!(f, "Subprotocol Mining Error: `{e:?}`"),
-            PoisonLock => write!(f, "Poison Lock error"),
             ChannelErrorReceiver(ref e) => write!(f, "Channel receive error: `{e:?}`"),
-            TokioChannelErrorRecv(ref e) => write!(f, "Channel receive error: `{e:?}`"),
-            VecToSlice32(ref e) => write!(f, "Standard Error: `{e:?}`"),
-            Infallible(ref e) => write!(f, "Infallible Error:`{e:?}`"),
             Parser(ref e) => write!(f, "Parser error: `{e:?}`"),
             BroadcastChannelErrorReceiver(ref e) => {
                 write!(f, "Broadcast channel receive error: {e:?}")
@@ -151,9 +138,6 @@ impl fmt::Display for JDCError {
                     f,
                     "Downstream not found with downstream_id: {downstream_id}"
                 )
-            }
-            DownstreamIdNotFound => {
-                write!(f, "Downstream id not found")
             }
             FutureTemplateNotPresent => {
                 write!(f, "Future template not present")
@@ -212,7 +196,6 @@ impl JDCError {
                 | JDCError::TokenNotFound
                 | JDCError::TemplateNotFound(_)
                 | JDCError::DownstreamNotFound(_)
-                | JDCError::DownstreamIdNotFound
                 | JDCError::VardiffNotFound(_)
                 | JDCError::TxDataError
                 | JDCError::FrameConversionError
@@ -277,12 +260,6 @@ impl From<ConfigError> for JDCError {
 impl From<async_channel::RecvError> for JDCError {
     fn from(e: async_channel::RecvError) -> Self {
         JDCError::ChannelErrorReceiver(e)
-    }
-}
-
-impl From<tokio::sync::broadcast::error::RecvError> for JDCError {
-    fn from(e: tokio::sync::broadcast::error::RecvError) -> Self {
-        JDCError::TokioChannelErrorRecv(e)
     }
 }
 
