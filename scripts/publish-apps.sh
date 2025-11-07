@@ -23,6 +23,8 @@ echo "  - translator_sv2 (from ./miner-apps/translator/)"
 echo "Test Utilities:"
 echo "  - mining_device (from ./miner-apps/test-utils/mining-device/)"
 echo "  - mining_device_sv1 (from ./miner-apps/test-utils/mining-device-sv1/)"
+echo "Library Crates:"
+echo "  - bitcoin_core_sv2 (from ./bitcoin-core-sv2/)"
 echo ""
 
 # Check if user is logged in to crates.io
@@ -89,6 +91,10 @@ publish_crate "miner-apps/translator" "translator_sv2" "$@"
 echo "📦 Publishing Test Utilities..."
 publish_crate "miner-apps/test-utils/mining-device" "mining_device" "$@"
 publish_crate "miner-apps/test-utils/mining-device-sv1" "mining_device_sv1" "$@"
+
+# Publish Bitcoin Core Sv2
+echo "📦 Publishing Library Crates..."
+publish_crate "bitcoin-core-sv2" "bitcoin_core_sv2" "$@"
 
 echo ""
 echo "🎉 All SV2 applications published successfully!"
