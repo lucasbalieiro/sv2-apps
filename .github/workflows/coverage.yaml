@@ -72,6 +72,13 @@ jobs:
           directory: ./miner-apps/mining-device/target/tarpaulin-reports/mining-device-coverage
           file: ./miner-apps/mining-device/target/tarpaulin-reports/mining-device-coverage/cobertura.xml
           flags: mining_device
+
+      - name: Upload bitcoin-core-sv2 coverage to codecov.io
+        uses: codecov/codecov-action@v4
+        with:
+          directory: ./bitcoin-core-sv2/target/tarpaulin-reports/bitcoin-core-sv2-coverage
+          file: ./bitcoin-core-sv2/target/tarpaulin-reports/bitcoin-core-sv2-coverage/cobertura.xml
+          flags: bitcoin_core_sv2
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
