@@ -232,17 +232,16 @@ impl JobDeclarator {
                 )
             })?;
 
-        let message_type = incoming
-            .get_header()
-            .ok_or_else(|| {
-                error!("Handshake frame missing header.");
-                framing_sv2::Error::ExpectedHandshakeFrame
-            })?
-            .msg_type();
+        let header = incoming.get_header().ok_or_else(|| {
+            error!("Handshake frame missing header.");
+            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+        })?;
 
-        debug!(?message_type, "Processing handshake response.");
+        debug!(ext_type = ?header.ext_type(),
+            msg_type = ?header.msg_type(),
+            "Processing handshake response.");
 
-        self.handle_common_message_frame_from_server(None, message_type, incoming.payload())
+        self.handle_common_message_frame_from_server(None, header, incoming.payload())
             .await?;
 
         info!("Job declarator: SV2 handshake completed successfully.");
@@ -286,19 +285,18 @@ impl JobDeclarator {
         let mut sv2_frame = self.job_declarator_channel.jds_receiver.recv().await?;
 
         debug!("Received SV2 frame from JDS.");
-        let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
-            return Ok(());
-        };
+        let header = sv2_frame.get_header().ok_or_else(|| {
+            error!("SV2 frame missing header");
+            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+        })?;
+        let message_type = header.msg_type();
+        let extension_type = header.ext_type();
 
-        match protocol_message_type(message_type) {
+        match protocol_message_type(extension_type, message_type) {
             MessageType::Common => {
-                info!(?message_type, "Handling common message from Upstream.");
-                self.handle_common_message_frame_from_server(
-                    None,
-                    message_type,
-                    sv2_frame.payload(),
-                )
-                .await?;
+                info!(ext_type = ?extension_type, msg_type = ?message_type, "Handling common message from Upstream.");
+                self.handle_common_message_frame_from_server(None, header, sv2_frame.payload())
+                    .await?;
             }
             MessageType::JobDeclaration => {
                 let message =

@@ -30,7 +30,9 @@ use stratum_apps::{
         noise_sv2,
         parsers_sv2::ParserError,
     },
-    utils::types::{DownstreamId, JobId, RequestId, TemplateId, VardiffKey},
+    utils::types::{
+        DownstreamId, ExtensionType, JobId, MessageType, RequestId, TemplateId, VardiffKey,
+    },
 };
 use tokio::{sync::broadcast, time::error::Elapsed};
 
@@ -70,7 +72,7 @@ pub enum JDCError {
     /// Network helpers error
     NetworkHelpersError(network_helpers::Error),
     /// Unexpected message
-    UnexpectedMessage(u8),
+    UnexpectedMessage(ExtensionType, MessageType),
     /// Invalid user identity
     InvalidUserIdentity(String),
     /// Bitcoin encode error
@@ -115,6 +117,16 @@ pub enum JDCError {
     ChannelSv2(ChannelSv2Error),
     /// Extranonce prefix error
     ExtranoncePrefixFactoryError(ExtendedExtranonceError),
+    /// Invalid unsupported extensions sequence (exceeds maximum length)
+    InvalidUnsupportedExtensionsSequence,
+    /// Invalid required extensions sequence (exceeds maximum length)
+    InvalidRequiredExtensionsSequence,
+    /// Invalid supported extensions sequence (exceeds maximum length)
+    InvalidSupportedExtensionsSequence,
+    /// Server does not support required extensions
+    RequiredExtensionsNotSupported(Vec<u16>),
+    /// Server requires extensions that the translator doesn't support
+    ServerRequiresUnsupportedExtensions(Vec<u16>),
 }
 
 impl std::error::Error for JDCError {}
@@ -138,7 +150,9 @@ impl fmt::Display for JDCError {
             ChannelErrorSender => write!(f, "Sender error"),
             Shutdown => write!(f, "Shutdown"),
             NetworkHelpersError(ref e) => write!(f, "Network error: {e:?}"),
-            UnexpectedMessage(message_type) => write!(f, "Unexpected Message: {message_type}"),
+            UnexpectedMessage(extension_type, message_type) => {
+                write!(f, "Unexpected Message: {extension_type} {message_type}")
+            }
             InvalidUserIdentity(_) => write!(f, "User ID is invalid"),
             BitcoinEncodeError(_) => write!(f, "Error generated during encoding"),
             InvalidSocketAddress(ref s) => write!(f, "Invalid socket address: {s}"),
@@ -203,6 +217,33 @@ impl fmt::Display for JDCError {
             ChannelSv2(channel_error) => {
                 write!(f, "Channel error: {channel_error:?}")
             }
+            InvalidUnsupportedExtensionsSequence => {
+                write!(
+                    f,
+                    "Invalid unsupported extensions sequence (exceeds maximum length)"
+                )
+            }
+            InvalidRequiredExtensionsSequence => {
+                write!(
+                    f,
+                    "Invalid required extensions sequence (exceeds maximum length)"
+                )
+            }
+            InvalidSupportedExtensionsSequence => {
+                write!(
+                    f,
+                    "Invalid supported extensions sequence (exceeds maximum length)"
+                )
+            }
+            RequiredExtensionsNotSupported(extensions) => {
+                write!(
+                    f,
+                    "Server does not support required extensions: {extensions:?}"
+                )
+            }
+            ServerRequiresUnsupportedExtensions(extensions) => {
+                write!(f, "Server requires extensions that the translator doesn't support: {extensions:?}")
+            }
         }
     }
 }
@@ -222,6 +263,8 @@ impl JDCError {
                 | JDCError::TxDataError
                 | JDCError::FrameConversionError
                 | JDCError::FailedToCreateCustomJob
+                | JDCError::RequiredExtensionsNotSupported(_)
+                | JDCError::ServerRequiresUnsupportedExtensions(_)
         )
     }
 
@@ -308,8 +351,8 @@ impl HandlerErrorType for JDCError {
         JDCError::Parser(error)
     }
 
-    fn unexpected_message(message_type: u8) -> Self {
-        JDCError::UnexpectedMessage(message_type)
+    fn unexpected_message(extension_type: ExtensionType, message_type: MessageType) -> Self {
+        JDCError::UnexpectedMessage(extension_type, message_type)
     }
 }
 
