@@ -40,17 +40,8 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build stratum-apps workspace
-        run: cargo build --manifest-path=stratum-apps/Cargo.toml --all-features
-
-      - name: Build pool applications workspace
-        run: cargo build --manifest-path=pool-apps/Cargo.toml
-
-      - name: Build miner applications workspace
-        run: cargo build --manifest-path=miner-apps/Cargo.toml
-
-      - name: Build integration tests workspace
-        run: cargo build --manifest-path=integration-tests/Cargo.toml
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.85
 
       - name: Test stratum-apps workspace
         run: cargo test --manifest-path=stratum-apps/Cargo.toml --all-features
@@ -63,17 +54,24 @@ jobs:
 
       # We have a separate workflow to run integration tests (see integration-tests.yaml)
 
-      - name: Clippy check stratum-apps workspace
-        run: cargo clippy --manifest-path=stratum-apps/Cargo.toml --all-features -- -D warnings
+  clippy:
+    name: Clippy Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Clippy check pool applications workspace
-        run: cargo clippy --manifest-path=pool-apps/Cargo.toml -- -D warnings
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.85
+        with:
+          components: clippy
 
-      - name: Clippy check miner applications workspace
-        run: cargo clippy --manifest-path=miner-apps/Cargo.toml -- -D warnings
-
-      - name: Clippy check integration tests workspace
-        run: cargo clippy --manifest-path=integration-tests/Cargo.toml -- -D warnings
+      - name: Clippy check
+        run: |
+          cargo clippy --manifest-path=stratum-apps/Cargo.toml --all-features -- -D warnings
+          cargo clippy --manifest-path=pool-apps/Cargo.toml -- -D warnings
+          cargo clippy --manifest-path=miner-apps/Cargo.toml -- -D warnings
+          cargo clippy --manifest-path=integration-tests/Cargo.toml -- -D warnings
 
   fmt:
     name: Format Check
