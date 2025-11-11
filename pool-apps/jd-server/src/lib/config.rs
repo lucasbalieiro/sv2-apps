@@ -268,29 +268,20 @@ mod tests {
     fn test_get_coinbase_reward_script_empty() {
         let error =
             load_coinbase_config_str("\"\"").expect_err("cannot parse config with empty txout");
-        assert_eq!(
-            error.to_string(),
-            "Miniscript: unexpected «(0 args) while parsing Miniscript»",
-        );
+        assert_eq!(error.to_string(), "Miniscript: unrecognized name ''",);
     }
 
     #[test]
     fn test_get_invalid_miniscript_in_coinbase_reward_script() {
         let error = load_coinbase_config_str(&format!("\"INVALID\""))
             .expect_err("Cannot parse config with bad miniscript");
-        assert_eq!(
-            error.to_string(),
-            "Miniscript: unexpected «INVALID(0 args) while parsing Miniscript»",
-        );
+        assert_eq!(error.to_string(), "Miniscript: unrecognized name 'INVALID'",);
     }
 
     #[test]
     fn test_get_invalid_value_in_coinbase_reward_script() {
         let error = load_coinbase_config_str(&format!("\"wpkh({TEST_INVALID_PK_HEX})\""))
             .expect_err("Cannot parse config with bad pubkeys");
-        assert_eq!(
-            error.to_string(),
-            "Miniscript: unexpected «Error while parsing simple public key»",
-        );
+        assert_eq!(error.to_string(), "Miniscript: string error",);
     }
 }
