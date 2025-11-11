@@ -1,9 +1,6 @@
-use crate::{
-    sv1::sv1_server::data::{PendingTargetUpdate, Sv1ServerData},
-    utils::ShutdownMessage,
-};
+use crate::sv1::sv1_server::data::{PendingTargetUpdate, Sv1ServerData};
 use async_channel::Sender;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::sync::Arc;
 use stratum_apps::{
     custom_mutex::Mutex,
     stratum_core::{
@@ -15,7 +12,7 @@ use stratum_apps::{
         sv1_api::json_rpc,
     },
 };
-use tokio::{sync::broadcast, time};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
 /// Handles all variable difficulty adjustment logic for the SV1 server.
@@ -53,66 +50,34 @@ impl DifficultyManager {
         sv1_server_to_downstream_sender: broadcast::Sender<(u32, Option<u32>, json_rpc::Message)>,
         shares_per_minute: f32,
         is_aggregated: bool,
-        mut notify_shutdown: broadcast::Receiver<ShutdownMessage>,
-        shutdown_complete_tx: tokio::sync::mpsc::Sender<()>,
+        enable_vardiff: bool,
     ) {
+        if !enable_vardiff {
+            info!("Variable difficulty adjustment disabled - upstream will manage difficulty, SV1 server will forward SetTarget messages to downstreams");
+            // In the vardiff disabled case, this branch intentionally awaits forever to remain
+            // pending. Without it, the future would resolve immediately, leading the
+            // tokio::select! block to finish execution and terminate the task.
+            tokio::time::sleep(tokio::time::Duration::MAX).await;
+            return;
+        }
+
+        info!("Variable difficulty adjustment enabled - starting vardiff loop");
+
         let difficulty_manager = DifficultyManager::new(shares_per_minute, is_aggregated);
 
-        'vardiff_loop: loop {
-            tokio::select! {
-                message = notify_shutdown.recv() => {
-                    match message {
-                        Ok(ShutdownMessage::ShutdownAll) => {
-                            debug!("SV1 Server: Vardiff loop received shutdown signal. Exiting.");
-                            break 'vardiff_loop;
-                        }
-                        Ok(ShutdownMessage::DownstreamShutdown(downstream_id)) => {
-                            sv1_server_data.super_safe_lock(|d| {
-                                d.vardiff.remove(&downstream_id);
-                            });
-                        }
-                        Ok(ShutdownMessage::DownstreamShutdownAll) => {
-                            sv1_server_data.super_safe_lock(|d|{
-                                d.vardiff = HashMap::new();
-                                d.downstreams = HashMap::new();
-                            });
-                            info!("🔌 All downstreams removed from sv1 server as upstream changed");
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            ticker.tick().await;
+            info!("Starting vardiff loop for downstreams");
 
-                            // In aggregated mode, send UpdateChannel to reflect the new state (no downstreams)
-                            Self::send_update_channel_on_downstream_state_change(
-                                &sv1_server_data,
-                                &channel_manager_sender,
-                                is_aggregated,
-                            ).await;
-                        }
-                        Ok(ShutdownMessage::UpstreamReconnectedResetAndShutdownDownstreams) => {
-                            sv1_server_data.super_safe_lock(|d|{
-                                d.vardiff = HashMap::new();
-                                d.downstreams = HashMap::new();
-                            });
-                            info!("🔌 All downstreams removed from sv1 server as upstream reconnected");
-
-                            // In aggregated mode, send UpdateChannel to reflect the new state (no downstreams)
-                            Self::send_update_channel_on_downstream_state_change(
-                                &sv1_server_data,
-                                &channel_manager_sender,
-                                is_aggregated,
-                            ).await;
-                        }
-                        _ => {}
-                    }
-                }
-                _ = time::sleep(Duration::from_secs(60)) => {
-                    difficulty_manager.handle_vardiff_updates(
-                        &sv1_server_data,
-                        &channel_manager_sender,
-                        &sv1_server_to_downstream_sender,
-                    ).await;
-                }
-            }
+            difficulty_manager
+                .handle_vardiff_updates(
+                    &sv1_server_data,
+                    &channel_manager_sender,
+                    &sv1_server_to_downstream_sender,
+                )
+                .await;
         }
-        drop(shutdown_complete_tx);
-        debug!("SV1 Server: Vardiff loop exited.");
     }
 
     /// Handles variable difficulty adjustments for all connected downstreams.
