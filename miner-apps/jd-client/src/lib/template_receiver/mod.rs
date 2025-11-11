@@ -32,7 +32,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::{
         protocol_message_type::{protocol_message_type, MessageType},
-        types::{Message, SV2Frame, StdFrame},
+        types::{Message, StdFrame},
     },
 };
 use tokio::{net::TcpStream, sync::broadcast};
@@ -61,8 +61,8 @@ pub struct TemplateReceiverData;
 pub struct TemplateReceiverChannel {
     channel_manager_sender: Sender<TemplateDistribution<'static>>,
     channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
-    tp_sender: Sender<SV2Frame>,
-    tp_receiver: Receiver<SV2Frame>,
+    tp_sender: Sender<StdFrame>,
+    tp_receiver: Receiver<StdFrame>,
 }
 
 /// Manages communication with a Stratum V2 Template Provider.
@@ -137,8 +137,8 @@ impl TemplateReceiver {
                                 noise_stream.into_split();
 
                             let status_sender = StatusSender::TemplateReceiver(status_sender);
-                            let (inbound_tx, inbound_rx) = unbounded::<SV2Frame>();
-                            let (outbound_tx, outbound_rx) = unbounded::<SV2Frame>();
+                            let (inbound_tx, inbound_rx) = unbounded::<StdFrame>();
+                            let (outbound_tx, outbound_rx) = unbounded::<StdFrame>();
 
                             info!(attempt, "Spawning IO tasks for template receiver");
                             spawn_io_tasks(
@@ -319,7 +319,7 @@ impl TemplateReceiver {
                 .await?,
         );
         debug!("Forwarding message from channel manager to outbound_tx");
-        let sv2_frame: SV2Frame = msg.try_into()?;
+        let sv2_frame: StdFrame = msg.try_into()?;
         self.template_receiver_channel
             .tp_sender
             .send(sv2_frame)

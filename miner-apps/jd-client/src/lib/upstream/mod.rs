@@ -26,7 +26,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::{
         protocol_message_type::{protocol_message_type, MessageType},
-        types::{Message, SV2Frame, StdFrame},
+        types::{Message, StdFrame},
     },
 };
 use tokio::{
@@ -57,8 +57,8 @@ pub struct UpstreamData;
 pub struct UpstreamChannel {
     channel_manager_sender: Sender<Mining<'static>>,
     channel_manager_receiver: Receiver<Mining<'static>>,
-    upstream_sender: Sender<SV2Frame>,
-    upstream_receiver: Receiver<SV2Frame>,
+    upstream_sender: Sender<StdFrame>,
+    upstream_receiver: Receiver<StdFrame>,
 }
 
 /// Represents an upstream connection (e.g., a pool).
@@ -99,8 +99,8 @@ impl Upstream {
                 .into_split();
 
         let status_sender = StatusSender::Upstream(status_sender);
-        let (inbound_tx, inbound_rx) = unbounded::<SV2Frame>();
-        let (outbound_tx, outbound_rx) = unbounded::<SV2Frame>();
+        let (inbound_tx, inbound_rx) = unbounded::<StdFrame>();
+        let (outbound_tx, outbound_rx) = unbounded::<StdFrame>();
 
         spawn_io_tasks(
             task_manager,
@@ -308,7 +308,7 @@ impl Upstream {
         match self.upstream_channel.channel_manager_receiver.recv().await {
             Ok(msg) => {
                 let message = AnyMessage::Mining(msg);
-                let sv2_frame: SV2Frame = message.try_into()?;
+                let sv2_frame: StdFrame = message.try_into()?;
                 debug!("Received message from channel manager, forwarding upstream.");
                 self.upstream_channel
                     .upstream_sender

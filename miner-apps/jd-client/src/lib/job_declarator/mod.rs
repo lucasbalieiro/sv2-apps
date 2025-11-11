@@ -15,7 +15,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::{
         protocol_message_type::{protocol_message_type, MessageType},
-        types::{Message, SV2Frame, StdFrame},
+        types::{Message, StdFrame},
     },
 };
 use tokio::{
@@ -42,8 +42,8 @@ pub struct JobDeclaratorData;
 pub struct JobDeclaratorChannel {
     channel_manager_sender: Sender<JobDeclaration<'static>>,
     channel_manager_receiver: Receiver<JobDeclaration<'static>>,
-    jds_sender: Sender<SV2Frame>,
-    jds_receiver: Receiver<SV2Frame>,
+    jds_sender: Sender<StdFrame>,
+    jds_receiver: Receiver<StdFrame>,
 }
 
 /// Manages the lifecycle and communication with a Job Declarator (JDS)
@@ -90,8 +90,8 @@ impl JobDeclarator {
                 .into_split();
 
         let status_sender = StatusSender::JobDeclarator(status_sender);
-        let (inbound_tx, inbound_rx) = unbounded::<SV2Frame>();
-        let (outbound_tx, outbound_rx) = unbounded::<SV2Frame>();
+        let (inbound_tx, inbound_rx) = unbounded::<StdFrame>();
+        let (outbound_tx, outbound_rx) = unbounded::<StdFrame>();
 
         spawn_io_tasks(
             task_manager,
