@@ -1,4 +1,5 @@
 .idea
+.DS_Store
 */**/target
 /protocols/guix-example/guix-example.h
 /protocols/Cargo.lock
