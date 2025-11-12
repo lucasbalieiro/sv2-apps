@@ -21,7 +21,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::{
         protocol_message_type::{protocol_message_type, MessageType},
-        types::{DownstreamId, Message, StdFrame},
+        types::{DownstreamId, Message, Sv2Frame},
     },
 };
 
@@ -68,8 +68,8 @@ pub struct DownstreamData {
 pub struct DownstreamChannel {
     channel_manager_sender: Sender<(DownstreamId, Mining<'static>)>,
     channel_manager_receiver: broadcast::Sender<(DownstreamId, Mining<'static>)>,
-    downstream_sender: Sender<StdFrame>,
-    downstream_receiver: Receiver<StdFrame>,
+    downstream_sender: Sender<Sv2Frame>,
+    downstream_receiver: Receiver<Sv2Frame>,
 }
 
 /// Represents a downstream client connected to this node.
@@ -96,8 +96,8 @@ impl Downstream {
             downstream_id,
             tx: status_sender,
         };
-        let (inbound_tx, inbound_rx) = unbounded::<StdFrame>();
-        let (outbound_tx, outbound_rx) = unbounded::<StdFrame>();
+        let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
+        let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
         spawn_io_tasks(
             task_manager,
             noise_stream_reader,
@@ -240,7 +240,7 @@ impl Downstream {
         }
 
         let message = AnyMessage::Mining(message);
-        let sv2_frame: StdFrame = message.try_into()?;
+        let sv2_frame: Sv2Frame = message.try_into()?;
 
         self.downstream_channel
             .downstream_sender

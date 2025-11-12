@@ -32,7 +32,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::{
         protocol_message_type::{protocol_message_type, MessageType},
-        types::{Message, StdFrame},
+        types::{Message, Sv2Frame},
     },
 };
 use tokio::{net::TcpStream, sync::broadcast};
@@ -61,8 +61,8 @@ pub struct TemplateReceiverData;
 pub struct TemplateReceiverChannel {
     channel_manager_sender: Sender<TemplateDistribution<'static>>,
     channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
-    tp_sender: Sender<StdFrame>,
-    tp_receiver: Receiver<StdFrame>,
+    tp_sender: Sender<Sv2Frame>,
+    tp_receiver: Receiver<Sv2Frame>,
 }
 
 /// Manages communication with a Stratum V2 Template Provider.
@@ -137,8 +137,8 @@ impl TemplateReceiver {
                                 noise_stream.into_split();
 
                             let status_sender = StatusSender::TemplateReceiver(status_sender);
-                            let (inbound_tx, inbound_rx) = unbounded::<StdFrame>();
-                            let (outbound_tx, outbound_rx) = unbounded::<StdFrame>();
+                            let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
+                            let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
 
                             info!(attempt, "Spawning IO tasks for template receiver");
                             spawn_io_tasks(
@@ -319,7 +319,7 @@ impl TemplateReceiver {
                 .await?,
         );
         debug!("Forwarding message from channel manager to outbound_tx");
-        let sv2_frame: StdFrame = msg.try_into()?;
+        let sv2_frame: Sv2Frame = msg.try_into()?;
         self.template_receiver_channel
             .tp_sender
             .send(sv2_frame)
@@ -371,7 +371,7 @@ impl TemplateReceiver {
             TemplateDistribution::CoinbaseOutputConstraints(constraints),
         );
 
-        let frame: StdFrame = msg.try_into()?;
+        let frame: Sv2Frame = msg.try_into()?;
         info!("Sending CoinbaseOutputConstraints message upstream");
         self.template_receiver_channel
             .tp_sender
@@ -394,7 +394,7 @@ impl TemplateReceiver {
 
         info!(%socket, "Building setup connection message for upstream");
         let setup_msg = get_setup_connection_message_tp(socket);
-        let frame: StdFrame = Message::Common(setup_msg.into()).try_into()?;
+        let frame: Sv2Frame = Message::Common(setup_msg.into()).try_into()?;
 
         info!("Sending setup connection message to upstream");
         self.template_receiver_channel
@@ -407,7 +407,7 @@ impl TemplateReceiver {
             })?;
 
         info!("Waiting for upstream handshake response");
-        let mut incoming: StdFrame = self
+        let mut incoming: Sv2Frame = self
             .template_receiver_channel
             .tp_receiver
             .recv()

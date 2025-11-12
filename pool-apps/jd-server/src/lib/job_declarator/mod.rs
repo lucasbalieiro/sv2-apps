@@ -19,7 +19,7 @@
 
 pub mod message_handler;
 use super::{
-    error::JdsError, mempool::JDsMempool, status, EitherFrame, JobDeclaratorServerConfig, StdFrame,
+    error::JdsError, mempool::JDsMempool, status, EitherFrame, JobDeclaratorServerConfig, Sv2Frame,
 };
 use async_channel::{Receiver, Sender};
 use binary_sv2::{self, B0255, U256};
@@ -270,12 +270,12 @@ impl JobDeclaratorDownstream {
 
     /// Sends a single Job Declaration message back to the downstream client.
     ///
-    /// Wraps the message into a `StdFrame` and sends it through the established channel.
+    /// Wraps the message into a `Sv2Frame` and sends it through the established channel.
     pub async fn send(
         self_mutex: Arc<Mutex<Self>>,
         message: parsers_sv2::JobDeclaration<'static>,
     ) -> Result<(), ()> {
-        let sv2_frame: StdFrame = JdsMessages::JobDeclaration(message).try_into().unwrap();
+        let sv2_frame: Sv2Frame = JdsMessages::JobDeclaration(message).try_into().unwrap();
         let sender = self_mutex.safe_lock(|self_| self_.sender.clone()).unwrap();
         sender.send(sv2_frame.into()).await.map_err(|_| ())?;
         Ok(())
@@ -299,7 +299,7 @@ impl JobDeclaratorDownstream {
             loop {
                 match recv.recv().await {
                     Ok(message) => {
-                        let mut frame: StdFrame = handle_result!(tx_status, message.try_into());
+                        let mut frame: Sv2Frame = handle_result!(tx_status, message.try_into());
                         let header = frame
                             .get_header()
                             .ok_or_else(|| JdsError::Custom(String::from("No header set")));
@@ -583,7 +583,7 @@ impl JobDeclarator {
                                     flags: (setup_connection.flags & 1u32),
                                 };
                                 info!("Sending success message for proxy");
-                                let sv2_frame: StdFrame = JdsMessages::Common(success_message.into())
+                                let sv2_frame: Sv2Frame = JdsMessages::Common(success_message.into())
         .try_into()
         .expect("Failed to convert setup connection response message to standard frame");
 
@@ -617,7 +617,7 @@ impl JobDeclarator {
                                         .unwrap(),
                                 };
                                 info!("Sending error message for proxy");
-                                let sv2_frame: StdFrame = JdsMessages::Common(error_message.into())
+                                let sv2_frame: Sv2Frame = JdsMessages::Common(error_message.into())
         .try_into()
         .expect("Failed to convert setup connection response message to standard frame");
 
