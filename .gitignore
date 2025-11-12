@@ -1,4 +1,5 @@
 .idea
+.DS_Store
 */**/target
 /protocols/guix-example/guix-example.h
 /protocols/Cargo.lock
@@ -27,3 +28,4 @@ stratum-message-generator
 *.log
 **/minerd
 bitcoin-core-sv2/Cargo.lock
+docker/docker_env

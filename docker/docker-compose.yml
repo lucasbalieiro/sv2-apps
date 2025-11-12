@@ -1,0 +1,103 @@
+services:
+  pool_sv2:
+    image: stratumv2/pool_sv2:v0.1.0
+    container_name: pool_sv2
+    env_file:
+      - docker_env
+    volumes:
+      - ./config/pool-config.toml.template:/app/pool-config.toml.template:ro
+      - "${BITCOIN_SOCKET_PATH?}:/app/node.sock"
+    entrypoint: >
+      sh -c '
+        envsubst < /app/pool-config.toml.template> /app/pool-config.toml &&
+        exec /app/pool_sv2
+      '
+    ports:
+      - "34254:34254"
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.11
+    restart: unless-stopped
+    profiles:
+      - pool_and_miner_apps_no_jd
+      - pool_apps
+      - pool_and_miner_apps
+
+
+  jd_server_sv2:
+    image: stratumv2/jd_server:v0.1.0
+    container_name: jd_server_sv2
+    env_file:
+      - docker_env
+    volumes:
+      - ./config/jds-config.toml.template:/app/jds-config.toml.template:ro
+    entrypoint: >
+      sh -c '
+        envsubst < /app/jds-config.toml.template > /app/jds-config.toml &&
+        exec /app/jd_server
+      '
+    ports:
+      - "34264:34264"
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.12
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    profiles:
+      - pool_apps
+      - pool_and_miner_apps
+
+  jd_client_sv2:
+    image: stratumv2/jd_client_sv2:v0.1.0
+    container_name: jd_client_sv2
+    env_file:
+      - docker_env
+    volumes:
+      - ./config/jdc-config.toml.template:/app/jdc-config.toml.template:ro
+      - "${BITCOIN_SOCKET_PATH?}:/app/node.sock"
+    entrypoint: >
+      sh -c '
+        envsubst < /app/jdc-config.toml.template> /app/jdc-config.toml &&
+        exec /app/jd_client_sv2
+      '
+    ports:
+      - "34265:34265"
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.13
+    restart: unless-stopped
+    profiles:
+      - miner_apps
+      - pool_and_miner_apps
+
+  tproxy_sv2:
+    image: stratumv2/translator_sv2:v0.1.0
+    container_name: tproxy_sv2
+    env_file:
+      - docker_env
+    volumes:
+      - ./config/translator-proxy-config.toml.template:/app/proxy-config.toml.template:ro
+    entrypoint: >
+      sh -c '
+        envsubst < /app/proxy-config.toml.template > /app/proxy-config.toml &&
+        exec /app/translator_sv2
+      '
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.14
+    ports:
+      - "34255:34255"
+    restart: unless-stopped
+    profiles:
+      - pool_and_miner_apps_no_jd
+      - tproxy
+      - miner_apps
+      - pool_and_miner_apps
+
+networks:
+  sv2_apps:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
