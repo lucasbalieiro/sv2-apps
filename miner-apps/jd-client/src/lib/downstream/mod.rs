@@ -18,6 +18,11 @@ use stratum_apps::{
         handlers_sv2::HandleCommonMessagesFromClientAsync,
         parsers_sv2::{AnyMessage, Mining},
     },
+    task_manager::TaskManager,
+    utils::{
+        protocol_message_type::{protocol_message_type, MessageType},
+        types::{DownstreamId, Message, Sv2Frame},
+    },
 };
 
 use tokio::sync::broadcast;
@@ -25,13 +30,12 @@ use tracing::{debug, error, warn};
 
 use crate::{
     error::JDCError,
+    io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
-    task_manager::TaskManager,
-    utils::{
-        protocol_message_type, spawn_io_tasks, ChannelId, DownstreamId, Message, MessageType,
-        SV2Frame, ShutdownMessage, StdFrame,
-    },
+    utils::ShutdownMessage,
 };
+
+use stratum_apps::utils::types::ChannelId;
 
 mod message_handler;
 
@@ -64,8 +68,8 @@ pub struct DownstreamData {
 pub struct DownstreamChannel {
     channel_manager_sender: Sender<(DownstreamId, Mining<'static>)>,
     channel_manager_receiver: broadcast::Sender<(DownstreamId, Mining<'static>)>,
-    downstream_sender: Sender<SV2Frame>,
-    downstream_receiver: Receiver<SV2Frame>,
+    downstream_sender: Sender<Sv2Frame>,
+    downstream_receiver: Receiver<Sv2Frame>,
 }
 
 /// Represents a downstream client connected to this node.
@@ -92,8 +96,8 @@ impl Downstream {
             downstream_id,
             tx: status_sender,
         };
-        let (inbound_tx, inbound_rx) = unbounded::<SV2Frame>();
-        let (outbound_tx, outbound_rx) = unbounded::<SV2Frame>();
+        let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
+        let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
         spawn_io_tasks(
             task_manager,
             noise_stream_reader,
@@ -236,7 +240,7 @@ impl Downstream {
         }
 
         let message = AnyMessage::Mining(message);
-        let sv2_frame: StdFrame = message.try_into()?;
+        let sv2_frame: Sv2Frame = message.try_into()?;
 
         self.downstream_channel
             .downstream_sender

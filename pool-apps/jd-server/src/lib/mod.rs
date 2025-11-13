@@ -41,7 +41,7 @@ use tracing::{error, info, warn};
 pub type Message = JdsMessages<'static>;
 
 /// SV2 frame carrying a parsed JDS message.
-pub type StdFrame = StandardSv2Frame<Message>;
+pub type Sv2Frame = StandardSv2Frame<Message>;
 
 /// SV2 frame that can be either a standard message or handshake frame.
 pub type EitherFrame = StandardEitherFrame<Message>;

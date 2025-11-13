@@ -5,7 +5,6 @@ use crate::{
         channel::ChannelState,
         data::{ChannelManagerData, ChannelMode},
     },
-    task_manager::TaskManager,
     utils::ShutdownMessage,
 };
 use async_channel::{Receiver, Sender};
@@ -17,6 +16,8 @@ use stratum_apps::{
         handlers_sv2::HandleMiningMessagesFromServerAsync,
         mining_sv2::OpenExtendedMiningChannelSuccess, parsers_sv2::Mining,
     },
+    task_manager::TaskManager,
+    utils::types::DownstreamId,
 };
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
@@ -25,9 +26,6 @@ use tracing::{debug, error, info, warn};
 /// This allows the translator to manage multiple downstream connections
 /// by allocating unique extranonce prefixes to each downstream.
 const AGGREGATED_MODE_TRANSLATOR_SEARCH_SPACE_BYTES: usize = 4;
-
-/// Type alias for SV2 mining messages with static lifetime
-pub type Sv2Message = Mining<'static>;
 
 /// Manages SV2 channels and message routing between upstream and downstream.
 ///
@@ -398,7 +396,7 @@ impl ChannelManager {
                 // Store the user identity, hashrate, and original downstream extranonce size
                 self.channel_manager_data.super_safe_lock(|c| {
                     c.pending_channels.insert(
-                        open_channel_msg.request_id,
+                        open_channel_msg.request_id as DownstreamId,
                         (user_identity, hashrate, min_extranonce_size),
                     );
                 });

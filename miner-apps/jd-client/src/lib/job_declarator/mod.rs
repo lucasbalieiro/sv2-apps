@@ -12,6 +12,11 @@ use stratum_apps::{
         noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, JobDeclaration},
     },
+    task_manager::TaskManager,
+    utils::{
+        protocol_message_type::{protocol_message_type, MessageType},
+        types::{Message, Sv2Frame},
+    },
 };
 use tokio::{
     net::TcpStream,
@@ -22,12 +27,9 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::ConfigJDCMode,
     error::JDCError,
+    io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
-    task_manager::TaskManager,
-    utils::{
-        get_setup_connection_message_jds, protocol_message_type, spawn_io_tasks, Message,
-        MessageType, SV2Frame, ShutdownMessage, StdFrame,
-    },
+    utils::{get_setup_connection_message_jds, ShutdownMessage},
 };
 
 mod message_handler;
@@ -40,8 +42,8 @@ pub struct JobDeclaratorData;
 pub struct JobDeclaratorChannel {
     channel_manager_sender: Sender<JobDeclaration<'static>>,
     channel_manager_receiver: Receiver<JobDeclaration<'static>>,
-    jds_sender: Sender<SV2Frame>,
-    jds_receiver: Receiver<SV2Frame>,
+    jds_sender: Sender<Sv2Frame>,
+    jds_receiver: Receiver<Sv2Frame>,
 }
 
 /// Manages the lifecycle and communication with a Job Declarator (JDS)
@@ -88,8 +90,8 @@ impl JobDeclarator {
                 .into_split();
 
         let status_sender = StatusSender::JobDeclarator(status_sender);
-        let (inbound_tx, inbound_rx) = unbounded::<SV2Frame>();
-        let (outbound_tx, outbound_rx) = unbounded::<SV2Frame>();
+        let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
+        let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
 
         spawn_io_tasks(
             task_manager,
@@ -203,7 +205,7 @@ impl JobDeclarator {
         info!("Sending SetupConnection to JDS at {}", self.socket_address);
 
         let setup_connection = get_setup_connection_message_jds(&self.socket_address, &self.mode);
-        let sv2_frame: StdFrame = Message::Common(setup_connection.into())
+        let sv2_frame: Sv2Frame = Message::Common(setup_connection.into())
             .try_into()
             .map_err(|e| {
                 error!(error=?e, "Failed to serialize SetupConnection message.");
@@ -258,7 +260,7 @@ impl JobDeclarator {
             Ok(msg) => {
                 debug!("Forwarding message from channel manager to JDS.");
                 let message = AnyMessage::JobDeclaration(msg);
-                let sv2_frame: StdFrame = message.try_into()?;
+                let sv2_frame: Sv2Frame = message.try_into()?;
                 self.job_declarator_channel
                     .jds_sender
                     .send(sv2_frame)

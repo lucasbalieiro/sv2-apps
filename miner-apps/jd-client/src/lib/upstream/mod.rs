@@ -23,6 +23,11 @@ use stratum_apps::{
         noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, Mining},
     },
+    task_manager::TaskManager,
+    utils::{
+        protocol_message_type::{protocol_message_type, MessageType},
+        types::{Message, Sv2Frame},
+    },
 };
 use tokio::{
     net::TcpStream,
@@ -32,12 +37,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     error::JDCError,
+    io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
-    task_manager::TaskManager,
-    utils::{
-        get_setup_connection_message, protocol_message_type, spawn_io_tasks, Message, MessageType,
-        SV2Frame, ShutdownMessage, StdFrame,
-    },
+    utils::{get_setup_connection_message, ShutdownMessage},
 };
 
 mod message_handler;
@@ -55,8 +57,8 @@ pub struct UpstreamData;
 pub struct UpstreamChannel {
     channel_manager_sender: Sender<Mining<'static>>,
     channel_manager_receiver: Receiver<Mining<'static>>,
-    upstream_sender: Sender<SV2Frame>,
-    upstream_receiver: Receiver<SV2Frame>,
+    upstream_sender: Sender<Sv2Frame>,
+    upstream_receiver: Receiver<Sv2Frame>,
 }
 
 /// Represents an upstream connection (e.g., a pool).
@@ -97,8 +99,8 @@ impl Upstream {
                 .into_split();
 
         let status_sender = StatusSender::Upstream(status_sender);
-        let (inbound_tx, inbound_rx) = unbounded::<SV2Frame>();
-        let (outbound_tx, outbound_rx) = unbounded::<SV2Frame>();
+        let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
+        let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
 
         spawn_io_tasks(
             task_manager,
@@ -135,7 +137,7 @@ impl Upstream {
         info!("Upstream: initiating SV2 handshake...");
         let setup_connection = get_setup_connection_message(min_version, max_version)?;
         debug!(?setup_connection, "Prepared `SetupConnection` message");
-        let sv2_frame: StdFrame = Message::Common(setup_connection.into()).try_into()?;
+        let sv2_frame: Sv2Frame = Message::Common(setup_connection.into()).try_into()?;
         debug!(?sv2_frame, "Encoded `SetupConnection` frame");
 
         // Send SetupConnection
@@ -160,7 +162,7 @@ impl Upstream {
             }
         };
 
-        let mut incoming: StdFrame = incoming_frame;
+        let mut incoming: Sv2Frame = incoming_frame;
         debug!(?incoming, "Decoded inbound handshake frame");
 
         let message_type = incoming
@@ -306,7 +308,7 @@ impl Upstream {
         match self.upstream_channel.channel_manager_receiver.recv().await {
             Ok(msg) => {
                 let message = AnyMessage::Mining(msg);
-                let sv2_frame: SV2Frame = message.try_into()?;
+                let sv2_frame: Sv2Frame = message.try_into()?;
                 debug!("Received message from channel manager, forwarding upstream.");
                 self.upstream_channel
                     .upstream_sender

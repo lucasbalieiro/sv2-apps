@@ -1,12 +1,15 @@
-use crate::{downstream::Downstream, error::JDCError, utils::StdFrame};
+use crate::{downstream::Downstream, error::JDCError};
 use std::convert::TryInto;
-use stratum_apps::stratum_core::{
-    common_messages_sv2::{
-        has_requires_std_job, has_work_selection, Protocol, SetupConnection, SetupConnectionError,
-        SetupConnectionSuccess,
+use stratum_apps::{
+    stratum_core::{
+        common_messages_sv2::{
+            has_requires_std_job, has_work_selection, Protocol, SetupConnection,
+            SetupConnectionError, SetupConnectionSuccess,
+        },
+        handlers_sv2::HandleCommonMessagesFromClientAsync,
+        parsers_sv2::AnyMessage,
     },
-    handlers_sv2::HandleCommonMessagesFromClientAsync,
-    parsers_sv2::AnyMessage,
+    utils::types::Sv2Frame,
 };
 use tracing::info;
 
@@ -49,7 +52,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
                     .try_into()
                     .expect("error code must be valid string"),
             };
-            let frame: StdFrame = AnyMessage::Common(response.into_static().into()).try_into()?;
+            let frame: Sv2Frame = AnyMessage::Common(response.into_static().into()).try_into()?;
             _ = self.downstream_channel.downstream_sender.send(frame).await;
 
             return Err(JDCError::Shutdown);
@@ -64,7 +67,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
                     .try_into()
                     .expect("error code must be valid string"),
             };
-            let frame: StdFrame = AnyMessage::Common(response.into_static().into())
+            let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
                 .unwrap();
             _ = self.downstream_channel.downstream_sender.send(frame).await;
@@ -80,7 +83,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             used_version: 2,
             flags: msg.flags,
         };
-        let frame: StdFrame = AnyMessage::Common(response.into_static().into()).try_into()?;
+        let frame: Sv2Frame = AnyMessage::Common(response.into_static().into()).try_into()?;
 
         _ = self.downstream_channel.downstream_sender.send(frame).await;
 

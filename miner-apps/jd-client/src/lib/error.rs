@@ -30,10 +30,9 @@ use stratum_apps::{
         noise_sv2,
         parsers_sv2::ParserError,
     },
+    utils::types::{DownstreamId, JobId, RequestId, TemplateId, VardiffKey},
 };
 use tokio::{sync::broadcast, time::error::Elapsed};
-
-use crate::utils::{DownstreamId, JobId, RequestId, TemplateId, VardiffKey};
 
 #[derive(Debug)]
 pub enum ChannelSv2Error {

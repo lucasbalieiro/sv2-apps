@@ -151,7 +151,7 @@ pub async fn connect(
 }
 
 pub type Message = MiningDeviceMessages<'static>;
-pub type StdFrame = StandardSv2Frame<Message>;
+pub type Sv2Frame = StandardSv2Frame<Message>;
 pub type EitherFrame = StandardEitherFrame<Message>;
 
 struct SetupConnectionHandler {}
@@ -198,14 +198,14 @@ impl SetupConnectionHandler {
     ) {
         let setup_connection = Self::get_setup_connection_message(address, device_id);
 
-        let sv2_frame: StdFrame = MiningDeviceMessages::Common(setup_connection.into())
+        let sv2_frame: Sv2Frame = MiningDeviceMessages::Common(setup_connection.into())
             .try_into()
             .unwrap();
         let sv2_frame = sv2_frame.into();
         sender.send(sv2_frame).await.unwrap();
         info!("Setup connection sent to {}", address);
 
-        let mut incoming: StdFrame = receiver.recv().await.unwrap().try_into().unwrap();
+        let mut incoming: Sv2Frame = receiver.recv().await.unwrap().try_into().unwrap();
         let message_type = incoming.get_header().unwrap().msg_type();
         let payload = incoming.payload();
         ParseCommonMessagesFromUpstream::handle_message_common(self_, message_type, payload)
@@ -341,7 +341,7 @@ impl Device {
         let open_channel = MiningDeviceMessages::Mining(Mining::OpenStandardMiningChannel(
             open_channel(user_id, nominal_hashrate_multiplier, handicap),
         ));
-        let frame: StdFrame = open_channel.try_into().unwrap();
+        let frame: Sv2Frame = open_channel.try_into().unwrap();
         self_.sender.send(frame.into()).await.unwrap();
         let self_mutex = std::sync::Arc::new(Mutex::new(self_));
         let cloned = self_mutex.clone();
@@ -361,7 +361,7 @@ impl Device {
         });
 
         loop {
-            let mut incoming: StdFrame = receiver.recv().await.unwrap().try_into().unwrap();
+            let mut incoming: Sv2Frame = receiver.recv().await.unwrap().try_into().unwrap();
             let message_type = incoming.get_header().unwrap().msg_type();
             let payload = incoming.payload();
             let next =
@@ -384,7 +384,7 @@ impl Device {
             };
             match next {
                 SendTo::RelayNewMessageToRemote(_, m) => {
-                    let sv2_frame: StdFrame = MiningDeviceMessages::Mining(m).try_into().unwrap();
+                    let sv2_frame: Sv2Frame = MiningDeviceMessages::Mining(m).try_into().unwrap();
                     let either_frame: EitherFrame = sv2_frame.into();
                     sender.send(either_frame).await.unwrap();
                 }
@@ -412,7 +412,7 @@ impl Device {
                 ntime,
                 version,
             }));
-        let frame: StdFrame = share.try_into().unwrap();
+        let frame: Sv2Frame = share.try_into().unwrap();
         let sender = self_mutex.safe_lock(|s| s.sender.clone()).unwrap();
         sender.send(frame.into()).await.unwrap();
     }
