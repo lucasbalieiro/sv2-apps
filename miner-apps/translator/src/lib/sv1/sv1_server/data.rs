@@ -1,14 +1,17 @@
 use crate::sv1::downstream::downstream::Downstream;
 use std::{
     collections::HashMap,
-    sync::{atomic::AtomicUsize, Arc, RwLock},
+    sync::{
+        atomic::{AtomicU32, AtomicUsize},
+        Arc, RwLock,
+    },
 };
 use stratum_apps::{
     stratum_core::{
         bitcoin::Target, channels_sv2::vardiff::classic::VardiffState, mining_sv2::SetNewPrevHash,
         sv1_api::server_to_client,
     },
-    utils::types::{ChannelId, DownstreamId, Hashrate},
+    utils::types::{ChannelId, DownstreamId, Hashrate, RequestId},
 };
 
 #[derive(Debug, Clone)]
@@ -21,9 +24,11 @@ pub struct PendingTargetUpdate {
 #[derive(Debug)]
 pub struct Sv1ServerData {
     pub downstreams: HashMap<DownstreamId, Arc<Downstream>>,
+    pub request_id_to_downstream_id: HashMap<RequestId, DownstreamId>,
     pub vardiff: HashMap<DownstreamId, Arc<RwLock<VardiffState>>>,
     pub prevhash: Option<SetNewPrevHash<'static>>,
     pub downstream_id_factory: AtomicUsize,
+    pub request_id_factory: AtomicU32,
     /// Job storage for aggregated mode - all Sv1 downstreams share the same jobs
     pub aggregated_valid_jobs: Option<Vec<server_to_client::Notify<'static>>>,
     /// Job storage for non-aggregated mode - each Sv1 downstream has its own jobs
@@ -39,9 +44,11 @@ impl Sv1ServerData {
     pub fn new(aggregate_channels: bool) -> Self {
         Self {
             downstreams: HashMap::new(),
+            request_id_to_downstream_id: HashMap::new(),
             vardiff: HashMap::new(),
             prevhash: None,
-            downstream_id_factory: AtomicUsize::new(0),
+            downstream_id_factory: AtomicUsize::new(1),
+            request_id_factory: AtomicU32::new(1),
             aggregated_valid_jobs: aggregate_channels.then(Vec::new),
             non_aggregated_valid_jobs: (!aggregate_channels).then(HashMap::new),
             pending_target_updates: Vec::new(),
