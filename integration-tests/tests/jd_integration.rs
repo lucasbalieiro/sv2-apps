@@ -202,7 +202,8 @@ async fn jds_wont_exit_upon_receiving_unexpected_txids_in_provide_missing_transa
     );
 
     let (_, jdc_addr_1) = start_jdc(&[(pool_addr, sniffer_addr)], tp_addr_2, vec![], vec![]);
-    let (_translator, tproxy_addr) = start_sv2_translator(&[jdc_addr_1], false, vec![], vec![]).await;
+    let (_translator, tproxy_addr) =
+        start_sv2_translator(&[jdc_addr_1], false, vec![], vec![]).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
 
     sniffer

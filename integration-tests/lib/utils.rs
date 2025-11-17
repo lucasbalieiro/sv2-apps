@@ -10,7 +10,7 @@ use std::{
     collections::HashSet,
     convert::TryInto,
     net::{SocketAddr, TcpListener},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use stratum_apps::{
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
@@ -20,7 +20,8 @@ use stratum_apps::{
         framing_sv2::framing::{Frame, Sv2Frame},
         noise_sv2::{Initiator, Responder},
         parsers_sv2::{
-            message_type_to_name, AnyMessage, CommonMessages, IsSv2Message,
+            message_type_to_name, parse_message_frame_with_tlvs, AnyMessage, CommonMessages,
+            IsSv2Message,
             JobDeclaration::{
                 AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
                 DeclareMiningJobError, DeclareMiningJobSuccess, ProvideMissingTransactions,
@@ -28,6 +29,7 @@ use stratum_apps::{
             },
             TemplateDistribution,
             TemplateDistribution::CoinbaseOutputConstraints,
+            Tlv,
         },
     },
 };
@@ -110,9 +112,29 @@ pub async fn recv_from_down_send_to_up(
     downstream_messages: MessagesAggregator,
     action: Vec<InterceptAction>,
     identifier: &str,
+    negotiated_extensions: Arc<Mutex<Vec<u16>>>,
 ) -> Result<(), SnifferError> {
     while let Ok(mut frame) = recv.recv().await {
-        let (msg_type, msg) = message_from_frame(&mut frame);
+        let extensions = negotiated_extensions.lock().unwrap().clone();
+        let (msg_type, msg, tlv_fields) = message_from_frame_with_tlvs(&mut frame, &extensions);
+
+        // Track extension negotiation
+        if let AnyMessage::Extensions(ref ext_msg) = msg {
+            use stratum_apps::stratum_core::parsers_sv2::{Extensions, ExtensionsNegotiation};
+            if let Extensions::ExtensionsNegotiation(
+                ExtensionsNegotiation::RequestExtensionsSuccess(ref success),
+            ) = ext_msg
+            {
+                let mut exts = negotiated_extensions.lock().unwrap();
+                *exts = success.supported_extensions.clone().into_inner();
+                tracing::info!(
+                    "🔍 Sniffer {} | Tracked negotiated extensions: {:?}",
+                    identifier,
+                    *exts
+                );
+            }
+        }
+
         let action = action.iter().find(|action| {
             action
                 .find_matching_action(msg_type, MessageDirection::ToUpstream)
@@ -138,9 +160,10 @@ pub async fn recv_from_down_send_to_up(
                         )
                         .expect("Failed to create the frame"),
                     );
-                    downstream_messages.add_message(
+                    downstream_messages.add_message_with_tlvs(
                         intercept_message.replacement_message.message_type(),
                         intercept_message.replacement_message.clone(),
+                        None,
                     );
                     send.send(intercept_frame)
                         .await
@@ -154,7 +177,7 @@ pub async fn recv_from_down_send_to_up(
                 }
             }
         } else {
-            downstream_messages.add_message(msg_type, msg.clone());
+            downstream_messages.add_message_with_tlvs(msg_type, msg.clone(), tlv_fields);
             send.send(frame)
                 .await
                 .map_err(|_| SnifferError::UpstreamClosed)?;
@@ -175,9 +198,29 @@ pub async fn recv_from_up_send_to_down(
     upstream_messages: MessagesAggregator,
     action: Vec<InterceptAction>,
     identifier: &str,
+    negotiated_extensions: std::sync::Arc<std::sync::Mutex<Vec<u16>>>,
 ) -> Result<(), SnifferError> {
     while let Ok(mut frame) = recv.recv().await {
-        let (msg_type, msg) = message_from_frame(&mut frame);
+        let extensions = negotiated_extensions.lock().unwrap().clone();
+        let (msg_type, msg, tlv_fields) = message_from_frame_with_tlvs(&mut frame, &extensions);
+
+        // Track extension negotiation
+        if let AnyMessage::Extensions(ref ext_msg) = msg {
+            use stratum_apps::stratum_core::parsers_sv2::{Extensions, ExtensionsNegotiation};
+            if let Extensions::ExtensionsNegotiation(
+                ExtensionsNegotiation::RequestExtensionsSuccess(ref success),
+            ) = ext_msg
+            {
+                let mut exts = negotiated_extensions.lock().unwrap();
+                *exts = success.supported_extensions.clone().into_inner();
+                tracing::info!(
+                    "🔍 Sniffer {} | Tracked negotiated extensions: {:?}",
+                    identifier,
+                    *exts
+                );
+            }
+        }
+
         let action = action.iter().find(|action| {
             action
                 .find_matching_action(msg_type, MessageDirection::ToDownstream)
@@ -204,9 +247,10 @@ pub async fn recv_from_up_send_to_down(
                         )
                         .expect("Failed to create the frame"),
                     );
-                    upstream_messages.add_message(
+                    upstream_messages.add_message_with_tlvs(
                         intercept_message.replacement_message.message_type(),
                         intercept_message.replacement_message.clone(),
+                        None,
                     );
                     send.send(intercept_frame)
                         .await
@@ -220,7 +264,7 @@ pub async fn recv_from_up_send_to_down(
                 }
             }
         } else {
-            upstream_messages.add_message(msg_type, msg.clone());
+            upstream_messages.add_message_with_tlvs(msg_type, msg.clone(), tlv_fields);
             send.send(frame)
                 .await
                 .map_err(|_| SnifferError::DownstreamClosed)?;
@@ -236,16 +280,40 @@ pub async fn recv_from_up_send_to_down(
 }
 
 pub fn message_from_frame(frame: &mut MessageFrame) -> (MsgType, AnyMessage<'static>) {
+    let (msg_type, msg, _) = message_from_frame_with_tlvs(frame, &[]);
+    (msg_type, msg)
+}
+
+pub fn message_from_frame_with_tlvs(
+    frame: &mut MessageFrame,
+    negotiated_extensions: &[u16],
+) -> (MsgType, AnyMessage<'static>, Option<Vec<Tlv>>) {
     match frame {
         Frame::Sv2(frame) => {
             if let Some(header) = frame.get_header() {
+                let payload = frame.payload();
+
+                // Try to parse with TLV support if extensions are negotiated
+                if !negotiated_extensions.is_empty() {
+                    match parse_message_frame_with_tlvs(header, payload, negotiated_extensions) {
+                        Ok((message, tlv_fields)) => {
+                            let message = into_static(message);
+                            return (header.msg_type(), message, tlv_fields);
+                        }
+                        Err(e) => {
+                            println!("Failed to parse frame with TLVs: {e:?}, falling back to standard parsing");
+                        }
+                    }
+                }
+
+                // Fallback to standard parsing without TLV support
                 let mut payload = frame.payload().to_vec();
                 let message: Result<AnyMessage<'_>, _> =
                     (header, payload.as_mut_slice()).try_into();
                 match message {
                     Ok(message) => {
                         let message = into_static(message);
-                        (header.msg_type(), message)
+                        (header.msg_type(), message, None)
                     }
                     _ => {
                         println!("Received frame with invalid payload or message type: {frame:?}");

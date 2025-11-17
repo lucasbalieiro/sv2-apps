@@ -73,8 +73,8 @@ async fn translate_sv1_to_sv2_successfully() {
 async fn test_translator_fallback_on_setup_connection_error() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool_1, pool_addr_1) = start_pool(Some(tp_addr)).await;
-    let (_pool_2, pool_addr_2) = start_pool(Some(tp_addr)).await;
+    let (_pool_1, pool_addr_1) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool_2, pool_addr_2) = start_pool(Some(tp_addr), vec![], vec![]).await;
 
     let random_error_code = "Something went wrong".to_string();
 
@@ -106,6 +106,8 @@ async fn test_translator_fallback_on_setup_connection_error() {
             pool_translator_sniffer_addr_2,
         ],
         false,
+        vec![],
+        vec![],
     )
     .await;
 
@@ -152,8 +154,8 @@ async fn test_translator_fallback_on_setup_connection_error() {
 async fn test_translator_fallback_on_open_mining_message_error() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool_1, pool_addr_1) = start_pool(Some(tp_addr)).await;
-    let (_pool_2, pool_addr_2) = start_pool(Some(tp_addr)).await;
+    let (_pool_1, pool_addr_1) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool_2, pool_addr_2) = start_pool(Some(tp_addr), vec![], vec![]).await;
 
     let random_error_code = "Something went wrong".to_string();
 
@@ -185,6 +187,8 @@ async fn test_translator_fallback_on_open_mining_message_error() {
             pool_translator_sniffer_addr_2,
         ],
         false,
+        vec![],
+        vec![],
     )
     .await;
 

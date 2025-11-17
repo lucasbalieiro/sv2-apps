@@ -1,11 +1,15 @@
 use std::{collections::VecDeque, sync::Arc};
-use stratum_apps::{custom_mutex::Mutex, stratum_core::parsers_sv2::AnyMessage};
+use stratum_apps::{
+    custom_mutex::Mutex,
+    stratum_core::parsers_sv2::{AnyMessage, Tlv},
+};
 
 use crate::types::MsgType;
 
+#[allow(clippy::type_complexity)]
 #[derive(Debug, Clone)]
 pub struct MessagesAggregator {
-    messages: Arc<Mutex<VecDeque<(MsgType, AnyMessage<'static>)>>>,
+    messages: Arc<Mutex<VecDeque<(MsgType, AnyMessage<'static>, Option<Vec<Tlv>>)>>>,
 }
 
 impl Default for MessagesAggregator {
@@ -24,8 +28,18 @@ impl MessagesAggregator {
 
     /// Adds a message to the end of the queue.
     pub fn add_message(&self, msg_type: MsgType, message: AnyMessage<'static>) {
+        self.add_message_with_tlvs(msg_type, message, None);
+    }
+
+    /// Adds a message with TLV fields to the end of the queue.
+    pub fn add_message_with_tlvs(
+        &self,
+        msg_type: MsgType,
+        message: AnyMessage<'static>,
+        tlv_fields: Option<Vec<Tlv>>,
+    ) {
         self.messages
-            .safe_lock(|messages| messages.push_back((msg_type, message)))
+            .safe_lock(|messages| messages.push_back((msg_type, message, tlv_fields)))
             .unwrap();
     }
 
@@ -41,7 +55,7 @@ impl MessagesAggregator {
         let has_message: bool = self
             .messages
             .safe_lock(|messages| {
-                for (t, _) in messages.iter() {
+                for (t, _, _) in messages.iter() {
                     if *t == message_type {
                         return true; // Exit early with `true`
                     }
@@ -58,7 +72,7 @@ impl MessagesAggregator {
         self.messages
             .safe_lock(|messages| {
                 let mut cloned_messages = messages.clone();
-                for (pos, (t, _)) in cloned_messages.iter().enumerate() {
+                for (pos, (t, _, _)) in cloned_messages.iter().enumerate() {
                     if *t == message_type {
                         let drained = cloned_messages.drain(pos + 1..).collect();
                         *messages = drained;
@@ -75,13 +89,24 @@ impl MessagesAggregator {
     ///
     /// The returned message is removed from the queue.
     pub fn next_message(&self) -> Option<(MsgType, AnyMessage<'static>)> {
+        self.next_message_with_tlvs()
+            .map(|(msg_type, msg, _)| (msg_type, msg))
+    }
+
+    /// The aggregator queues messages in FIFO order, so this function returns the oldest message
+    /// with its TLV fields in the queue.
+    ///
+    /// The returned message is removed from the queue.
+    pub fn next_message_with_tlvs(
+        &self,
+    ) -> Option<(MsgType, AnyMessage<'static>, Option<Vec<Tlv>>)> {
         let is_state = self
             .messages
             .safe_lock(|messages| {
                 let mut cloned = messages.clone();
-                if let Some((msg_type, msg)) = cloned.pop_front() {
+                if let Some((msg_type, msg, tlv_fields)) = cloned.pop_front() {
                     *messages = cloned;
-                    Some((msg_type, msg))
+                    Some((msg_type, msg, tlv_fields))
                 } else {
                     None
                 }
