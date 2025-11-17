@@ -106,19 +106,40 @@ impl BitcoinCoreSv2 {
             return Ok(());
         }
 
-        let response_message = {
+        let template_data = {
             let template_data_guard = self.template_data.read().map_err(|e| {
                 tracing::error!("Failed to acquire read lock on template_data: {:?}", e);
                 BitcoinCoreSv2Error::FailedToSendRequestTransactionDataResponseMessage
             })?;
-            match template_data_guard.get(&request_transaction_data.template_id) {
+
+            // clone so we can drop the read lock and avoid holding it across the await
+            template_data_guard
+                .get(&request_transaction_data.template_id)
+                .cloned()
+        };
+
+        let response_message = {
+            match template_data {
                 Some(template_data) => {
                     tracing::debug!(
                         "Template {} found, sending success response",
                         request_transaction_data.template_id
                     );
+
+                    let request_transaction_data_success = match template_data
+                        .get_request_transaction_data_success_message(
+                            self.thread_ipc_client.clone(),
+                        )
+                        .await
+                    {
+                        Ok(request_transaction_data_success) => request_transaction_data_success,
+                        Err(e) => {
+                            tracing::error!("Failed to fetch template tx data: {:?}", e);
+                            return Err(BitcoinCoreSv2Error::FailedToFetchTemplateTxData);
+                        }
+                    };
                     TemplateDistribution::RequestTransactionDataSuccess(
-                        template_data.get_request_transaction_data_success_message(),
+                        request_transaction_data_success,
                     )
                 }
                 None => {

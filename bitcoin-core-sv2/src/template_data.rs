@@ -1,4 +1,4 @@
-use crate::{error::TemplateDataError, merkle_path::MerkleTree};
+use crate::error::TemplateDataError;
 
 use bitcoin_capnp_types::{
     mining_capnp::block_template::Client as BlockTemplateIpcClient,
@@ -9,7 +9,7 @@ use stratum_core::bitcoin::{
     amount::{Amount, CheckedSum},
     block::{Block, Header, Version},
     consensus::{deserialize, serialize},
-    hashes::{Hash, sha256d},
+    hashes::{Hash, HashEngine, sha256d},
 };
 
 use stratum_core::{
@@ -22,7 +22,9 @@ use stratum_core::{
 #[derive(Clone)]
 pub struct TemplateData {
     template_id: u64,
-    block: Block,
+    header: Header,
+    coinbase_tx: Transaction,
+    merkle_path: Vec<Vec<u8>>,
     template_ipc_client: BlockTemplateIpcClient,
 }
 
@@ -30,12 +32,16 @@ pub struct TemplateData {
 impl TemplateData {
     pub fn new(
         template_id: u64,
-        block: Block,
+        header: Header,
+        coinbase_tx: Transaction,
+        merkle_path: Vec<Vec<u8>>,
         template_ipc_client: BlockTemplateIpcClient,
     ) -> Self {
         Self {
             template_id,
-            block,
+            header,
+            coinbase_tx,
+            merkle_path,
             template_ipc_client,
         }
     }
@@ -77,7 +83,7 @@ impl TemplateData {
             coinbase_tx_outputs_count: self.get_empty_coinbase_outputs().len() as u32,
             coinbase_tx_outputs: self.get_serialized_empty_coinbase_outputs()?,
             coinbase_tx_locktime: self.get_coinbase_tx_lock_time(),
-            merkle_path: self.get_merkle_path(),
+            merkle_path: self.get_merkle_path()?,
         };
         Ok(new_template.into_static())
     }
@@ -95,21 +101,22 @@ impl TemplateData {
         set_new_prev_hash.into_static()
     }
 
-    pub fn get_request_transaction_data_success_message(
+    pub async fn get_request_transaction_data_success_message(
         &self,
-    ) -> RequestTransactionDataSuccess<'static> {
+        thread_ipc_client: ThreadIpcClient,
+    ) -> Result<RequestTransactionDataSuccess<'static>, TemplateDataError> {
         let request_transaction_data_success = RequestTransactionDataSuccess {
             template_id: self.template_id,
-            transaction_list: self.get_tx_data(),
+            transaction_list: self.get_tx_data(thread_ipc_client).await?,
             excess_data: vec![]
                 .try_into()
                 .expect("empty vec should always be valid for B064K"),
         };
-        request_transaction_data_success.into_static()
+        Ok(request_transaction_data_success.into_static())
     }
 
     pub fn get_prev_hash(&self) -> U256<'static> {
-        self.block.header.prev_blockhash.to_byte_array().into()
+        self.header.prev_blockhash.to_byte_array().into()
     }
 
     pub async fn submit_solution(
@@ -124,20 +131,30 @@ impl TemplateData {
             TemplateDataError::InvalidCoinbaseTx(e)
         })?;
 
+        // Compute merkle root from coinbase transaction and merkle path
+        let coinbase_txid = coinbase_tx.compute_txid();
+        let mut current_hash = *coinbase_txid.as_byte_array();
+
+        // Combine with each sibling hash in the merkle path
+        for sibling_hash_bytes in &self.merkle_path {
+            if sibling_hash_bytes.len() != 32 {
+                return Err(TemplateDataError::FailedToConvertMerklePathHashToU256);
+            }
+
+            // Combine current hash with sibling hash and double SHA256
+            let mut hasher = sha256d::Hash::engine();
+            HashEngine::input(&mut hasher, &current_hash);
+            HashEngine::input(&mut hasher, sibling_hash_bytes);
+            current_hash = *sha256d::Hash::from_engine(hasher).as_byte_array();
+        }
+
         let solution_header = Header {
             version: Version::from_consensus(submit_solution.version as i32),
-            prev_blockhash: self.block.header.prev_blockhash,
-            merkle_root: {
-                let mut tmp_block = self.block.clone();
-                // replace dummy coinbase tx with the actual coinbase tx from the solution
-                tmp_block.txdata[0] = coinbase_tx;
-                tmp_block
-                    .compute_merkle_root()
-                    .ok_or(TemplateDataError::InvalidMerkleRoot)?
-            },
+            prev_blockhash: self.header.prev_blockhash,
+            merkle_root: sha256d::Hash::from_byte_array(current_hash).into(),
             time: submit_solution.header_timestamp,
             nonce: submit_solution.header_nonce,
-            bits: self.block.header.bits,
+            bits: self.header.bits,
         };
 
         solution_header
@@ -172,22 +189,21 @@ impl TemplateData {
 // impl block for private methods
 impl TemplateData {
     fn get_nbits(&self) -> u32 {
-        self.block.header.bits.to_consensus()
+        self.header.bits.to_consensus()
     }
 
     fn get_target(&self) -> U256<'_> {
-        let target = Target::from(self.block.header.bits);
+        let target = Target::from(self.header.bits);
         let target_bytes: [u8; 32] = target.to_le_bytes();
         U256::from(target_bytes)
     }
 
     fn get_ntime(&self) -> u32 {
-        self.block.header.time
+        self.header.time
     }
 
     fn get_version(&self) -> Result<u32, TemplateDataError> {
-        self.block
-            .header
+        self.header
             .version
             .to_consensus()
             .try_into()
@@ -195,7 +211,7 @@ impl TemplateData {
     }
 
     fn get_coinbase_tx_version(&self) -> Result<u32, TemplateDataError> {
-        self.block.txdata[0]
+        self.coinbase_tx
             .version
             .0
             .try_into()
@@ -203,7 +219,7 @@ impl TemplateData {
     }
 
     fn get_coinbase_script_sig(&self) -> Result<B0255<'_>, TemplateDataError> {
-        let coinbase_script_sig: B0255 = self.block.txdata[0].input[0]
+        let coinbase_script_sig: B0255 = self.coinbase_tx.input[0]
             .script_sig
             .to_bytes()
             .try_into()
@@ -212,11 +228,11 @@ impl TemplateData {
     }
 
     fn get_coinbase_input_sequence(&self) -> u32 {
-        self.block.txdata[0].input[0].sequence.to_consensus_u32()
+        self.coinbase_tx.input[0].sequence.to_consensus_u32()
     }
 
     fn get_empty_coinbase_outputs(&self) -> Vec<TxOut> {
-        self.block.txdata[0]
+        self.coinbase_tx
             .output
             .iter()
             .filter(|output| output.value == Amount::from_sat(0))
@@ -237,23 +253,45 @@ impl TemplateData {
     }
 
     fn get_coinbase_tx_value_remaining(&self) -> Result<u64, TemplateDataError> {
-        let value_remaining = self.block.txdata[0]
+        Ok(self
+            .coinbase_tx
             .output
             .iter()
             .map(|output| output.value)
             .checked_sum()
             .ok_or(TemplateDataError::FailedToSumCoinbaseOutputs)?
-            .to_sat();
-        Ok(value_remaining)
+            .to_sat())
     }
 
     fn get_coinbase_tx_lock_time(&self) -> u32 {
-        self.block.txdata[0].lock_time.to_consensus_u32()
+        self.coinbase_tx.lock_time.to_consensus_u32()
     }
 
-    fn get_tx_data(&self) -> Seq064K<'_, B016M<'static>> {
-        let tx_data: Vec<B016M<'static>> = self
-            .block
+    async fn get_tx_data(
+        &self,
+        thread_ipc_client: ThreadIpcClient,
+    ) -> Result<Seq064K<'_, B016M<'static>>, TemplateDataError> {
+        let mut template_block_request = self.template_ipc_client.get_block_request();
+        template_block_request
+            .get()
+            .get_context()?
+            .set_thread(thread_ipc_client.clone());
+
+        let template_block_response = template_block_request.send().promise.await?;
+        let template_block_bytes = template_block_response.get()?.get_result()?;
+
+        // Deserialize the complete block template from Bitcoin Core's serialization format
+        tracing::debug!(
+            "Deserializing block template ({} bytes)",
+            template_block_bytes.len()
+        );
+        let block: Block = deserialize(template_block_bytes)?;
+        tracing::debug!(
+            "Block deserialized - prev_hash from header: {:?}",
+            block.header.prev_blockhash
+        );
+
+        let tx_data: Vec<B016M<'static>> = block
             .txdata
             .iter()
             .map(|tx| {
@@ -262,39 +300,21 @@ impl TemplateData {
                     .expect("tx data should always be valid for B016M")
             })
             .collect();
-        Seq064K::new(tx_data).expect("tx data should always be valid for Seq064K")
+        Ok(Seq064K::new(tx_data).expect("tx data should always be valid for Seq064K"))
     }
 
-    fn get_merkle_path(&self) -> Seq0255<'_, U256<'_>> {
-        let tx_hashes: Vec<sha256d::Hash> = self
-            .block
-            .txdata
+    fn get_merkle_path(&self) -> Result<Seq0255<'_, U256<'_>>, TemplateDataError> {
+        // Convert each Vec<u8> in the merkle path to U256
+        let merkle_path_u256: Vec<U256<'_>> = self
+            .merkle_path
             .iter()
-            .map(|tx| tx.compute_txid().to_raw_hash())
-            .collect();
-
-        if tx_hashes.len() == 1 {
-            // If there's only the coinbase transaction, the path is empty
-            return Seq0255::new(Vec::new())
-                .expect("Empty vector should always be valid for Seq0255");
-        }
-
-        // Build the merkle tree
-        let tree = MerkleTree::build(tx_hashes);
-
-        // Extract the path from coinbase (index 0) to root
-        let path_hashes = tree.extract_coinbase_path();
-
-        // Convert to U256 format
-        let merkle_path: Vec<U256<'_>> = path_hashes
-            .into_iter()
-            .map(|hash| {
-                let hash_bytes: [u8; 32] = *hash.as_byte_array();
-                U256::try_from(hash_bytes.to_vec())
-                    .expect("32-byte hash should always be valid for U256")
+            .map(|hash_bytes| {
+                // Convert Vec<u8> to U256
+                U256::try_from(hash_bytes.clone())
+                    .map_err(|_| TemplateDataError::FailedToConvertMerklePathHashToU256)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Seq0255::new(merkle_path).expect("Merkle path should always be valid for Seq0255")
+        Seq0255::new(merkle_path_u256).map_err(|_| TemplateDataError::FailedToCreateMerklePathSeq)
     }
 }

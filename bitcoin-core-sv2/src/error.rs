@@ -16,6 +16,7 @@ pub enum BitcoinCoreSv2Error {
     TemplateIpcClientNotFound,
     FailedToSendNewTemplateMessage,
     FailedToSendSetNewPrevHashMessage,
+    FailedToFetchTemplateTxData,
     FailedToSendRequestTransactionDataResponseMessage,
     FailedToRecvTemplateDistributionMessage,
     FailedToSendTemplateDistributionMessage,
@@ -46,6 +47,8 @@ pub enum TemplateDataError {
     CapnpError(capnp::Error),
     FailedIpcSubmitSolution,
     FailedToSerializeEmptyCoinbaseOutputs,
+    FailedToConvertMerklePathHashToU256,
+    FailedToCreateMerklePathSeq,
 }
 
 impl From<ConsensusEncodeError> for TemplateDataError {
@@ -84,6 +87,12 @@ impl std::fmt::Display for TemplateDataError {
             TemplateDataError::CapnpError(e) => write!(f, "Cap'n Proto error: {}", e),
             TemplateDataError::FailedIpcSubmitSolution => {
                 write!(f, "Failed to submit solution via IPC")
+            }
+            TemplateDataError::FailedToConvertMerklePathHashToU256 => {
+                write!(f, "Failed to convert merkle path hash to U256")
+            }
+            TemplateDataError::FailedToCreateMerklePathSeq => {
+                write!(f, "Failed to create merkle path sequence")
             }
         }
     }

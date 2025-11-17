@@ -96,19 +96,18 @@ use std::{
 };
 use stratum_core::{
     binary_sv2::U256,
-    bitcoin::{block::Block, consensus::deserialize},
+    bitcoin::{Transaction, block::Header, consensus::deserialize},
     parsers_sv2::TemplateDistribution,
 };
 
 use std::sync::RwLock;
-use tokio::{net::UnixStream, sync::Mutex};
+use tokio::net::UnixStream;
 use tokio_util::compat::*;
 pub use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 pub mod error;
 mod handlers;
-mod merkle_path;
 mod monitors;
 mod template_data;
 
@@ -156,9 +155,6 @@ pub struct BitcoinCoreSv2 {
     // todo: remove this once https://github.com/bitcoin/bitcoin/issues/33575 is implemented
     // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
     coinbase_output_constraints_counter: Rc<AtomicU32>,
-    // todo: remove this once https://github.com/bitcoin/bitcoin/issues/33575 is implemented
-    // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-    template_lock: Rc<Mutex<()>>,
     template_data: Rc<RwLock<HashMap<u64, TemplateData>>>,
     stale_template_ids: Rc<RwLock<HashSet<u64>>>,
     template_id_factory: Rc<AtomicU64>,
@@ -238,7 +234,6 @@ impl BitcoinCoreSv2 {
             wait_next_request_counter: Rc::new(AtomicU8::new(0)),
             coinbase_output_constraints_counter: Rc::new(AtomicU32::new(0)),
             template_id_factory: Rc::new(AtomicU64::new(0)),
-            template_lock: Rc::new(Mutex::new(())),
             current_template_ipc_client: Rc::new(RefCell::new(None)),
             current_prev_hash: Rc::new(RefCell::new(None)),
             template_data: Rc::new(RwLock::new(HashMap::new())),
@@ -471,10 +466,6 @@ impl BitcoinCoreSv2 {
     }
 
     async fn fetch_template_data(&self) -> Result<TemplateData, BitcoinCoreSv2Error> {
-        // todo: remove this once https://github.com/bitcoin/bitcoin/issues/33575 is implemented
-        // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-        let template_lock_guard = self.template_lock.lock().await;
-
         tracing::debug!("Fetching template data over IPC");
         let template_id = self.template_id_factory.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(
@@ -493,13 +484,13 @@ impl BitcoinCoreSv2 {
             }
         };
 
-        let mut template_block_request = template_ipc_client.get_block_request();
-        template_block_request
+        let mut template_header_request = template_ipc_client.get_block_header_request();
+        template_header_request
             .get()
             .get_context()?
             .set_thread(self.thread_ipc_client.clone());
 
-        let template_block_bytes = template_block_request
+        let template_header_bytes = template_header_request
             .send()
             .promise
             .await?
@@ -507,24 +498,64 @@ impl BitcoinCoreSv2 {
             .get_result()?
             .to_vec();
 
-        // Deserialize the complete block template from Bitcoin Core's serialization format
+        // Deserialize the template header from Bitcoin Core's serialization format
         tracing::debug!(
-            "Deserializing block template ({} bytes)",
-            template_block_bytes.len()
+            "Deserializing template header ({} bytes)",
+            template_header_bytes.len()
         );
-        let block: Block = deserialize(&template_block_bytes)?;
+        let header: Header = deserialize(&template_header_bytes)?;
         tracing::debug!(
-            "Block deserialized - prev_hash from header: {:?}",
-            block.header.prev_blockhash
+            "Template header deserialized - prev_hash: {:?}",
+            header.prev_blockhash
         );
+
+        let mut coinbase_tx_request = template_ipc_client.get_coinbase_tx_request();
+        coinbase_tx_request
+            .get()
+            .get_context()?
+            .set_thread(self.thread_ipc_client.clone());
+
+        let coinbase_tx_bytes = coinbase_tx_request
+            .send()
+            .promise
+            .await?
+            .get()?
+            .get_result()?
+            .to_vec();
+
+        // Deserialize the coinbase tx from Bitcoin Core's serialization format
+        tracing::debug!(
+            "Deserializing coinbase tx ({} bytes)",
+            coinbase_tx_bytes.len()
+        );
+        let coinbase_tx: Transaction = deserialize(&coinbase_tx_bytes)?;
+        tracing::debug!("Coinbase tx deserialized: {:?}", coinbase_tx);
+
+        let mut merkle_path_request = template_ipc_client.get_coinbase_merkle_path_request();
+        merkle_path_request
+            .get()
+            .get_context()?
+            .set_thread(self.thread_ipc_client.clone());
+
+        let merkle_path: Vec<Vec<u8>> = merkle_path_request
+            .send()
+            .promise
+            .await?
+            .get()?
+            .get_result()?
+            .iter()
+            .map(|x| x.map(|slice| slice.to_vec()))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Create the template data structure
-        let template_data = TemplateData::new(template_id, block, template_ipc_client);
+        let template_data = TemplateData::new(
+            template_id,
+            header,
+            coinbase_tx,
+            merkle_path,
+            template_ipc_client,
+        );
         tracing::debug!("TemplateData created successfully");
-
-        // todo: remove this once https://github.com/bitcoin/bitcoin/issues/33575 is implemented
-        // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-        drop(template_lock_guard);
 
         Ok(template_data)
     }
