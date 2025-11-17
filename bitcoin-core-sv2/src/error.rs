@@ -38,7 +38,8 @@ impl From<consensus::encode::Error> for BitcoinCoreSv2Error {
 #[derive(Debug)]
 pub enum TemplateDataError {
     InvalidCoinbaseTx(ConsensusEncodeError),
-    InvalidSolution(ValidationError),
+    InvalidSolution,
+    InvalidSolutionPoW(ValidationError),
     InvalidMerkleRoot,
     InvalidBlockVersion,
     InvalidCoinbaseTxVersion,
@@ -69,7 +70,8 @@ impl std::fmt::Display for TemplateDataError {
             TemplateDataError::InvalidCoinbaseTx(e) => {
                 write!(f, "Invalid coinbase transaction: {}", e)
             }
-            TemplateDataError::InvalidSolution(e) => write!(f, "Invalid solution: {}", e),
+            TemplateDataError::InvalidSolution => write!(f, "Invalid solution"),
+            TemplateDataError::InvalidSolutionPoW(e) => write!(f, "Invalid solution: {}", e),
             TemplateDataError::InvalidMerkleRoot => write!(f, "Invalid merkle root"),
             TemplateDataError::InvalidBlockVersion => write!(f, "Invalid block version"),
             TemplateDataError::InvalidCoinbaseTxVersion => {

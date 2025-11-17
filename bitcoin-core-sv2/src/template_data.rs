@@ -124,15 +124,38 @@ impl TemplateData {
         submit_solution: SubmitSolution<'static>,
         thread_ipc_client: ThreadIpcClient,
     ) -> Result<(), TemplateDataError> {
-        let coinbase_tx_bytes: Vec<u8> = submit_solution.coinbase_tx.to_vec();
+        let solution_coinbase_tx_bytes: Vec<u8> = submit_solution.coinbase_tx.to_vec();
 
-        let coinbase_tx: Transaction = deserialize(&coinbase_tx_bytes).map_err(|e| {
-            tracing::error!("SubmitSolution.coinbase_tx is invalid: {}", e);
-            TemplateDataError::InvalidCoinbaseTx(e)
-        })?;
+        let solution_coinbase_tx: Transaction =
+            deserialize(&solution_coinbase_tx_bytes).map_err(|e| {
+                tracing::error!("SubmitSolution.coinbase_tx is invalid: {}", e);
+                TemplateDataError::InvalidCoinbaseTx(e)
+            })?;
+
+        // validate that the solution coinbase tx is congruent with the original coinbase tx
+        if solution_coinbase_tx.version != self.coinbase_tx.version {
+            return Err(TemplateDataError::InvalidCoinbaseTxVersion);
+        }
+        if solution_coinbase_tx.lock_time != self.coinbase_tx.lock_time {
+            return Err(TemplateDataError::InvalidSolution);
+        }
+        if solution_coinbase_tx.input.len() != 1 {
+            return Err(TemplateDataError::InvalidSolution);
+        }
+        if solution_coinbase_tx.input[0].sequence != self.coinbase_tx.input[0].sequence {
+            return Err(TemplateDataError::InvalidSolution);
+        }
+        if solution_coinbase_tx.input[0].witness != self.coinbase_tx.input[0].witness {
+            return Err(TemplateDataError::InvalidSolution);
+        }
+        if solution_coinbase_tx.input[0].previous_output
+            != self.coinbase_tx.input[0].previous_output
+        {
+            return Err(TemplateDataError::InvalidSolution);
+        }
 
         // Compute merkle root from coinbase transaction and merkle path
-        let coinbase_txid = coinbase_tx.compute_txid();
+        let coinbase_txid = solution_coinbase_tx.compute_txid();
         let mut current_hash = *coinbase_txid.as_byte_array();
 
         // Combine with each sibling hash in the merkle path
@@ -161,7 +184,7 @@ impl TemplateData {
             .validate_pow(solution_header.target())
             .map_err(|e| {
                 tracing::error!("SubmitSolution solution header is invalid: {}", e);
-                TemplateDataError::InvalidSolution(e)
+                TemplateDataError::InvalidSolutionPoW(e)
             })?;
 
         let mut submit_solution_request = self.template_ipc_client.submit_solution_request();
@@ -170,7 +193,7 @@ impl TemplateData {
         submit_solution_request_params.set_version(submit_solution.version);
         submit_solution_request_params.set_timestamp(submit_solution.header_timestamp);
         submit_solution_request_params.set_nonce(submit_solution.header_nonce);
-        submit_solution_request_params.set_coinbase(&coinbase_tx_bytes);
+        submit_solution_request_params.set_coinbase(&solution_coinbase_tx_bytes);
 
         submit_solution_request_params
             .get_context()?
