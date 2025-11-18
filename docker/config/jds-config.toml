@@ -21,7 +21,7 @@ coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
 listen_jd_address = "0.0.0.0:34264"
 # RPC config for mempool (it can be also the same TP if correctly configured)
 core_rpc_url =  "http://host.docker.internal"
-core_rpc_port = 48332 # you have to match this port with the network you are running
+core_rpc_port = 38332 # you have to match this port with the network you are running
 core_rpc_user =  "username"
 core_rpc_pass =  "password"
 # Time interval used for JDS mempool update 

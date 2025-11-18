@@ -1,7 +1,27 @@
 services:
-    # Pool SV2 Service
+
+  # SV2 Template Provider
+  sv2_tp:
+    build:
+      dockerfile: sv2-tp.Dockerfile
+    container_name: sv2_tp
+    volumes:
+      # - "/Users/lucasbalieiro/Library/Application Support/Bitcoin/:/app/bitcoin"
+      - "${BITCOIN_SOCKET_PATH?}:/app/bitcoin/signet/node.sock"
+    ports:
+      - "8442:8442"
+    networks:
+      sv2_apps:
+        ipv4_address: 172.28.0.10
+    restart: unless-stopped
+    profiles:
+      - sv2_tp
+      - pool_apps
+      - all
+
+  # Pool SV2 Service
   pool_sv2:
-    image: stratumv2/pool_sv2:v0.1.0
+    image: luskabalieiro/pool_sv2:v0.1.0
     container_name: pool_sv2
     volumes:
       - ./config/pool-config.toml:/app/pool-config.toml:ro
@@ -18,7 +38,7 @@ services:
 
   # JD Server SV2 Service
   jds_sv2:
-    image: stratumv2/jd_server:v0.1.0
+    image: luskabalieiro/jd_server:v0.1.0
     container_name: jd_server_sv2
     volumes:
       - ./config/jds-config.toml:/app/jds-config.toml:ro
@@ -31,12 +51,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     profiles:
-      - pool_apps
       - all
 
   # JD Client SV2 Service
   jd_client_sv2:
-    image: stratumv2/jd_client_sv2:v0.1.0
+    image: luskabalieiro/jd_client_sv2:v0.1.0
     container_name: jd_client_sv2
     volumes:
       - ./config/jdc-config.toml:/app/jdc-config.toml:ro
@@ -53,7 +72,7 @@ services:
 
   # Translator Proxy SV2 Service
   tproxy_sv2:
-    image: stratumv2/translator_sv2:v0.1.0
+    image: luskabalieiro/translator_sv2:v0.1.0
     container_name: tproxy_sv2
     volumes:
       - ./config/proxy-config.toml:/app/proxy-config.toml:ro

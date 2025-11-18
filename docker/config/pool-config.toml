@@ -27,7 +27,6 @@ shares_per_minute = 6.0
 # How many shares do we want to acknowledge in a batch
 share_batch_size = 10
 
-# Bitcoin Core IPC config
-[template_provider_type.BitcoinCoreIpc]
-unix_socket_path = "/app/node.sock"
-fee_threshold = 100
+# Local Sv2 Template Provider config
+[template_provider_type.Sv2Tp]
+address = "172.28.0.10:8442"
