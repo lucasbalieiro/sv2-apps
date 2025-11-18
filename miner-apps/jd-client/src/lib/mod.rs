@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, thread::JoinHandle, time::Duration};
 
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::CancellationToken;
@@ -12,7 +12,7 @@ use stratum_apps::{
     tp_type::TemplateProviderType,
 };
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::ChannelManager,
@@ -113,6 +113,7 @@ impl JobDeclaratorClient {
         .unwrap();
 
         let channel_manager_clone = channel_manager.clone();
+        let mut bitcoin_core_sv2_join_handle: Option<JoinHandle<()>> = None;
 
         match self.config.template_provider_type().clone() {
             TemplateProviderType::Sv2Tp {
@@ -164,15 +165,17 @@ impl JobDeclaratorClient {
                     cancellation_token: CancellationToken::new(),
                 };
 
-                connect_to_bitcoin_core(
-                    bitcoin_core_config,
-                    incoming_tdp_sender,
-                    notify_shutdown.clone(),
-                    task_manager.clone(),
-                    status_sender.clone(),
-                    miner_coinbase_outputs,
-                )
-                .await;
+                bitcoin_core_sv2_join_handle = Some(
+                    connect_to_bitcoin_core(
+                        bitcoin_core_config,
+                        incoming_tdp_sender,
+                        notify_shutdown.clone(),
+                        task_manager.clone(),
+                        status_sender.clone(),
+                        miner_coinbase_outputs,
+                    )
+                    .await,
+                );
             }
         }
 
@@ -371,6 +374,14 @@ impl JobDeclaratorClient {
                         }
                     }
                 }
+            }
+        }
+
+        if let Some(bitcoin_core_sv2_join_handle) = bitcoin_core_sv2_join_handle {
+            info!("Waiting for BitcoinCoreSv2 dedicated thread to shutdown...");
+            match bitcoin_core_sv2_join_handle.join() {
+                Ok(_) => info!("BitcoinCoreSv2 dedicated thread shutdown complete."),
+                Err(e) => error!("BitcoinCoreSv2 dedicated thread error: {e:?}"),
             }
         }
 

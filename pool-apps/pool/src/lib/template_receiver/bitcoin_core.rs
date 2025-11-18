@@ -5,7 +5,7 @@ use crate::{
 };
 use async_channel::{Receiver, Sender};
 use bitcoin_core_sv2::{BitcoinCoreSv2, CancellationToken};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, thread::JoinHandle};
 use stratum_apps::{
     stratum_core::{
         bitcoin::{
@@ -36,7 +36,7 @@ pub async fn connect_to_bitcoin_core(
     task_manager: Arc<TaskManager>,
     status_sender: Sender<Status>,
     coinbase_outputs: Vec<TxOut>,
-) {
+) -> JoinHandle<()> {
     let mut shutdown_rx = notify_shutdown.subscribe();
     let cancellation_token_clone = bitcoin_core_config.cancellation_token.clone();
     let status_sender_clone = status_sender.clone();
@@ -71,7 +71,7 @@ pub async fn connect_to_bitcoin_core(
     // spawn a dedicated thread to run the BitcoinCoreSv2 instance
     // because we're limited to tokio::task::LocalSet due to the use of `capnp` clients on
     // `bitcoin-core-sv2`, which are not `Send`
-    std::thread::spawn(move || {
+    let join_handle = std::thread::spawn(move || {
         // we need a dedicated runtime so we can spawn an async task inside the LocalSet
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
@@ -167,4 +167,6 @@ pub async fn connect_to_bitcoin_core(
             .await;
         }
     };
+
+    join_handle
 }

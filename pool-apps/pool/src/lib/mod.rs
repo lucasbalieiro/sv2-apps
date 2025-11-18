@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, thread::JoinHandle};
 
 use async_channel::unbounded;
 
@@ -9,7 +9,7 @@ use stratum_apps::{
     tp_type::TemplateProviderType,
 };
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::ChannelManager,
@@ -85,6 +85,7 @@ impl PoolSv2 {
         .await?;
 
         let channel_manager_clone = channel_manager.clone();
+        let mut bitcoin_core_sv2_join_handle: Option<JoinHandle<()>> = None;
 
         match self.config.template_provider_type().clone() {
             TemplateProviderType::Sv2Tp {
@@ -131,15 +132,17 @@ impl PoolSv2 {
                     cancellation_token: CancellationToken::new(),
                 };
 
-                connect_to_bitcoin_core(
-                    bitcoin_core_config,
-                    incoming_tdp_sender,
-                    notify_shutdown.clone(),
-                    task_manager.clone(),
-                    status_sender.clone(),
-                    coinbase_outputs,
-                )
-                .await;
+                bitcoin_core_sv2_join_handle = Some(
+                    connect_to_bitcoin_core(
+                        bitcoin_core_config,
+                        incoming_tdp_sender,
+                        notify_shutdown.clone(),
+                        task_manager.clone(),
+                        status_sender.clone(),
+                        coinbase_outputs,
+                    )
+                    .await,
+                );
             }
         }
 
@@ -193,6 +196,14 @@ impl PoolSv2 {
                         }
                     }
                 }
+            }
+        }
+
+        if let Some(bitcoin_core_sv2_join_handle) = bitcoin_core_sv2_join_handle {
+            info!("Waiting for BitcoinCoreSv2 dedicated thread to shutdown...");
+            match bitcoin_core_sv2_join_handle.join() {
+                Ok(_) => info!("BitcoinCoreSv2 dedicated thread shutdown complete."),
+                Err(e) => error!("BitcoinCoreSv2 dedicated thread error: {e:?}"),
             }
         }
 
