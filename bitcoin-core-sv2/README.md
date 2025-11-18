@@ -32,6 +32,10 @@ Due to limitations in the `capnp-rpc` dependency, `BitcoinCoreSv2` must be run w
 
 The `fee_threshold` parameter (in satoshis) determines when a new template is distributed due to mempool changes. When the mempool fee delta exceeds this threshold, a new `NewTemplate` message is sent.
 
+## Minimum Interval
+
+The `min_interval` parameter (in seconds) determines the minimum amount of time between two consecutive `NewTemplate` messages (with exception to Chain Tip updates, which are always sent immediately, followed by `SetNewPrevHash`).
+
 ## License
 
 Licensed under either of:

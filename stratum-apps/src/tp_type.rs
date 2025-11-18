@@ -12,5 +12,6 @@ pub enum TemplateProviderType {
     BitcoinCoreIpc {
         unix_socket_path: PathBuf,
         fee_threshold: u64,
+        min_interval: u8,
     },
 }

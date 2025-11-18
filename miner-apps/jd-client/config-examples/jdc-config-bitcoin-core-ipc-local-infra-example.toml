@@ -62,3 +62,4 @@ jds_port = "34264"
 [template_provider_type.BitcoinCoreIpc]
 unix_socket_path = "/path/to/node.sock"
 fee_threshold = 100
+min_interval = 5

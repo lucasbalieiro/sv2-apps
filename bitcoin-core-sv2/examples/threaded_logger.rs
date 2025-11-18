@@ -44,6 +44,9 @@ async fn main() {
     // get new templates whenever the mempool has changed by more than 100 sats
     let fee_threshold = 100;
 
+    // the minimum interval between template updates in seconds
+    let min_interval = 1;
+
     // these messages are sent into the `BitcoinCoreSv2` instance
     let (msg_sender_into_bitcoin_core_sv2, msg_receiver_into_bitcoin_core_sv2) = unbounded();
     // these messages are received from the `BitcoinCoreSv2` instance
@@ -72,6 +75,7 @@ async fn main() {
             let mut sv2_bitcoin_core = match BitcoinCoreSv2::new(
                 &bitcoin_core_unix_socket_path_clone,
                 fee_threshold,
+                min_interval,
                 msg_receiver_into_bitcoin_core_sv2,
                 msg_sender_from_bitcoin_core_sv2,
                 cancellation_token_clone.clone(),

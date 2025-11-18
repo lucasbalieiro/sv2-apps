@@ -151,6 +151,7 @@ impl JobDeclaratorClient {
             TemplateProviderType::BitcoinCoreIpc {
                 unix_socket_path,
                 fee_threshold,
+                min_interval,
             } => {
                 // incoming and outgoing TDP channels from the perspective of BitcoinCoreSv2
                 let incoming_tdp_receiver = channel_manager_to_tp_receiver.clone();
@@ -160,6 +161,7 @@ impl JobDeclaratorClient {
                 let bitcoin_core_config = BitcoinCoreSv2Config {
                     unix_socket_path: unix_socket_path.clone(),
                     fee_threshold,
+                    min_interval,
                     incoming_tdp_receiver,
                     outgoing_tdp_sender,
                     cancellation_token: CancellationToken::new(),

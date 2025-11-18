@@ -65,6 +65,15 @@
 //! to mempool changes. When the mempool fee delta exceeds this threshold, a new `NewTemplate`
 //! message is sent.
 //!
+//! ### Minimum Interval
+//!
+//! The `min_interval` parameter (in seconds) determines the minimum interval between template
+//! updates. When the interval between two template updates is less than the minimum interval, the
+//! `BitcoinCoreSv2` instance will sleep for the remaining time to reach the minimum interval.
+//!
+//! The exception is when the chain tip changes, in which case a new `NewTemplate` message is sent
+//! immediately, followed by a corresponding `SetNewPrevHash` message.
+//!
 //! ## Usage
 //!
 //! The main entry point is the [`BitcoinCoreSv2`] struct, which provides an async interface for
@@ -93,6 +102,7 @@ use std::{
     path::Path,
     rc::Rc,
     sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
+    time::Instant,
 };
 use stratum_core::{
     binary_sv2::U256,
@@ -119,6 +129,7 @@ const MIN_BLOCK_RESERVED_WEIGHT: u64 = 2000;
 /// It is instantiated with:
 /// - A `&`[`std::path::Path`] to the Bitcoin Core UNIX socket
 /// - A `u64` for the fee delta threshold in satoshis
+/// - A `u8` for the minimum interval in seconds between template updates
 /// - A [`async_channel::Receiver`] for incoming [`TemplateDistribution`] messages (handles
 ///   [`CoinbaseOutputConstraints`], [`RequestTransactionData`], and [`SubmitSolution`])
 /// - A [`async_channel::Sender`] for outgoing [`TemplateDistribution`] messages
@@ -144,6 +155,7 @@ const MIN_BLOCK_RESERVED_WEIGHT: u64 = 2000;
 #[derive(Clone)]
 pub struct BitcoinCoreSv2 {
     fee_threshold: u64,
+    min_interval: u8,
     thread_map: ThreadMapIpcClient,
     thread_ipc_client: ThreadIpcClient,
     mining_ipc_client: MiningIpcClient,
@@ -162,6 +174,7 @@ pub struct BitcoinCoreSv2 {
     outgoing_messages: Sender<TemplateDistribution<'static>>,
     global_cancellation_token: CancellationToken,
     template_ipc_client_cancellation_token: CancellationToken,
+    last_sent_template_instant: Option<Instant>,
 }
 
 impl BitcoinCoreSv2 {
@@ -170,6 +183,7 @@ impl BitcoinCoreSv2 {
     pub async fn new(
         bitcoin_core_unix_socket_path: &Path,
         fee_threshold: u64,
+        min_interval: u8,
         incoming_messages: Receiver<TemplateDistribution<'static>>,
         outgoing_messages: Sender<TemplateDistribution<'static>>,
         global_cancellation_token: CancellationToken,
@@ -228,6 +242,7 @@ impl BitcoinCoreSv2 {
 
         Ok(Self {
             fee_threshold,
+            min_interval,
             thread_map,
             thread_ipc_client,
             mining_ipc_client,
@@ -242,6 +257,7 @@ impl BitcoinCoreSv2 {
             incoming_messages,
             outgoing_messages,
             template_ipc_client_cancellation_token,
+            last_sent_template_instant: None,
         })
     }
 

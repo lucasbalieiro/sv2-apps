@@ -14,7 +14,7 @@ impl BitcoinCoreSv2 {
     /// - Updating the current template data
     /// - Sending the NewTemplate message
     pub fn monitor_ipc_templates(&self) {
-        let self_clone = self.clone();
+        let mut self_clone = self.clone();
 
         tokio::task::spawn_local(async move {
             tracing::debug!("monitor_ipc_templates() task started");
@@ -144,7 +144,6 @@ impl BitcoinCoreSv2 {
                     //     break;
                     // }
                     wait_next_request_response = wait_next_request.send().promise => {
-                        tracing::debug!("waitNext request completed");
                         match wait_next_request_response {
                             Ok(response) => {
                                 // todo: remove this once https://github.com/bitcoin/bitcoin/issues/33575 is implemented
@@ -317,6 +316,23 @@ impl BitcoinCoreSv2 {
                                         }
                                     }
                                 } else {
+                                    // check if the minimum interval has been reached
+                                    if let Some(last_sent_template_instant) = self_clone.last_sent_template_instant {
+                                        let elapsed = last_sent_template_instant.elapsed().as_millis();
+                                        let min_interval_millis = self_clone.min_interval as u128 * 1_000;
+
+                                        // if the minimum interval has not been reached, sleep for the remaining time
+                                        if elapsed < min_interval_millis {
+                                            let sleep_duration = min_interval_millis - elapsed;
+                                            // Safe cast: min_interval is u8 (max 255), so sleep_duration is at most 255,000 ms,
+                                            // which fits comfortably in u64 (max: 18,446,744,073,709,551,615)
+                                            tracing::debug!("Sleeping for {} milliseconds to reach the minimum interval", sleep_duration);
+                                            tokio::time::sleep(std::time::Duration::from_millis(sleep_duration as u64)).await;
+                                        }
+                                    }
+
+                                    self_clone.last_sent_template_instant = Some(std::time::Instant::now());
+
                                     info!("💹 Mempool fees increased! Sending NewTemplate message.");
                                     tracing::debug!("MEMPOOL FEE CHANGE DETECTED - sending non-future template");
 

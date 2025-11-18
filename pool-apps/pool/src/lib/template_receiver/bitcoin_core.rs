@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 pub struct BitcoinCoreSv2Config {
     pub unix_socket_path: PathBuf,
     pub fee_threshold: u64,
+    pub min_interval: u8,
     pub incoming_tdp_receiver: Receiver<TemplateDistribution<'static>>,
     pub outgoing_tdp_sender: Sender<TemplateDistribution<'static>>,
     pub cancellation_token: CancellationToken,
@@ -94,6 +95,7 @@ pub async fn connect_to_bitcoin_core(
             let mut sv2_bitcoin_core = match BitcoinCoreSv2::new(
                 &bitcoin_core_config.unix_socket_path,
                 bitcoin_core_config.fee_threshold,
+                bitcoin_core_config.min_interval,
                 bitcoin_core_config.incoming_tdp_receiver,
                 bitcoin_core_config.outgoing_tdp_sender,
                 bitcoin_core_config.cancellation_token.clone(),
