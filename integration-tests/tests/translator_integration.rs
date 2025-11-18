@@ -67,7 +67,7 @@ async fn translate_sv1_to_sv2_successfully() {
 }
 
 // Demonstrates the scenario where TProxy falls back to the secondary pool
-// after the primary pool returns a setup-connection error.
+// after the primary pool returns a `SetupConnection.Error`.
 #[tokio::test]
 async fn test_translator_fallback_on_setup_connection_error() {
     start_tracing();
@@ -130,7 +130,7 @@ async fn test_translator_fallback_on_setup_connection_error() {
         .await;
 }
 
-// Demonstrates the scenario where the primary pool returns an OpenMiningChannelError,
+// Demonstrates the scenario where the primary pool returns an `OpenMiningChannel.Error`,
 // causing TProxy to fall back to the secondary pool.
 #[tokio::test]
 async fn test_translator_fallback_on_open_mining_message_error() {
