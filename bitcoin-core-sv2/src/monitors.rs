@@ -232,7 +232,7 @@ impl BitcoinCoreSv2 {
                                     self_clone.current_prev_hash.replace(Some(new_prev_hash));
 
                                     // save stale template ids, cleanup and save the new template data
-                                    let template_data_to_destroy = {
+                                    let stale_template_ids = {
                                         let mut template_data_guard = match self_clone.template_data.write() {
                                             Ok(guard) => guard,
                                             Err(e) => {
@@ -242,44 +242,18 @@ impl BitcoinCoreSv2 {
                                                 break;
                                             }
                                         };
-                                        let mut stale_template_ids_guard = match self_clone.stale_template_ids.write() {
-                                            Ok(guard) => guard,
-                                            Err(e) => {
-                                                tracing::error!("Failed to acquire write lock on stale_template_ids: {:?}", e);
-                                                tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
-                                                self_clone.global_cancellation_token.cancel();
-                                                break;
-                                            }
-                                        };
 
-                                        // save stale template ids
-                                        let stale_ids: HashSet<_> = template_data_guard.clone().into_keys().collect();
-                                        tracing::debug!("Marking {} templates as stale: {:?}", stale_ids.len(), stale_ids);
-                                        *stale_template_ids_guard = stale_ids;
+                                        let stale_template_ids: HashSet<_> = template_data_guard.clone().into_keys().collect();
 
-                                        // collect template data to destroy (clone before dropping guard)
-                                        let template_data_to_destroy: Vec<_> = template_data_guard.values().cloned().collect();
-
-                                        // no point in keeping the old templates around
-                                        tracing::debug!("Clearing old template data");
-                                        template_data_guard.clear();
-
-                                        // save the new template data
+                                        // save the new template data while we still have the lock
                                         tracing::debug!("Saving new template data with template_id: {}", new_template_data.get_template_id());
                                         template_data_guard.insert(new_template_data.get_template_id(), new_template_data.clone());
 
-                                        template_data_to_destroy
+                                        stale_template_ids
                                     };
 
-                                    // destroy each template ipc client (after guard is dropped)
-                                    for template_data in template_data_to_destroy {
-                                        if let Err(e) = template_data.destroy_ipc_client(self_clone.thread_ipc_client.clone()).await {
-                                            tracing::error!("Failed to destroy template IPC client: {:?}", e);
-                                            tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
-                                            self_clone.global_cancellation_token.cancel();
-                                            break;
-                                        }
-                                    }
+                                    // process the stale template data after 10s
+                                    self_clone.process_stale_template_data(stale_template_ids).await;
 
                                     // send the future NewTemplate message
                                     let future_template = match new_template_data.get_new_template_message(true) {

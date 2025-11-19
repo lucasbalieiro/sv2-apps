@@ -627,4 +627,71 @@ impl BitcoinCoreSv2 {
 
         Ok(template_ipc_client)
     }
+
+    // spawns a task that processes the stale template data after 10s
+    // we wait 10s in case there's any incoming RequestTransactionData referring to stale templates
+    // immediately after the chain tip change
+    async fn process_stale_template_data(&self, stale_template_ids: HashSet<u64>) {
+        let self_clone = self.clone();
+        tokio::task::spawn_local(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            // remove the stale template data from the template_data HashMap
+            let removed_template_data = {
+                let mut template_data_guard = match self_clone.template_data.write() {
+                    Ok(guard) => guard,
+                    Err(e) => {
+                        tracing::error!("Failed to acquire read lock on template_data: {:?}", e);
+                        tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
+                        self_clone.global_cancellation_token.cancel();
+                        return;
+                    }
+                };
+
+                let mut removed_template_data: Vec<TemplateData> = Vec::new();
+
+                for stale_template_id in stale_template_ids.clone() {
+                    if let Some(template_data) = template_data_guard.remove(&stale_template_id) {
+                        removed_template_data.push(template_data);
+                    }
+                }
+
+                removed_template_data
+            };
+
+            // destroy the template IPC clients
+            for template_data in removed_template_data {
+                if let Err(e) = template_data
+                    .destroy_ipc_client(self_clone.thread_ipc_client.clone())
+                    .await
+                {
+                    tracing::error!("Failed to destroy template IPC client: {:?}", e);
+                    tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
+                    self_clone.global_cancellation_token.cancel();
+                    return;
+                }
+            }
+
+            // update the stale template ids
+            let mut stale_template_ids_guard = match self_clone.stale_template_ids.write() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to acquire write lock on stale_template_ids: {:?}",
+                        e
+                    );
+                    tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
+                    self_clone.global_cancellation_token.cancel();
+                    return;
+                }
+            };
+            *stale_template_ids_guard = stale_template_ids.clone();
+
+            tracing::debug!(
+                "Marked {} templates as stale: {:?}",
+                stale_template_ids.len(),
+                stale_template_ids
+            );
+        });
+    }
 }
