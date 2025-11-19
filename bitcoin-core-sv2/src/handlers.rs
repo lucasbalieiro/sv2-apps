@@ -127,9 +127,7 @@ impl BitcoinCoreSv2 {
                     );
 
                     let request_transaction_data_success = match template_data
-                        .get_request_transaction_data_success_message(
-                            self.thread_ipc_client.clone(),
-                        )
+                        .get_request_transaction_data_success_message(self.thread_map.clone())
                         .await
                     {
                         Ok(request_transaction_data_success) => request_transaction_data_success,

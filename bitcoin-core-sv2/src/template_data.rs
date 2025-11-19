@@ -2,7 +2,7 @@ use crate::error::TemplateDataError;
 
 use bitcoin_capnp_types::{
     mining_capnp::block_template::Client as BlockTemplateIpcClient,
-    proxy_capnp::thread::Client as ThreadIpcClient,
+    proxy_capnp::{thread::Client as ThreadIpcClient, thread_map::Client as ThreadMapIpcClient},
 };
 use stratum_core::bitcoin::{
     Target, Transaction, TxOut,
@@ -49,8 +49,13 @@ impl TemplateData {
     /// Destroys the template IPC client, cleaning up the resources on the Bitcoin Core side
     pub async fn destroy_ipc_client(
         &self,
-        thread_ipc_client: ThreadIpcClient,
+        thread_map: ThreadMapIpcClient,
     ) -> Result<(), TemplateDataError> {
+        tracing::debug!("Creating a dedicated thread IPC client for destroy_ipc_client");
+        let thread_ipc_client_request = thread_map.make_thread_request();
+        let thread_ipc_client_response = thread_ipc_client_request.send().promise.await?;
+        let thread_ipc_client = thread_ipc_client_response.get()?.get_result()?;
+
         tracing::debug!("Destroying template IPC client: {}", self.template_id);
         let mut destroy_ipc_client_request = self.template_ipc_client.destroy_request();
         let destroy_ipc_client_request_params = destroy_ipc_client_request.get();
@@ -103,11 +108,11 @@ impl TemplateData {
 
     pub async fn get_request_transaction_data_success_message(
         &self,
-        thread_ipc_client: ThreadIpcClient,
+        thread_map: ThreadMapIpcClient,
     ) -> Result<RequestTransactionDataSuccess<'static>, TemplateDataError> {
         let request_transaction_data_success = RequestTransactionDataSuccess {
             template_id: self.template_id,
-            transaction_list: self.get_tx_data(thread_ipc_client).await?,
+            transaction_list: self.get_tx_data(thread_map).await?,
             excess_data: vec![]
                 .try_into()
                 .expect("empty vec should always be valid for B064K"),
@@ -292,8 +297,13 @@ impl TemplateData {
 
     async fn get_tx_data(
         &self,
-        thread_ipc_client: ThreadIpcClient,
+        thread_map: ThreadMapIpcClient,
     ) -> Result<Seq064K<'_, B016M<'static>>, TemplateDataError> {
+        tracing::debug!("Creating a dedicated thread IPC client for get_tx_data");
+        let thread_ipc_client_request = thread_map.make_thread_request();
+        let thread_ipc_client_response = thread_ipc_client_request.send().promise.await?;
+        let thread_ipc_client = thread_ipc_client_response.get()?.get_result()?;
+
         let mut template_block_request = self.template_ipc_client.get_block_request();
         template_block_request
             .get()

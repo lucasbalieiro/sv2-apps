@@ -668,7 +668,7 @@ impl BitcoinCoreSv2 {
             // destroy the template IPC clients
             for template_data in removed_template_data {
                 if let Err(e) = template_data
-                    .destroy_ipc_client(self_clone.thread_ipc_client.clone())
+                    .destroy_ipc_client(self_clone.thread_map.clone())
                     .await
                 {
                     tracing::error!("Failed to destroy template IPC client: {:?}", e);
