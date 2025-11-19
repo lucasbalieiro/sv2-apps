@@ -99,7 +99,7 @@ use error::BitcoinCoreSv2Error;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
     time::Instant,
@@ -175,6 +175,7 @@ pub struct BitcoinCoreSv2 {
     global_cancellation_token: CancellationToken,
     template_ipc_client_cancellation_token: CancellationToken,
     last_sent_template_instant: Option<Instant>,
+    unix_socket_path: PathBuf,
 }
 
 impl BitcoinCoreSv2 {
@@ -258,6 +259,7 @@ impl BitcoinCoreSv2 {
             outgoing_messages,
             template_ipc_client_cancellation_token,
             last_sent_template_instant: None,
+            unix_socket_path: bitcoin_core_unix_socket_path.to_path_buf(),
         })
     }
 

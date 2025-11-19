@@ -4,6 +4,7 @@ use bitcoin_capnp_types::{
     mining_capnp::block_template::Client as BlockTemplateIpcClient,
     proxy_capnp::{thread::Client as ThreadIpcClient, thread_map::Client as ThreadMapIpcClient},
 };
+use std::{fs::File, io::Write, path::Path};
 use stratum_core::bitcoin::{
     Target, Transaction, TxOut,
     amount::{Amount, CheckedSum},
@@ -124,10 +125,75 @@ impl TemplateData {
         self.header.prev_blockhash.to_byte_array().into()
     }
 
+    async fn dump_solution_to_disk(
+        &self,
+        thread_map: ThreadMapIpcClient,
+        solution_coinbase_tx: Transaction,
+        solution_header: Header,
+        path_dir: &Path,
+    ) {
+        let self_clone = self.clone();
+        let path_dir = path_dir.to_path_buf();
+        tokio::task::spawn_local(async move {
+            tracing::debug!("Creating a dedicated thread IPC client for getBlock request");
+            let thread_ipc_client = thread_map
+                .make_thread_request()
+                .send()
+                .promise
+                .await
+                .expect("Failed to send thread IPC client request")
+                .get()
+                .expect("Failed to get thread IPC client reader")
+                .get_result()
+                .expect("Failed to get thread IPC client result");
+
+            let mut template_block_request = self_clone.template_ipc_client.get_block_request();
+            let mut template_block_request_context = template_block_request
+                .get()
+                .get_context()
+                .expect("Failed to get template block request context");
+            template_block_request_context.set_thread(thread_ipc_client.clone());
+
+            let template_block_response = template_block_request
+                .send()
+                .promise
+                .await
+                .expect("Failed to send template block request");
+            let template_block_reader = template_block_response
+                .get()
+                .expect("Failed to get template block response");
+            let template_block_bytes = template_block_reader
+                .get_result()
+                .expect("Failed to get template block result");
+
+            // Deserialize the complete block template from Bitcoin Core's serialization format
+            let mut solution_block: Block =
+                deserialize(template_block_bytes).expect("Failed to deserialize block template");
+
+            solution_block.txdata[0] = solution_coinbase_tx;
+            solution_block.header = solution_header;
+
+            let solution_block_bytes = serialize(&solution_block);
+            let solution_block_hash = solution_block.block_hash().to_string();
+            let solution_block_path = path_dir.join(format!("{}.dat", solution_block_hash));
+
+            let mut file =
+                File::create(&solution_block_path).expect("Failed to create solution block file");
+            file.write_all(&solution_block_bytes)
+                .expect("Failed to write solution block to file");
+            tracing::info!(
+                "Solution block dumped to: {}",
+                solution_block_path.display()
+            );
+        });
+    }
+
     pub async fn submit_solution(
         &self,
         submit_solution: SubmitSolution<'static>,
         thread_ipc_client: ThreadIpcClient,
+        thread_map: ThreadMapIpcClient,
+        path_dir: &Path,
     ) -> Result<(), TemplateDataError> {
         let solution_coinbase_tx_bytes: Vec<u8> = submit_solution.coinbase_tx.to_vec();
 
@@ -191,6 +257,15 @@ impl TemplateData {
                 tracing::error!("SubmitSolution solution header is invalid: {}", e);
                 TemplateDataError::InvalidSolutionPoW(e)
             })?;
+
+        // spawn a task to dump the solution to disk
+        self.dump_solution_to_disk(
+            thread_map.clone(),
+            solution_coinbase_tx,
+            solution_header,
+            path_dir,
+        )
+        .await;
 
         let mut submit_solution_request = self.template_ipc_client.submit_solution_request();
         let mut submit_solution_request_params = submit_solution_request.get();

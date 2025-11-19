@@ -193,9 +193,19 @@ impl BitcoinCoreSv2 {
         };
         tracing::debug!("Found template data for solution submission");
 
+        let solution_block_dir = self
+            .unix_socket_path
+            .parent()
+            .expect("unix_socket_path must have a parent");
+
         tracing::debug!("Submitting solution to Bitcoin Core");
         match template_data
-            .submit_solution(submit_solution, self.thread_ipc_client.clone())
+            .submit_solution(
+                submit_solution,
+                self.thread_ipc_client.clone(),
+                self.thread_map.clone(),
+                solution_block_dir,
+            )
             .await
         {
             Ok(_) => {
