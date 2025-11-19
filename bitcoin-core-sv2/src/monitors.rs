@@ -205,7 +205,7 @@ impl BitcoinCoreSv2 {
                                 }
 
                                 tracing::debug!("Fetching new template data...");
-                                let new_template_data = match self_clone.fetch_template_data().await {
+                                let new_template_data = match self_clone.fetch_template_data(blocking_thread_ipc_client.clone()).await {
                                     Ok(new_template_data) => new_template_data,
                                     Err(e) => {
                                         tracing::error!("Failed to fetch template data: {:?}", e);

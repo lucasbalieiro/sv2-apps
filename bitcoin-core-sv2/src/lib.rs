@@ -328,7 +328,10 @@ impl BitcoinCoreSv2 {
         // bootstrap the first template
         {
             tracing::debug!("Bootstrapping first template...");
-            let template_data = match self.fetch_template_data().await {
+            let template_data = match self
+                .fetch_template_data(self.thread_ipc_client.clone())
+                .await
+            {
                 Ok(template_data) => {
                     tracing::debug!(
                         "Successfully fetched initial template data - template_id: {}",
@@ -481,7 +484,10 @@ impl BitcoinCoreSv2 {
         tracing::debug!("run() exiting");
     }
 
-    async fn fetch_template_data(&self) -> Result<TemplateData, BitcoinCoreSv2Error> {
+    async fn fetch_template_data(
+        &self,
+        thread_ipc_client: ThreadIpcClient,
+    ) -> Result<TemplateData, BitcoinCoreSv2Error> {
         tracing::debug!("Fetching template data over IPC");
         let template_id = self.template_id_factory.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(
@@ -504,7 +510,7 @@ impl BitcoinCoreSv2 {
         template_header_request
             .get()
             .get_context()?
-            .set_thread(self.thread_ipc_client.clone());
+            .set_thread(thread_ipc_client.clone());
 
         let template_header_bytes = template_header_request
             .send()
@@ -529,7 +535,7 @@ impl BitcoinCoreSv2 {
         coinbase_tx_request
             .get()
             .get_context()?
-            .set_thread(self.thread_ipc_client.clone());
+            .set_thread(thread_ipc_client.clone());
 
         let coinbase_tx_bytes = coinbase_tx_request
             .send()
@@ -551,7 +557,7 @@ impl BitcoinCoreSv2 {
         merkle_path_request
             .get()
             .get_context()?
-            .set_thread(self.thread_ipc_client.clone());
+            .set_thread(thread_ipc_client.clone());
 
         let merkle_path: Vec<Vec<u8>> = merkle_path_request
             .send()
