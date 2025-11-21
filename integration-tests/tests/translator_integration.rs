@@ -99,7 +99,7 @@ async fn test_translator_fallback_on_setup_connection_error() {
     let (pool_translator_sniffer_2, pool_translator_sniffer_addr_2) =
         start_sniffer("B", pool_addr_2, false, vec![], None);
 
-    let (_, _) = start_sv2_translator(
+    let (_, tproxy_addr) = start_sv2_translator(
         &[
             pool_translator_sniffer_addr_1,
             pool_translator_sniffer_addr_2,
@@ -107,6 +107,8 @@ async fn test_translator_fallback_on_setup_connection_error() {
         false,
     )
     .await;
+
+    let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
 
     pool_translator_sniffer_1
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
@@ -126,6 +128,19 @@ async fn test_translator_fallback_on_setup_connection_error() {
         .wait_for_message_type(
             MessageDirection::ToDownstream,
             MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    pool_translator_sniffer_2
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .await;
+    pool_translator_sniffer_2
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
         )
         .await;
 }
@@ -198,6 +213,20 @@ async fn test_translator_fallback_on_open_mining_message_error() {
         .wait_for_message_type(
             MessageDirection::ToDownstream,
             MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    pool_translator_sniffer_2
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .await;
+
+    pool_translator_sniffer_2
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
         )
         .await;
 }
