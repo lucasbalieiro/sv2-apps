@@ -245,15 +245,27 @@ pub fn start_jds(tp_rpc_connection: &ConnectParams) -> (JobDeclaratorServer, Soc
 }
 
 pub async fn start_sv2_translator(
-    upstream: SocketAddr,
+    upstreams: &[SocketAddr],
     aggregate_channels: bool,
 ) -> (TranslatorSv2, SocketAddr) {
-    let upstream_address = upstream.ip().to_string();
-    let upstream_port = upstream.port();
-    let upstream_authority_pubkey = Secp256k1PublicKey::try_from(
-        "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
-    )
-    .expect("failed");
+    let upstreams = upstreams
+        .iter()
+        .map(|upstream| {
+            let upstream_address = upstream.ip().to_string();
+            let upstream_port = upstream.port();
+            let upstream_authority_pubkey = Secp256k1PublicKey::try_from(
+                "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
+            )
+            .expect("failed");
+
+            translator_sv2::config::Upstream::new(
+                upstream_address,
+                upstream_port,
+                upstream_authority_pubkey,
+            )
+        })
+        .collect();
+
     let listening_address = get_available_address();
     let listening_port = listening_address.port();
 
@@ -267,15 +279,11 @@ pub async fn start_sv2_translator(
         SHARES_PER_MINUTE,
         true,
     );
-    let upstream_conf = translator_sv2::config::Upstream::new(
-        upstream_address,
-        upstream_port,
-        upstream_authority_pubkey,
-    );
+
     let downstream_extranonce2_size = 4;
 
     let config = translator_sv2::config::TranslatorConfig::new(
-        vec![upstream_conf],
+        upstreams,
         listening_address.ip().to_string(),
         listening_port,
         downstream_difficulty_config,

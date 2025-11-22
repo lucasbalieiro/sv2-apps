@@ -66,6 +66,7 @@ impl ChannelManager {
         upstream_receiver: Receiver<Mining<'static>>,
         sv1_server_sender: Sender<Mining<'static>>,
         sv1_server_receiver: Receiver<Mining<'static>>,
+        status_sender: Sender<Status>,
         mode: ChannelMode,
     ) -> Self {
         let channel_state = ChannelState::new(
@@ -73,6 +74,7 @@ impl ChannelManager {
             upstream_receiver,
             sv1_server_sender,
             sv1_server_receiver,
+            status_sender,
         );
         let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode)));
         Self {
@@ -116,12 +118,11 @@ impl ChannelManager {
                                 info!("ChannelManager: received shutdown signal.");
                                 break;
                             }
-                            Ok(ShutdownMessage::UpstreamReconnectedResetAndShutdownDownstreams) => {
-                                info!("ChannelManager: upstream reconnected, resetting channel state.");
+                            Ok(ShutdownMessage::UpstreamFallback{tx}) => {
                                 self.channel_manager_data.super_safe_lock(|data| {
                                     data.reset_for_upstream_reconnection();
                                 });
-                                // Note: DownstreamShutdownAll handling is done by SV1Server separately
+                                drop(tx);
                             }
                             Ok(_) => {
                                 // Ignore other shutdown message types
@@ -621,12 +622,14 @@ mod tests {
         let (_upstream_sender2, upstream_receiver) = unbounded();
         let (sv1_server_sender, _sv1_server_receiver) = unbounded();
         let (_sv1_server_sender2, sv1_server_receiver) = unbounded();
+        let (status_sender, _) = unbounded();
 
         ChannelManager::new(
             upstream_sender,
             upstream_receiver,
             sv1_server_sender,
             sv1_server_receiver,
+            status_sender,
             mode,
         )
     }

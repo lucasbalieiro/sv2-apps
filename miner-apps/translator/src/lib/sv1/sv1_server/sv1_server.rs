@@ -174,7 +174,8 @@ impl Sv1Server {
                     message = shutdown_rx_main.recv() => {
                         match message {
                             Ok(ShutdownMessage::ShutdownAll) => {
-                                debug!("SV1 Server: Vardiff loop received shutdown signal. Exiting.");
+                                debug!("SV1 Server: received shutdown signal. Exiting.");
+                                self.sv1_server_channel_state.drop();
                                 break;
                             }
                             Ok(ShutdownMessage::DownstreamShutdown(downstream_id)) => {
@@ -212,39 +213,16 @@ impl Sv1Server {
                                     }
                                 }
                             }
-                            Ok(ShutdownMessage::DownstreamShutdownAll) => {
+                            Ok(ShutdownMessage::UpstreamFallback {tx}) => {
                                 self.sv1_server_data.super_safe_lock(|d|{
                                     if self.config.downstream_difficulty_config.enable_vardiff {
                                         d.vardiff = HashMap::new();
                                     }
                                     d.downstreams = HashMap::new();
                                 });
-                                info!("🔌 All downstreams removed from sv1 server as upstream changed");
-                                // In aggregated mode, send UpdateChannel to reflect the new state (no downstreams)
-                                if self.config.downstream_difficulty_config.enable_vardiff {
-                                    DifficultyManager::send_update_channel_on_downstream_state_change(
-                                            &self.sv1_server_data,
-                                            &self.sv1_server_channel_state.channel_manager_sender,
-                                            self.config.aggregate_channels,
-                                        ).await;
-                                }
-                            }
-                            Ok(ShutdownMessage::UpstreamReconnectedResetAndShutdownDownstreams) => {
-                                self.sv1_server_data.super_safe_lock(|d|{
-                                    if self.config.downstream_difficulty_config.enable_vardiff {
-                                        d.vardiff = HashMap::new();
-                                    }
-                                    d.downstreams = HashMap::new();
-                                });
-                                info!("🔌 All downstreams removed from sv1 server as upstream reconnected");
-                                // In aggregated mode, send UpdateChannel to reflect the new state (no downstreams)
-                                if self.config.downstream_difficulty_config.enable_vardiff {
-                                    DifficultyManager::send_update_channel_on_downstream_state_change(
-                                            &self.sv1_server_data,
-                                            &self.sv1_server_channel_state.channel_manager_sender,
-                                            self.config.aggregate_channels,
-                                        ).await;
-                                }
+                                info!("Fallback in processing stopping sv1 server");
+                                drop(tx);
+                                break;
                             }
                             _ => {}
                         }
@@ -299,6 +277,7 @@ impl Sv1Server {
                     ) => {
                         if let Err(e) = res {
                             handle_error(&sv1_status_sender, e).await;
+                            self.sv1_server_channel_state.drop();
                             break;
                         }
                     }
@@ -308,13 +287,13 @@ impl Sv1Server {
                     ) => {
                         if let Err(e) = res {
                             handle_error(&sv1_status_sender, e).await;
+                            self.sv1_server_channel_state.drop();
                             break;
                         }
                     }
                     _ = &mut vardiff_future => {}
                 }
             }
-            self.sv1_server_channel_state.drop();
             drop(shutdown_complete_tx);
             debug!("SV1 Server main listener loop exited.");
         });
@@ -598,20 +577,9 @@ impl Sv1Server {
                     self.handle_set_target_without_vardiff(m).await;
                 }
             }
-
-            Mining::CloseChannel(_) => {
-                todo!("Handle CloseChannel message from upstream");
-            }
-
-            Mining::OpenMiningChannelError(_) => {
-                todo!("Handle OpenMiningChannelError message from upstream");
-            }
-
-            Mining::UpdateChannelError(_) => {
-                todo!("Handle UpdateChannelError message from upstream");
-            }
-
-            _ => unreachable!("Unexpected message type received from upstream"),
+            // Guaranteed unreachable: the channel manager only forwards valid,
+            // pre-filtered messages, so no other variants can arrive here.
+            _ => unreachable!("Invalid message: should have been filtered earlier"),
         }
 
         Ok(())

@@ -3,12 +3,11 @@ use crate::{
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
     sv2::upstream::channel::UpstreamChannelState,
-    utils::ShutdownMessage,
+    utils::{ShutdownMessage, UpstreamEntry},
 };
 use async_channel::{unbounded, Receiver, Sender};
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use stratum_apps::{
-    key_utils::Secp256k1PublicKey,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
         codec_sv2::HandshakeRole,
@@ -27,7 +26,6 @@ use stratum_apps::{
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
-    time::{sleep, Duration},
 };
 use tracing::{debug, error, info, warn};
 
@@ -57,7 +55,11 @@ impl Upstream {
     /// to connect to each server multiple times before giving up.
     ///
     /// # Arguments
-    /// * `upstreams` - List of (address, public_key) pairs for upstream servers
+    /// * `upstreams` - A single `UpstreamEntry` representing the upstream candidate currently being
+    ///   attempted. The `tried_or_flagged` is set once the upstream has either been connected to
+    ///   successfully or marked as malicious. Because `new` is only called from
+    ///   `try_initialize_upstream`, we can treat this flag as the definitive state for that
+    ///   upstream.
     /// * `channel_manager_sender` - Channel to send messages to the channel manager
     /// * `channel_manager_receiver` - Channel to receive messages from the channel manager
     /// * `notify_shutdown` - Broadcast channel for shutdown coordination
@@ -67,7 +69,7 @@ impl Upstream {
     /// * `Ok(Upstream)` - Successfully connected to an upstream server
     /// * `Err(TproxyError)` - Failed to connect to any upstream server
     pub async fn new(
-        upstreams: &[(SocketAddr, Secp256k1PublicKey)],
+        upstream: &UpstreamEntry,
         channel_manager_sender: Sender<Mining<'static>>,
         channel_manager_receiver: Receiver<Mining<'static>>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
@@ -75,70 +77,62 @@ impl Upstream {
         task_manager: Arc<TaskManager>,
     ) -> Result<Self, TproxyError> {
         let mut shutdown_rx = notify_shutdown.subscribe();
-        const RETRIES_PER_UPSTREAM: u8 = 3;
 
-        for (index, (addr, pubkey)) in upstreams.iter().enumerate() {
-            info!("Trying to connect to upstream {} at {}", index, addr);
+        info!("Trying to connect to upstream at {}", upstream.addr);
 
-            for attempt in 1..=RETRIES_PER_UPSTREAM {
-                if shutdown_rx.try_recv().is_ok() {
-                    info!("Shutdown signal received during upstream connection attempt. Aborting.");
-                    drop(shutdown_complete_tx);
-                    return Err(TproxyError::Shutdown);
-                }
+        if shutdown_rx.try_recv().is_ok() {
+            info!("Shutdown signal received during upstream connection attempt. Aborting.");
+            drop(shutdown_complete_tx);
+            return Err(TproxyError::Shutdown);
+        }
 
-                match TcpStream::connect(addr).await {
-                    Ok(socket) => {
-                        info!(
-                            "Connected to upstream at {addr} (attempt {attempt}/{RETRIES_PER_UPSTREAM})"
+        match TcpStream::connect(upstream.addr).await {
+            Ok(socket) => {
+                info!("Connected to upstream at {}", upstream.addr);
+
+                let initiator = Initiator::from_raw_k(upstream.authority_pubkey.into_bytes())?;
+                match NoiseTcpStream::new(socket, HandshakeRole::Initiator(initiator)).await {
+                    Ok(stream) => {
+                        let (reader, writer) = stream.into_split();
+
+                        let (outbound_tx, outbound_rx) = unbounded();
+                        let (inbound_tx, inbound_rx) = unbounded();
+
+                        spawn_io_tasks(
+                            task_manager,
+                            reader,
+                            writer,
+                            outbound_rx,
+                            inbound_tx,
+                            notify_shutdown,
                         );
 
-                        let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
-                        match NoiseTcpStream::new(socket, HandshakeRole::Initiator(initiator)).await
-                        {
-                            Ok(stream) => {
-                                let (reader, writer) = stream.into_split();
+                        let upstream_channel_state = UpstreamChannelState::new(
+                            channel_manager_sender,
+                            channel_manager_receiver,
+                            inbound_rx,
+                            outbound_tx,
+                        );
+                        debug!(
+                            "Successfully initialized upstream channel with {}",
+                            upstream.addr
+                        );
 
-                                let (outbound_tx, outbound_rx) = unbounded();
-                                let (inbound_tx, inbound_rx) = unbounded();
-
-                                spawn_io_tasks(
-                                    task_manager,
-                                    reader,
-                                    writer,
-                                    outbound_rx,
-                                    inbound_tx,
-                                    notify_shutdown,
-                                );
-
-                                let upstream_channel_state = UpstreamChannelState::new(
-                                    channel_manager_sender,
-                                    channel_manager_receiver,
-                                    inbound_rx,
-                                    outbound_tx,
-                                );
-                                debug!("Successfully initialized upstream channel with {addr}");
-
-                                return Ok(Self {
-                                    upstream_channel_state,
-                                });
-                            }
-                            Err(e) => {
-                                error!("Failed Noise handshake with {addr}: {e:?}. Retrying...");
-                            }
-                        }
+                        return Ok(Self {
+                            upstream_channel_state,
+                        });
                     }
                     Err(e) => {
                         error!(
-                            "Failed to connect to {addr}: {e}. Retry {attempt}/{RETRIES_PER_UPSTREAM}..."
+                            "Failed Noise handshake with {}: {e:?}. Retrying...",
+                            upstream.addr
                         );
                     }
                 }
-
-                sleep(Duration::from_secs(5)).await;
             }
-
-            warn!("Exhausted retries for upstream {index} at {addr}");
+            Err(e) => {
+                error!("Failed to connect to {}: {e}.", upstream.addr);
+            }
         }
 
         error!("Failed to connect to any configured upstream.");
@@ -178,6 +172,12 @@ impl Upstream {
                     Ok(ShutdownMessage::ShutdownAll) => {
                         info!("Upstream: shutdown signal received during connection setup.");
                         drop(shutdown_complete_tx);
+                        return Ok(());
+                    }
+                    Ok(ShutdownMessage::UpstreamFallback{tx}) => {
+                        info!("Upstream: shutdown signal received during connection setup.");
+                        drop(shutdown_complete_tx);
+                        drop(tx);
                         return Ok(());
                     }
                     Ok(_) => {}
@@ -333,6 +333,11 @@ impl Upstream {
                                 info!("Upstream: received ShutdownAll signal. Exiting loop.");
                                 break;
                             }
+                            Ok(ShutdownMessage::UpstreamFallback{tx}) => {
+                                info!("Upstream: fallback initiated");
+                                drop(tx);
+                                break;
+                            }
                             Ok(_) => {
                                 // Ignore other shutdown variants for upstream
                             }
@@ -350,7 +355,7 @@ impl Upstream {
                                 debug!("Upstream: received frame.");
                                 if let Err(e) = self.on_upstream_message(frame).await {
                                     error!("Upstream: error while processing message: {e:?}");
-                                    handle_error(&status_sender, TproxyError::ChannelErrorSender).await;
+                                    handle_error(&status_sender, e).await;
                                 }
                             }
                             Err(e) => {
@@ -368,7 +373,7 @@ impl Upstream {
                                 debug!("Upstream: sending message from channel manager: {:?}", msg);
                                 if let Err(e) = self.send_upstream(msg).await {
                                     error!("Upstream: failed to send message: {e:?}");
-                                    handle_error(&status_sender, TproxyError::ChannelErrorSender).await;
+                                    handle_error(&status_sender, e).await;
                                 }
                             }
                             Err(e) => {
