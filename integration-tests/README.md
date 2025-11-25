@@ -1,21 +1,28 @@
 # SV2 Integration Tests
 
-This is a test crate and it can be used in order to test the behavior of different roles when
-working together. Each role should have a `start_[role_name]` function under `common` folder that
-can be called in order to run the role. In order to assert the behavior of the role or the messages
-it exchanges with other roles, you can use the `Sniffer` helper in order to listen to the messages
-exchanged between the roles, and assert those messages using the `assert_message_[message_type]`
-function. For examples on how to use the `Sniffer` helper, you can check the
-`sniffer_integration.rs` module or other tests in the `tests` folder.
+This library provides tools for building integration tests for Stratum V2 roles.
 
-All our tests run in either regtest or signet network. We download Bitcoin Core v30 binaries
-from https://bitcoincore.org/bin/bitcoin-core-30.0/ and the Template provider (sv2-tp) binaries
-from https://github.com/stratum-mining/sv2-tp/releases. Bitcoin Core runs via IPC, and sv2-tp
-provides Stratum V2 template distribution. These are the only external dependencies in our tests.
+Additionally, the library includes pre-defined integration tests for various Stratum V2
+roles/scenarios, which can be found in the `tests` folder.
 
-## Running Instructions
+Each role has a `start_[role_name]` function that can be called to run the respective role.
 
-In order to run the integration tests, you can use the following command:
+To assert the behavior of a role or the messages it exchanges with other roles, you can use the `Sniffer` module to listen to the messages between roles.
+
+For examples on how to use the `Sniffer` helper, check out the `sniffer_integration.rs` module or
+other tests in the `tests` folder.
+
+All tests run in either regtest or signet network.
+
+Bitcoin Core v30 binaries are downloaded from https://bitcoincore.org/bin/bitcoin-core-30.0/ and the
+Template provider (sv2-tp) binaries from https://github.com/stratum-mining/sv2-tp/releases.
+
+Bitcoin Core runs via IPC, and sv2-tp provides Stratum V2 template distribution. These are the only
+external dependencies in our tests.
+
+## Running Tests Instructions
+
+To run pre defined integration tests, use the following command:
 
 ```bash
 $ git clone git@github.com:stratum-mining/stratum.git
@@ -25,6 +32,87 @@ $ cargo test --manifest-path=integration-tests/Cargo.toml --verbose --test '*' -
 Note: during the execution of the tests, the `template-provider` directory holds the downloaded
 binaries (Bitcoin Core and sv2-tp), while test data directories are created in the system temp
 directory.
+
+## Writing Custom Integration Tests
+
+ - To write your own integration tests using this library, you can install the library as follows:
+
+```sh
+$ cargo add sv2-integration-tests --git
+```
+
+Then, create your own test by using the library as shown below:
+
+```rust
+use sv2_integration_tests::{Sniffer, template_provider, interceptor::MessageDirection};
+use stratum_apps::stratum_core::{
+    common_messages_sv2::{Protocol, SetupConnection, *},
+    mining_sv2::*,
+    parsers_sv2::{AnyMessage, CommonMessages, Mining, TemplateDistribution},
+    template_distribution_sv2::*,
+};
+
+struct MyCustomPool;
+
+#[tokio::test]
+async fn success_pool_template_provider_connection() {
+    let (_tp, tp_addr) = template_provider::start_template_provider(None, template_provider::DifficultyLevel::Low);
+    let (sniffer, sniffer_addr) = start_sniffer("", tp_addr, true, vec![], None);
+    // From the Pool perspective, `sniffer_addr` is the address of the Template Provider
+    // The Sniffer will sit between the Pool and the Template Provider
+    let _ = MyCustomPool::start(sniffer_addr).await;
+    // here we assert that the downstream(pool in this case) have sent `SetupConnection` message
+    // with the correct parameters, protocol, flags, min_version and max_version.  Note that the
+    // macro can take any number of arguments after the message argument, but the order is
+    // important where a property should be followed by its value.
+    sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    assert_common_message!(
+        &sniffer.next_message_from_downstream(),
+        SetupConnection,
+        protocol,
+        Protocol::TemplateDistributionProtocol,
+        flags,
+        0,
+        min_version,
+        2,
+        max_version,
+        2
+    );
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+    assert_common_message!(
+        &sniffer.next_message_from_upstream(),
+        SetupConnectionSuccess
+    );
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS,
+        )
+        .await;
+    assert_tp_message!(
+        &sniffer.next_message_from_downstream(),
+        CoinbaseOutputConstraints
+    );
+    sniffer
+        .wait_for_message_type(MessageDirection::ToDownstream, MESSAGE_TYPE_NEW_TEMPLATE)
+        .await;
+    assert_tp_message!(&sniffer.next_message_from_upstream(), NewTemplate);
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SET_NEW_PREV_HASH,
+        )
+        .await;
+    assert_tp_message!(sniffer.next_message_from_upstream(), SetNewPrevHash);
+}
+```
 
 ## License
 MIT OR Apache-2.0
