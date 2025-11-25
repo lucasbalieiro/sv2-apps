@@ -272,22 +272,22 @@ impl TemplateReceiver {
         let mut sv2_frame = self.template_receiver_channel.tp_receiver.recv().await?;
 
         debug!("Received SV2 frame from Template provider.");
-        let Some(message_type) = sv2_frame.get_header().map(|m| m.msg_type()) else {
-            return Ok(());
-        };
+        let header = sv2_frame.get_header().ok_or_else(|| {
+            error!("SV2 frame missing header");
+            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+        })?;
+        let message_type = header.msg_type();
+        let extension_type = header.ext_type();
 
-        match protocol_message_type(message_type) {
+        match protocol_message_type(extension_type, message_type) {
             MessageType::Common => {
                 info!(
-                    ?message_type,
+                    ext_type = ?extension_type,
+                    msg_type = ?message_type,
                     "Handling common message from Template provider."
                 );
-                self.handle_common_message_frame_from_server(
-                    None,
-                    message_type,
-                    sv2_frame.payload(),
-                )
-                .await?;
+                self.handle_common_message_frame_from_server(None, header, sv2_frame.payload())
+                    .await?;
             }
             MessageType::TemplateDistribution => {
                 let message = TemplateDistribution::try_from((message_type, sv2_frame.payload()))?
@@ -419,13 +419,15 @@ impl TemplateReceiver {
                 )
             })?;
 
-        let msg_type = incoming
-            .get_header()
-            .ok_or(framing_sv2::Error::ExpectedHandshakeFrame)?
-            .msg_type();
-        debug!(?msg_type, "Received upstream handshake response");
+        let header = incoming.get_header().ok_or_else(|| {
+            error!("Handshake frame missing header");
+            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+        })?;
+        debug!(ext_type = ?header.ext_type(),
+            msg_type = ?header.msg_type(),
+            "Received upstream handshake response");
 
-        self.handle_common_message_frame_from_server(None, msg_type, incoming.payload())
+        self.handle_common_message_frame_from_server(None, header, incoming.payload())
             .await?;
         info!("Handshake with upstream completed successfully");
         Ok(())

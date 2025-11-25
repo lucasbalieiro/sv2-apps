@@ -7,7 +7,10 @@ use crate::{
         wait_for_client,
     },
 };
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 use stratum_apps::stratum_core::parsers_sv2::{message_type_to_name, AnyMessage};
 use tokio::{net::TcpStream, select};
 
@@ -44,6 +47,7 @@ pub struct Sniffer<'a> {
     check_on_drop: bool,
     action: Vec<InterceptAction>,
     timeout: Option<u64>,
+    negotiated_extensions: Arc<Mutex<Vec<u16>>>,
 }
 
 impl<'a> Sniffer<'a> {
@@ -66,6 +70,7 @@ impl<'a> Sniffer<'a> {
             check_on_drop,
             action,
             timeout,
+            negotiated_extensions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -80,6 +85,7 @@ impl<'a> Sniffer<'a> {
         let messages_from_upstream = self.messages_from_upstream.clone();
         let action = self.action.clone();
         let identifier = self.identifier.to_string();
+        let negotiated_extensions = self.negotiated_extensions.clone();
         tokio::spawn(async move {
             let (downstream_receiver, downstream_sender) =
                 create_downstream(wait_for_client(listening_address).await)
@@ -94,8 +100,8 @@ impl<'a> Sniffer<'a> {
             .expect("Failed to create upstream");
             select! {
                 _ = tokio::signal::ctrl_c() => { },
-                _ = recv_from_down_send_to_up(downstream_receiver, upstream_sender, messages_from_downstream, action.clone(), &identifier) => { },
-                _ = recv_from_up_send_to_down(upstream_receiver, downstream_sender, messages_from_upstream, action, &identifier) => { },
+                _ = recv_from_down_send_to_up(downstream_receiver, upstream_sender, messages_from_downstream, action.clone(), &identifier, negotiated_extensions.clone()) => { },
+                _ = recv_from_up_send_to_down(upstream_receiver, downstream_sender, messages_from_upstream, action, &identifier, negotiated_extensions.clone()) => { },
             };
         });
     }
@@ -111,6 +117,19 @@ impl<'a> Sniffer<'a> {
         self.messages_from_downstream.next_message()
     }
 
+    /// Returns the oldest message with TLV fields sent by downstream.
+    ///
+    /// The queue is FIFO and once a message is returned it is removed from the queue.
+    pub fn next_message_from_downstream_with_tlvs(
+        &self,
+    ) -> Option<(
+        MsgType,
+        AnyMessage<'static>,
+        Option<Vec<stratum_apps::stratum_core::parsers_sv2::Tlv>>,
+    )> {
+        self.messages_from_downstream.next_message_with_tlvs()
+    }
+
     /// Returns the oldest message sent by upstream.
     ///
     /// The queue is FIFO and once a message is returned it is removed from the queue.
@@ -120,6 +139,19 @@ impl<'a> Sniffer<'a> {
     /// - specific message fields
     pub fn next_message_from_upstream(&self) -> Option<(MsgType, AnyMessage<'static>)> {
         self.messages_from_upstream.next_message()
+    }
+
+    /// Returns the oldest message with TLV fields sent by upstream.
+    ///
+    /// The queue is FIFO and once a message is returned it is removed from the queue.
+    pub fn next_message_from_upstream_with_tlvs(
+        &self,
+    ) -> Option<(
+        MsgType,
+        AnyMessage<'static>,
+        Option<Vec<stratum_apps::stratum_core::parsers_sv2::Tlv>>,
+    )> {
+        self.messages_from_upstream.next_message_with_tlvs()
     }
 
     /// Waits until a message of the specified type is received into the `message_direction`
