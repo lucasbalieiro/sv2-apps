@@ -400,7 +400,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d16415a0a9ccee2f71820da352c1f2a7f16d9f8e3ae6fb5e97834c6d732e98cd"
 dependencies = [
- "buffer_sv2 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "buffer_sv2",
 ]
 
 [[package]]
@@ -410,16 +410,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba8295945d51b707f3a49e17810dddef858549e2b52383c7f2c4dd036f6bc1e6"
 dependencies = [
  "binary_codec_sv2 3.0.0",
- "derive_codec_sv2 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "derive_codec_sv2",
 ]
 
 [[package]]
 name = "binary_sv2"
 version = "5.0.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2ca1060634594eb03b4a76527e661391d6433d360ed6643bbe35590a4e01e91"
 dependencies = [
- "buffer_sv2 2.0.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
- "derive_codec_sv2 1.1.1 (git+https://github.com/stratum-mining/stratum?branch=main)",
+ "buffer_sv2",
+ "derive_codec_sv2",
 ]
 
 [[package]]
@@ -572,15 +573,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "buffer_sv2"
-version = "2.0.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
-dependencies = [
- "aes-gcm",
- "generic-array",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,26 +650,27 @@ checksum = "11ac02b93b5bd92a7dda2bc4b8c9d1f087e1fffc8b1018b532109135629051fc"
 dependencies = [
  "binary_sv2 4.0.0",
  "bitcoin",
- "common_messages_sv2 6.0.1",
- "job_declaration_sv2 5.0.1",
+ "common_messages_sv2",
+ "job_declaration_sv2",
  "mining_sv2 5.0.1",
  "primitive-types",
- "template_distribution_sv2 4.0.1",
+ "template_distribution_sv2",
  "tracing",
 ]
 
 [[package]]
 name = "channels_sv2"
 version = "2.0.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8126fb7fa964e389bb4c58a4f30a0b40bffbc4e19e1daf97bd30479333aaf03"
 dependencies = [
  "binary_sv2 5.0.0",
  "bitcoin",
- "common_messages_sv2 6.0.2",
- "job_declaration_sv2 5.0.2",
+ "common_messages_sv2",
+ "job_declaration_sv2",
  "mining_sv2 6.0.0",
  "primitive-types",
- "template_distribution_sv2 4.0.2",
+ "template_distribution_sv2",
  "tracing",
 ]
 
@@ -766,9 +759,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01e6d43e79e66d0f98038922157db8b6101594921be87ac2cca3754d669f2a05"
 dependencies = [
  "binary_sv2 4.0.0",
- "buffer_sv2 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "buffer_sv2",
  "framing_sv2 5.0.1",
- "noise_sv2 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "noise_sv2",
  "rand",
  "tracing",
 ]
@@ -776,12 +769,13 @@ dependencies = [
 [[package]]
 name = "codec_sv2"
 version = "4.0.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b49f810da79b58afa272d92de8fc2d660f2cff4ff59e79f3c79e93fc14eaa30"
 dependencies = [
  "binary_sv2 5.0.0",
- "buffer_sv2 2.0.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
+ "buffer_sv2",
  "framing_sv2 6.0.0",
- "noise_sv2 1.4.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
+ "noise_sv2",
  "rand",
  "tracing",
 ]
@@ -799,14 +793,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e6ec6ab527aeebf8ead273d6ab712ff181c050ee5e1082f3f6a2c65c0a10bf6"
 dependencies = [
  "binary_sv2 4.0.0",
-]
-
-[[package]]
-name = "common_messages_sv2"
-version = "6.0.2"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
-dependencies = [
- "binary_sv2 5.0.0",
 ]
 
 [[package]]
@@ -997,11 +983,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive_codec_sv2"
-version = "1.1.1"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
-
-[[package]]
 name = "digest"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1101,12 +1082,10 @@ dependencies = [
 [[package]]
 name = "extensions_sv2"
 version = "0.1.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52676d4f06dcff3e023691931244c6502adc100c2071fd55e05086f9a984613f"
 dependencies = [
  "binary_sv2 5.0.0",
- "codec_sv2 4.0.0",
- "framing_sv2 6.0.0",
- "mining_sv2 6.0.0",
 ]
 
 [[package]]
@@ -1149,18 +1128,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc6543955264144174b93780e0e76623ee4293037c9e180cfde3e2c155b59fa9"
 dependencies = [
  "binary_sv2 4.0.0",
- "buffer_sv2 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "noise_sv2 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "buffer_sv2",
+ "noise_sv2",
 ]
 
 [[package]]
 name = "framing_sv2"
 version = "6.0.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcb9bc71fc9a58bf9a204fb495e7df918be2ca90a63eb361d0c940a1ebc73ce4"
 dependencies = [
  "binary_sv2 5.0.0",
- "buffer_sv2 2.0.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
- "noise_sv2 1.4.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
+ "buffer_sv2",
+ "noise_sv2",
 ]
 
 [[package]]
@@ -1346,27 +1326,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "472824f98b68a963dbf4c77625a8b5525c322abe49afa9403dfb816e35dd4d93"
 dependencies = [
  "binary_sv2 4.0.0",
- "common_messages_sv2 6.0.1",
- "job_declaration_sv2 5.0.1",
+ "common_messages_sv2",
+ "job_declaration_sv2",
  "mining_sv2 5.0.1",
  "parsers_sv2 0.1.1",
- "template_distribution_sv2 4.0.1",
+ "template_distribution_sv2",
  "trait-variant",
 ]
 
 [[package]]
 name = "handlers_sv2"
 version = "0.2.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b73e08225626d04daa23a46fa9e072d962e0fbcfd1a0a75e31cfdd19e771c7ef"
 dependencies = [
  "binary_sv2 5.0.0",
- "common_messages_sv2 6.0.2",
+ "common_messages_sv2",
  "extensions_sv2",
  "framing_sv2 6.0.0",
- "job_declaration_sv2 5.0.2",
+ "job_declaration_sv2",
  "mining_sv2 6.0.0",
  "parsers_sv2 0.2.0",
- "template_distribution_sv2 4.0.2",
+ "template_distribution_sv2",
  "trait-variant",
 ]
 
@@ -1569,14 +1550,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "job_declaration_sv2"
-version = "5.0.2"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
-dependencies = [
- "binary_sv2 5.0.0",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1684,14 +1657,14 @@ dependencies = [
  "binary_sv2 4.0.0",
  "clap",
  "codec_sv2 3.0.1",
- "common_messages_sv2 6.0.1",
+ "common_messages_sv2",
  "criterion",
  "framing_sv2 5.0.1",
  "futures",
  "half",
  "mining_sv2 5.0.1",
  "network_helpers_sv2",
- "noise_sv2 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "noise_sv2",
  "num-format",
  "num_cpus",
  "parsers_sv2 0.1.1",
@@ -1717,7 +1690,8 @@ dependencies = [
 [[package]]
 name = "mining_sv2"
 version = "6.0.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e59f7d006e171860993d1e964910560e6c7fe7e7f0faa3b07cfdefcb3e330d"
 dependencies = [
  "binary_sv2 5.0.0",
 ]
@@ -1771,19 +1745,6 @@ checksum = "30964f9fbc4572bb5a1b0046176331d20e9ce6de0ca18afc3cfd42c6e91a94aa"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",
- "rand",
- "rand_chacha",
- "secp256k1 0.28.2",
-]
-
-[[package]]
-name = "noise_sv2"
-version = "1.4.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
-dependencies = [
- "aes-gcm",
- "chacha20poly1305",
- "generic-array",
  "rand",
  "rand_chacha",
  "secp256k1 0.28.2",
@@ -1935,25 +1896,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "109e80bc77241a729f61cad15f3f246f3de12e1b741b31e419fc7e02f20c2ccb"
 dependencies = [
  "binary_sv2 4.0.0",
- "common_messages_sv2 6.0.1",
+ "common_messages_sv2",
  "framing_sv2 5.0.1",
- "job_declaration_sv2 5.0.1",
+ "job_declaration_sv2",
  "mining_sv2 5.0.1",
- "template_distribution_sv2 4.0.1",
+ "template_distribution_sv2",
 ]
 
 [[package]]
 name = "parsers_sv2"
 version = "0.2.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7b1e117075e18644dbf72fbaf7a668c2997fb35676fbe5923409aaf2216d021"
 dependencies = [
  "binary_sv2 5.0.0",
- "common_messages_sv2 6.0.2",
+ "common_messages_sv2",
  "extensions_sv2",
  "framing_sv2 6.0.0",
- "job_declaration_sv2 5.0.2",
+ "job_declaration_sv2",
  "mining_sv2 6.0.0",
- "template_distribution_sv2 4.0.2",
+ "template_distribution_sv2",
 ]
 
 [[package]]
@@ -2213,15 +2175,15 @@ dependencies = [
  "chacha20poly1305",
  "channels_sv2 1.0.2",
  "codec_sv2 3.0.1",
- "common_messages_sv2 6.0.1",
+ "common_messages_sv2",
  "handlers_sv2 0.1.0",
  "hex-conservative 0.3.1",
- "job_declaration_sv2 5.0.1",
+ "job_declaration_sv2",
  "mining_sv2 5.0.1",
  "nohash-hasher",
  "parsers_sv2 0.1.1",
  "primitive-types",
- "template_distribution_sv2 4.0.1",
+ "template_distribution_sv2",
  "tracing",
 ]
 
@@ -2550,30 +2512,32 @@ dependencies = [
 [[package]]
 name = "stratum-core"
 version = "0.1.0"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "076131541157a4992aafb852a166008c234c3d7e0bd5c78bdb77fcbf4500ae71"
 dependencies = [
  "binary_sv2 5.0.0",
  "bitcoin",
- "buffer_sv2 2.0.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
+ "buffer_sv2",
  "channels_sv2 2.0.0",
  "codec_sv2 4.0.0",
- "common_messages_sv2 6.0.2",
+ "common_messages_sv2",
  "extensions_sv2",
  "framing_sv2 6.0.0",
  "handlers_sv2 0.2.0",
- "job_declaration_sv2 5.0.2",
+ "job_declaration_sv2",
  "mining_sv2 6.0.0",
- "noise_sv2 1.4.0 (git+https://github.com/stratum-mining/stratum?branch=main)",
+ "noise_sv2",
  "parsers_sv2 0.2.0",
  "stratum_translation",
  "sv1_api",
- "template_distribution_sv2 4.0.2",
+ "template_distribution_sv2",
 ]
 
 [[package]]
 name = "stratum_translation"
 version = "0.1.1"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7d05debd0b15568099ede88cb8d10f0d46d25faa9fadcee24fa8621f0517a43"
 dependencies = [
  "binary_sv2 5.0.0",
  "bitcoin",
@@ -2598,7 +2562,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sv1_api"
 version = "2.1.2"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4577019ccaeb5752a43361d76ce475bc396b830b56373f9cc00e1500b001214a"
 dependencies = [
  "binary_sv2 5.0.0",
  "bitcoin_hashes 0.3.2",
@@ -2644,14 +2609,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6298fc9f339b1c3b654ef3590857d5d3eff6d709891f003b7f7a701b8a64a3a4"
 dependencies = [
  "binary_sv2 4.0.0",
-]
-
-[[package]]
-name = "template_distribution_sv2"
-version = "4.0.2"
-source = "git+https://github.com/stratum-mining/stratum?branch=main#d2047ccee0d8237b9a83c99ce33e6a36e460329f"
-dependencies = [
- "binary_sv2 5.0.0",
 ]
 
 [[package]]
