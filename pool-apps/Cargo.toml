@@ -2,8 +2,11 @@
 resolver="2"
 
 members = [
-    "pool",
-    "jd-server",
+    "pool"
+]
+
+exclude = [
+    "jd-server"
 ]
 
 [profile.dev]

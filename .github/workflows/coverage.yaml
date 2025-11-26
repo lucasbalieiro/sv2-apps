@@ -39,12 +39,21 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
-      - name: Upload pool apps coverage to codecov.io
+      - name: Upload pool coverage to codecov.io
         uses: codecov/codecov-action@v4
         with:
-          directory: ./pool-apps/target/tarpaulin-reports/pool-apps-coverage
-          file: ./pool-apps/target/tarpaulin-reports/pool-apps-coverage/cobertura.xml
-          flags: pool_apps
+          directory: ./pool-apps/pool/target/tarpaulin-reports/pool-coverage
+          file: ./pool-apps/pool/target/tarpaulin-reports/pool-coverage/cobertura.xml
+          flags: pool
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
+      - name: Upload jd-server coverage to codecov.io
+        uses: codecov/codecov-action@v4
+        with:
+          directory: ./pool-apps/jd-server/target/tarpaulin-reports/jd-server-coverage
+          file: ./pool-apps/jd-server/target/tarpaulin-reports/jd-server-coverage/cobertura.xml
+          flags: jd_server
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
@@ -57,12 +66,23 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
+      - name: Upload mining-device coverage to codecov.io
+        uses: codecov/codecov-action@v4
+        with:
+          directory: ./miner-apps/mining-device/target/tarpaulin-reports/mining-device-coverage
+          file: ./miner-apps/mining-device/target/tarpaulin-reports/mining-device-coverage/cobertura.xml
+          flags: mining_device
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
       - name: Archive coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
           path: |
             stratum-apps/target/tarpaulin-reports/
-            pool-apps/target/tarpaulin-reports/
+            pool-apps/pool/target/tarpaulin-reports/
+            pool-apps/jd-server/target/tarpaulin-reports/
             miner-apps/target/tarpaulin-reports/
+            miner-apps/mining-device/target/tarpaulin-reports/
         if: always()
