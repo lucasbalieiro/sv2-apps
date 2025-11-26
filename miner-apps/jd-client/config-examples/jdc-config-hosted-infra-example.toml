@@ -14,23 +14,16 @@ cert_validity_sec = 3600
 # User identity/username for pool connection
 user_identity = "your_username_here"
 
-# target number of shares per minute applied to every downstream channel
+# How many shares we expect to receive in a minute (determines difficulty targets)
 shares_per_minute = 6.0
 
-# Share batch size
+# How many shares do we want to acknowledge in a batch
 share_batch_size = 10
 
 # JDC supports two modes:
 # "FULLTEMPLATE"  - full template mining
 # "COINBASEONLY" - coinbase-only mining
 mode = "FULLTEMPLATE"
-
-# Template Provider config
-# Local TP (this is pointing to localhost so you must run a TP locally for this configuration to work)
-# tp_address = "127.0.0.1:8442"
-# Hosted testnet TP 
-tp_address = "75.119.150.111:8442"
-tp_authority_public_key = "9bwHCYnjhbHm4AS3pWg9MtAH83mzWohoJJJDELYBqZhDNqszDLc"
 
 # string to be added into the Coinbase scriptSig
 jdc_signature = "Sv2MinerSignature"
@@ -78,3 +71,8 @@ jds_port = "34264"
 # pool_port = "34254"
 # jds_address = "127.0.0.1:34264"
 # jds_port = "34264"
+
+# Hosted Sv2 Template Provider config
+[template_provider_type.Sv2Tp]
+address = "75.119.150.111:8442"
+public_key = "9bwHCYnjhbHm4AS3pWg9MtAH83mzWohoJJJDELYBqZhDNqszDLc"

@@ -17,6 +17,9 @@ jobs:
       - uses: Swatinem/rust-cache@v1.2.0
       - uses: dtolnay/rust-toolchain@1.85
 
+      - name: Install capnp dependencies
+        run: sudo apt-get install -y capnproto libcapnp-dev
+
       - name: Build stratum-apps workspace
         run: cargo build --manifest-path=stratum-apps/Cargo.toml --all-features
 
@@ -34,6 +37,9 @@ jobs:
 
       - name: Build integration tests workspace
         run: cargo build --manifest-path=integration-tests/Cargo.toml
+
+      - name: Build bitcoin-core-sv2 crate
+        run: cargo build --manifest-path=bitcoin-core-sv2/Cargo.toml
 
       # Also check test compilation without running tests
       - name: Check test compilation for stratum-apps workspace
@@ -53,3 +59,6 @@ jobs:
 
       - name: Check test compilation for integration tests workspace
         run: cargo test --manifest-path=integration-tests/Cargo.toml --no-run
+
+      - name: Check test compilation for bitcoin-core-sv2 crate
+        run: cargo test --manifest-path=bitcoin-core-sv2/Cargo.toml --no-run
