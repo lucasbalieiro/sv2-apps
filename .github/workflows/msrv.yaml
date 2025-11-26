@@ -20,11 +20,17 @@ jobs:
       - name: Build stratum-apps workspace
         run: cargo build --manifest-path=stratum-apps/Cargo.toml --all-features
 
-      - name: Build pool applications workspace
+      - name: Build pool
         run: cargo build --manifest-path=pool-apps/Cargo.toml
+
+      - name: Build jd-server (separate workspace)
+        run: cargo build --manifest-path=pool-apps/jd-server/Cargo.toml
 
       - name: Build miner applications workspace
         run: cargo build --manifest-path=miner-apps/Cargo.toml
+
+      - name: Build mining-device (separate workspace)
+        run: cargo build --manifest-path=miner-apps/mining-device/Cargo.toml
 
       - name: Build integration tests workspace
         run: cargo build --manifest-path=integration-tests/Cargo.toml
@@ -33,11 +39,17 @@ jobs:
       - name: Check test compilation for stratum-apps workspace
         run: cargo test --manifest-path=stratum-apps/Cargo.toml --all-features --no-run
 
-      - name: Check test compilation for pool applications workspace
+      - name: Check test compilation for pool
         run: cargo test --manifest-path=pool-apps/Cargo.toml --no-run
+
+      - name: Check test compilation for jd-server
+        run: cargo test --manifest-path=pool-apps/jd-server/Cargo.toml --no-run
 
       - name: Check test compilation for miner applications workspace
         run: cargo test --manifest-path=miner-apps/Cargo.toml --no-run
+
+      - name: Check test compilation for mining-device
+        run: cargo test --manifest-path=miner-apps/mining-device/Cargo.toml --no-run
 
       - name: Check test compilation for integration tests workspace
         run: cargo test --manifest-path=integration-tests/Cargo.toml --no-run

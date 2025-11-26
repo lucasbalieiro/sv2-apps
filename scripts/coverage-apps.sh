@@ -30,18 +30,32 @@ cd stratum-apps || exit 1
 tarpaulin "stratum-apps"
 cd - > /dev/null || exit 1
 
-# Pool Apps Coverage (includes pool and jd-server)
+# Pool Coverage
 echo ""
-echo "Running coverage for pool-apps workspace..."
-cd pool-apps || exit 1
-tarpaulin "pool-apps"
+echo "Running coverage for pool..."
+cd pool-apps/pool || exit 1
+tarpaulin "pool"
 cd - > /dev/null || exit 1
 
-# Miner Apps Coverage (includes jd-client, translator, and test-utils)
+# JD Server Coverage (separate workspace from pool)
+echo ""
+echo "Running coverage for jd-server..."
+cd pool-apps/jd-server || exit 1
+tarpaulin "jd-server"
+cd - > /dev/null || exit 1
+
+# Miner Apps Coverage (includes jd-client and translator)
 echo ""
 echo "Running coverage for miner-apps workspace..."
 cd miner-apps || exit 1
 tarpaulin "miner-apps"
+cd - > /dev/null || exit 1
+
+# Mining Device Coverage (separate workspace from miner-apps)
+echo ""
+echo "Running coverage for mining-device..."
+cd miner-apps/mining-device || exit 1
+tarpaulin "mining-device"
 cd - > /dev/null || exit 1
 
 echo ""
@@ -49,6 +63,8 @@ echo "✅ Coverage analysis completed for all available workspaces."
 echo ""
 echo "Reports generated:"
 echo "  - stratum-apps/target/tarpaulin-reports/stratum-apps-coverage/"
-echo "  - pool-apps/target/tarpaulin-reports/pool-apps-coverage/"
+echo "  - pool-apps/pool/target/tarpaulin-reports/pool-coverage/"
+echo "  - pool-apps/jd-server/target/tarpaulin-reports/jd-server-coverage/"
 echo "  - miner-apps/target/tarpaulin-reports/miner-apps-coverage/"
+echo "  - miner-apps/mining-device/target/tarpaulin-reports/mining-device-coverage/"
 echo "  - integration-tests/target/tarpaulin-reports/integration-tests-coverage/"
