@@ -11,8 +11,8 @@
 //!
 //! Also defines a helper struct [`CoreRpc`] to group RPC parameters.
 
-use config_helpers_sv2::CoinbaseRewardScript;
-use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
+pub use config_helpers_sv2::CoinbaseRewardScript;
+pub use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},

@@ -2,7 +2,15 @@ use crate::{sniffer::*, sv1_minerd::MinerdProcess, template_provider::*};
 use corepc_node::{ConnectParams, CookieValues};
 use interceptor::InterceptAction;
 use jd_client_sv2::JobDeclaratorClient;
-use jd_server::JobDeclaratorServer;
+use jd_server::{
+    config::{
+        CoinbaseRewardScript as JdServerCoinbaseRewardScript,
+        Secp256k1PublicKey as JdServerSecp256k1PublicKey,
+        Secp256k1SecretKey as JdServerSecp256k1SecretKey,
+    },
+    JobDeclaratorServer,
+};
+use mining_device::Secp256k1PublicKey as MiningDeviceSecp256k1PublicKey;
 use once_cell::sync::OnceCell;
 use pool_sv2::PoolSv2;
 use std::{
@@ -206,17 +214,17 @@ pub fn start_jdc(
 
 pub fn start_jds(tp_rpc_connection: &ConnectParams) -> (JobDeclaratorServer, SocketAddr) {
     use jd_server::config::{CoreRpc, JobDeclaratorServerConfig};
-    let authority_public_key = Secp256k1PublicKey::try_from(
+    let authority_public_key = JdServerSecp256k1PublicKey::try_from(
         "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
     )
     .unwrap();
-    let authority_secret_key = Secp256k1SecretKey::try_from(
+    let authority_secret_key = JdServerSecp256k1SecretKey::try_from(
         "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n".to_string(),
     )
     .unwrap();
     let listen_jd_address = get_available_address();
     let cert_validity_sec = 3600;
-    let coinbase_reward_script = CoinbaseRewardScript::from_descriptor(
+    let coinbase_reward_script = JdServerCoinbaseRewardScript::from_descriptor(
         "wpkh(036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075)",
     )
     .unwrap();
@@ -330,7 +338,7 @@ pub async fn start_minerd(
 
 pub fn start_mining_device_sv2(
     upstream: SocketAddr,
-    pub_key: Option<Secp256k1PublicKey>,
+    pub_key: Option<MiningDeviceSecp256k1PublicKey>,
     device_id: Option<String>,
     user_id: Option<String>,
     handicap: u32,

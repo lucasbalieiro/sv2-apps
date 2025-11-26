@@ -1,6 +1,6 @@
 #![allow(clippy::option_map_unit_fn)]
 use async_channel::{Receiver, Sender};
-use key_utils::Secp256k1PublicKey;
+pub use key_utils::Secp256k1PublicKey;
 use num_format::{Locale, ToFormattedString};
 use primitive_types::U256;
 use rand::{thread_rng, Rng};
