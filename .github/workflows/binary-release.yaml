@@ -44,6 +44,7 @@ jobs:
             ~/.cargo/git
             miner-apps/target
             pool-apps/target
+            pool-apps/jd-server/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -98,7 +99,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           mkdir -p pool-apps-release/jd-server pool-apps-release/pool
-          cp pool-apps/target/${{ matrix.target }}/release/jd_server pool-apps-release/jd-server/
+          cp pool-apps/jd-server/target/${{ matrix.target }}/release/jd_server pool-apps-release/jd-server/
           cp pool-apps/target/${{ matrix.target }}/release/pool_sv2 pool-apps-release/pool/
           cp -r pool-apps/jd-server/config-examples pool-apps-release/jd-server/
           cp -r pool-apps/pool/config-examples pool-apps-release/pool/
@@ -118,7 +119,7 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: |
           mkdir -p pool-apps-release/jd-server pool-apps-release/pool
-          cp pool-apps/target/release/jd_server pool-apps-release/jd-server/
+          cp pool-apps/jd-server/target/release/jd_server pool-apps-release/jd-server/
           cp pool-apps/target/release/pool_sv2 pool-apps-release/pool/
           cp -r pool-apps/jd-server/config-examples pool-apps-release/jd-server/
           cp -r pool-apps/pool/config-examples pool-apps-release/pool/
