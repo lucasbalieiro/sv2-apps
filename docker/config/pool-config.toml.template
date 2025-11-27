@@ -8,13 +8,13 @@ listen_address = "0.0.0.0:34254"
 #     https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki#appendix-b-index-of-script-expressions
 # Although the `musig` descriptor is not yet supported and the legacy `combo` descriptor never
 # will be. If you have an address, embed it in a descriptor like `addr(<address here>)`.
-coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+coinbase_reward_script = "${POOL_COINBASE_REWARD_SCRIPT}"
 
 # Server Id (number to guarantee unique search space allocation across different Pool servers)
 server_id = 1
 
 # Pool signature (string to be included in coinbase tx)
-pool_signature = "Stratum V2 SRI Pool"
+pool_signature = "${POOL_SIGNATURE}"
 
 # Enable this option to set a predefined log file path.
 # When enabled, logs will always be written to this file.
@@ -22,9 +22,9 @@ pool_signature = "Stratum V2 SRI Pool"
 # log_file = "./pool.log"
 
 # How many shares we expect to receive in a minute (determines difficulty targets)
-shares_per_minute = 6.0
+shares_per_minute = ${POOL_SHARES_PER_MINUTE}
 # How many shares do we want to acknowledge in a batch
-share_batch_size = 10
+share_batch_size = ${POOL_SHARE_BATCH_SIZE}
 
 # Protocol Extensions Configuration
 # Extensions that the pool supports (will accept if requested by clients)
@@ -40,7 +40,8 @@ required_extensions = [
     # 0x0002,
 ]
 
-# Hosted Sv2 Template Provider config
-[template_provider_type.Sv2Tp]
-address = "75.119.150.111:8442"
-public_key = "9bwHCYnjhbHm4AS3pWg9MtAH83mzWohoJJJDELYBqZhDNqszDLc"
+# Bitcoin Core IPC config
+[template_provider_type.BitcoinCoreIpc]
+unix_socket_path = "/app/node.sock"
+fee_threshold = ${POOL_FEE_THRESHOLD}
+min_interval = ${POOL_MIN_INTERVAL}
