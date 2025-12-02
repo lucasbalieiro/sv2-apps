@@ -155,6 +155,8 @@ Keep the `docker_env` in the same directory as `docker-compose.yml`.
 ## Notes
 
 * Double-check file permissions if the Bitcoin socket fails to mount.
+* Make sure the machine running the applications has its clock synced with an NTP server. Certificate validation is time-sensitive, and even a small drift of a few seconds can trigger an `InvalidCertificate` error.
+
 
 ## Docker Image Tags
 
