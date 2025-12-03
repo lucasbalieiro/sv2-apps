@@ -61,9 +61,9 @@ required_extensions = [
 [[upstreams]]
 authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
 pool_address = "75.119.150.111"
-pool_port = 3335
+pool_port = 43333
 jds_address = "75.119.150.111"
-jds_port = 3336
+jds_port = 43334
  
 # [[upstreams]]
 # authority_pubkey = "2di19GHYQnAZJmEpoUeP7C3Eg9TCcksHr23rZCC83dvUiZgiDL"
