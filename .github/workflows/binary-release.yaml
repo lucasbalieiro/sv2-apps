@@ -91,8 +91,8 @@ jobs:
           mkdir -p miner-apps-release/jd-client miner-apps-release/translator
           cp miner-apps/target/${{ matrix.target }}/release/jd_client_sv2 miner-apps-release/jd-client/
           cp miner-apps/target/${{ matrix.target }}/release/translator_sv2 miner-apps-release/translator/
-          cp -r miner-apps/jd-client/config-examples miner-apps-release/jd-client/
-          cp -r miner-apps/translator/config-examples miner-apps-release/translator/
+          cp -r miner-apps/jd-client/config-examples/mainnet/jdc-config-bitcoin-core-ipc-local-infra-example.toml miner-apps-release/jd-client/jdc-config.toml
+          cp -r miner-apps/translator/config-examples/mainnet/tproxy-config-local-jdc-example.toml miner-apps-release/translator/translator-config.toml
           tar -czvf miner-apps-${{ matrix.target }}.tar.gz -C miner-apps-release .
 
       - name: Package Pool Apps (Linux)
@@ -101,8 +101,8 @@ jobs:
           mkdir -p pool-apps-release/jd-server pool-apps-release/pool
           cp pool-apps/jd-server/target/${{ matrix.target }}/release/jd_server pool-apps-release/jd-server/
           cp pool-apps/target/${{ matrix.target }}/release/pool_sv2 pool-apps-release/pool/
-          cp -r pool-apps/jd-server/config-examples pool-apps-release/jd-server/
-          cp -r pool-apps/pool/config-examples pool-apps-release/pool/
+          cp -r pool-apps/jd-server/config-examples/mainnet/jds-config-local-example.toml pool-apps-release/jd-server/jds-config.toml
+          cp -r pool-apps/pool/config-examples/mainnet/pool-config-bitcoin-core-ipc-example.toml pool-apps-release/pool/pool-config.toml
           tar -czvf pool-apps-${{ matrix.target }}.tar.gz -C pool-apps-release .
 
       - name: Package Miner Apps (macOS)
@@ -111,8 +111,9 @@ jobs:
           mkdir -p miner-apps-release/jd-client miner-apps-release/translator
           cp miner-apps/target/release/jd_client_sv2 miner-apps-release/jd-client/
           cp miner-apps/target/release/translator_sv2 miner-apps-release/translator/
-          cp -r miner-apps/jd-client/config-examples miner-apps-release/jd-client/
-          cp -r miner-apps/translator/config-examples miner-apps-release/translator/
+          cp -r miner-apps/jd-client/config-examples/mainnet/jdc-config-bitcoin-core-ipc-local-infra-example.toml miner-apps-release/jd-client/jdc-config.toml
+          cp -r miner-apps/translator/config-examples/mainnet/tproxy-config-local-jdc-example.toml miner-apps-release/translator/translator-config.toml
+
           tar -czvf miner-apps-${{ matrix.target }}.tar.gz -C miner-apps-release .
 
       - name: Package Pool Apps (macOS)
@@ -121,8 +122,8 @@ jobs:
           mkdir -p pool-apps-release/jd-server pool-apps-release/pool
           cp pool-apps/jd-server/target/release/jd_server pool-apps-release/jd-server/
           cp pool-apps/target/release/pool_sv2 pool-apps-release/pool/
-          cp -r pool-apps/jd-server/config-examples pool-apps-release/jd-server/
-          cp -r pool-apps/pool/config-examples pool-apps-release/pool/
+          cp -r pool-apps/jd-server/config-examples/mainnet/jds-config-local-example.toml pool-apps-release/jd-server/jds-config.toml
+          cp -r pool-apps/pool/config-examples/mainnet/pool-config-bitcoin-core-ipc-example.toml pool-apps-release/pool/pool-config.toml
           tar -czvf pool-apps-${{ matrix.target }}.tar.gz -C pool-apps-release .
 
       - name: Upload Miner Apps Asset
