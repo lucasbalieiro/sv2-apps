@@ -418,14 +418,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         }
 
                         let future_standard_job_id = standard_channel
-                            .get_future_template_to_job_id()
-                            .get(&last_future_template.template_id)
-                            .cloned()
+                            .get_future_job_id_from_template_id(last_future_template.template_id)
                             .expect("future job id must exist");
 
                         let future_standard_job = standard_channel
-                            .get_future_jobs()
-                            .get(&future_standard_job_id)
+                            .get_future_job(future_standard_job_id)
                             .expect("future job must exist");
 
                         let future_standard_job_message =
@@ -647,13 +644,10 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         }
 
                         let future_extended_job_id = extended_channel
-                            .get_future_template_to_job_id()
-                            .get(&last_future_template.template_id)
-                            .cloned()
+                            .get_future_job_id_from_template_id(last_future_template.template_id)
                             .expect("future job id must exist");
                         let future_extended_job = extended_channel
-                            .get_future_jobs()
-                            .get(&future_extended_job_id)
+                            .get_future_job(future_extended_job_id)
                             .expect("future job must exist");
 
                         let future_extended_job_message =
