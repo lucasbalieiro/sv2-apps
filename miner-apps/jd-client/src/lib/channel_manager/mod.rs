@@ -106,7 +106,7 @@ pub struct DeclaredJob {
 pub struct ChannelManagerData {
     // Mapping of `downstream_id` → `Downstream` object,
     // used by the channel manager to locate and interact with downstream clients.
-    downstream: HashMap<DownstreamId, Downstream>,
+    pub downstream: HashMap<DownstreamId, Downstream>,
     // Extranonce prefix factory for **extended downstream channels**.
     // Each new extended downstream receives a unique extranonce prefix.
     extranonce_prefix_factory_extended: ExtendedExtranonce,
@@ -140,7 +140,7 @@ pub struct ChannelManagerData {
     // The coinbase outputs currently in use.
     coinbase_outputs: Vec<u8>,
     // The active upstream extended channel (client-side instance), if any.
-    upstream_channel: Option<ExtendedChannel<'static>>,
+    pub upstream_channel: Option<ExtendedChannel<'static>>,
     // Optional "pool tag" string, identifying the pool.
     pool_tag_string: Option<String>,
     // List of pending downstream connection requests,
@@ -241,7 +241,7 @@ pub struct ChannelManagerChannel {
 /// to perform message traversal.
 #[derive(Clone)]
 pub struct ChannelManager {
-    channel_manager_data: Arc<Mutex<ChannelManagerData>>,
+    pub channel_manager_data: Arc<Mutex<ChannelManagerData>>,
     channel_manager_channel: ChannelManagerChannel,
     miner_tag_string: String,
     share_batch_size: SharesBatchSize,

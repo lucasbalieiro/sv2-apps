@@ -34,6 +34,7 @@ pub mod error;
 mod io_task;
 pub mod jd_mode;
 mod job_declarator;
+pub mod monitoring;
 mod status;
 mod template_receiver;
 mod upstream;
@@ -114,7 +115,10 @@ impl JobDeclaratorClient {
 
         // Start monitoring server if configured
         if let Some(monitoring_addr) = self.config.monitoring_address() {
-            info!("Initializing monitoring server on {}", monitoring_addr);
+            info!(
+                "Initializing monitoring server on http://{}",
+                monitoring_addr
+            );
 
             let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
                 monitoring_addr,
