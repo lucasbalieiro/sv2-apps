@@ -3094,6 +3094,7 @@ dependencies = [
  "async-channel",
  "clap",
  "config",
+ "hex",
  "hotpath",
  "serde",
  "serde_json",
