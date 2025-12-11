@@ -13,7 +13,10 @@ use stratum_apps::{
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
-        bitcoin::Target,
+        bitcoin::{
+            absolute::LockTime, transaction::Version, OutPoint, ScriptBuf, Sequence, Target,
+            Transaction, TxIn, TxOut, Witness,
+        },
         channels_sv2::{
             client::extended::ExtendedChannel,
             server::{
@@ -40,7 +43,9 @@ use stratum_apps::{
         },
         noise_sv2::Responder,
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
-        template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
+        template_distribution_sv2::{
+            CoinbaseOutputConstraints, NewTemplate, SetNewPrevHash as SetNewPrevHashTdp,
+        },
     },
     task_manager::TaskManager,
     utils::{
@@ -470,9 +475,16 @@ impl ChannelManager {
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
+        coinbase_outputs: Vec<TxOut>,
     ) {
         let status_sender = StatusSender::ChannelManager(status_sender);
         let mut shutdown_rx = notify_shutdown.subscribe();
+
+        if let Err(e) = self.coinbase_output_constraints(coinbase_outputs).await {
+            error!(error = ?e, "Failed to send CoinbaseOutputConstraints message to TP");
+            handle_error(&status_sender, e).await;
+            return;
+        }
 
         task_manager.spawn(async move {
             let cm = self.clone();
@@ -1063,6 +1075,63 @@ impl ChannelManager {
         }
 
         info!("Vardiff update cycle complete");
+        Ok(())
+    }
+
+    /// Sends a CoinbaseOutputConstraints message to the template provider.
+    ///
+    /// # Purpose
+    /// - Calculates the max coinbase output size and sigops for the coinbase outputs.
+    /// - Sends the CoinbaseOutputConstraints message to the template provider.
+    ///
+    /// # Parameters
+    /// - `coinbase_outputs`: The coinbase outputs to calculate the max coinbase output size and
+    ///   sigops for.
+    pub async fn coinbase_output_constraints(
+        &self,
+        coinbase_outputs: Vec<TxOut>,
+    ) -> Result<(), JDCError> {
+        // calculate the max coinbase output size for CoinbaseOutputConstraints
+        let max_size: u32 = coinbase_outputs.iter().map(|o| o.size() as u32).sum();
+        tracing::debug!(
+            max_size,
+            outputs_count = coinbase_outputs.len(),
+            "Calculated max coinbase output size"
+        );
+
+        // this is used to calculate the sigops of the coinbase outputs
+        // for CoinbaseOutputConstraints
+        let dummy_coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::from(vec![vec![0; 32]]),
+            }],
+            output: coinbase_outputs,
+        };
+
+        let max_sigops = dummy_coinbase.total_sigop_cost(|_| None) as u16;
+        tracing::debug!(max_sigops, "Calculated max sigops for coinbase");
+
+        let coinbase_output_constraints = CoinbaseOutputConstraints {
+            coinbase_output_max_additional_size: max_size,
+            coinbase_output_max_additional_sigops: max_sigops,
+        };
+
+        self.channel_manager_channel
+            .tp_sender
+            .send(TemplateDistribution::CoinbaseOutputConstraints(
+                coinbase_output_constraints,
+            ))
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "Failed to send CoinbaseOutputConstraints message to TP");
+                JDCError::ChannelErrorSender
+            })?;
+
         Ok(())
     }
 }

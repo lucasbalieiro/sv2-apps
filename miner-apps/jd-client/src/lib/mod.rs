@@ -200,6 +200,7 @@ impl JobDeclaratorClient {
                 notify_shutdown.clone(),
                 status_sender.clone(),
                 task_manager.clone(),
+                miner_coinbase_outputs.clone(),
             )
             .await;
 
