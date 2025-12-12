@@ -18,7 +18,7 @@ async fn success_pool_template_provider_connection() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let (sniffer, sniffer_addr) = start_sniffer("", tp_addr, true, vec![], None);
-    let _ = start_pool(Some(sniffer_addr), vec![], vec![]).await;
+    let _ = start_pool(sv2_tp_config(sniffer_addr), vec![], vec![]).await;
     // here we assert that the downstream(pool in this case) have sent `SetupConnection` message
     // with the correct parameters, protocol, flags, min_version and max_version.  Note that the
     // macro can take any number of arguments after the message argument, but the order is
@@ -95,7 +95,7 @@ async fn header_timestamp_value_assertion_in_new_extended_mining_job() {
         "header_timestamp_value_assertion_in_new_extended_mining_job tp_pool sniffer";
     let (tp_pool_sniffer, tp_pool_sniffer_addr) =
         start_sniffer(tp_pool_sniffer_identifier, tp_addr, false, vec![], None);
-    let (_pool, pool_addr) = start_pool(Some(tp_pool_sniffer_addr), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_pool_sniffer_addr), vec![], vec![]).await;
     let pool_translator_sniffer_identifier =
         "header_timestamp_value_assertion_in_new_extended_mining_job pool_translator sniffer";
     let (pool_translator_sniffer, pool_translator_sniffer_addr) = start_sniffer(
@@ -177,7 +177,7 @@ async fn header_timestamp_value_assertion_in_new_extended_mining_job() {
 async fn pool_standard_channel_receives_share() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool, pool_addr) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (sniffer, sniffer_addr) = start_sniffer("A", pool_addr, false, vec![], None);
     start_mining_device_sv2(sniffer_addr, None, None, None, 1, None, true);
     sniffer
@@ -233,13 +233,13 @@ async fn pool_does_not_send_jobs_to_jdc() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (_pool, pool_addr) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (pool_jdc_sniffer, pool_jdc_sniffer_addr) =
         start_sniffer("pool_jdc", pool_addr, false, vec![], None);
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (_jdc, jdc_addr) = start_jdc(
         &[(pool_jdc_sniffer_addr, jds_addr)],
-        tp_addr,
+        sv2_tp_config(tp_addr),
         vec![],
         vec![],
     );

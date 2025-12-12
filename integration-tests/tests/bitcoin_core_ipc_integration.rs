@@ -12,7 +12,7 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
     let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
     let ipc_socket_path = bitcoin_core.ipc_socket_path().clone();
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
-    let (_pool, pool_addr) = start_pool_ipc(ipc_socket_path, vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(ipc_config(ipc_socket_path), vec![], vec![]).await;
     let (_translator, tproxy_addr) =
         start_sv2_translator(&[pool_addr], false, vec![], vec![]).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
@@ -41,7 +41,7 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let ipc_socket_path = tp.ipc_socket_path().clone();
     let current_block_hash = tp.get_best_block_hash().unwrap();
-    let (_pool, pool_addr) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let ignore_push_solution =
         IgnoreMessage::new(MessageDirection::ToUpstream, MESSAGE_TYPE_PUSH_SOLUTION);
@@ -52,9 +52,9 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
         vec![ignore_push_solution.into()],
         None,
     );
-    let (_jdc, jdc_addr) = start_jdc_ipc(
+    let (_jdc, jdc_addr) = start_jdc(
         &[(pool_addr, sniffer_addr)],
-        ipc_socket_path,
+        ipc_config(ipc_socket_path),
         vec![],
         vec![],
     );

@@ -19,10 +19,15 @@ use stratum_apps::stratum_core::{
 async fn jds_should_not_panic_if_jdc_shutsdown() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool, pool_addr) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (sniffer_a, sniffer_addr_a) = start_sniffer("0", jds_addr, false, vec![], None);
-    let (jdc, jdc_addr) = start_jdc(&[(pool_addr, sniffer_addr_a)], tp_addr, vec![], vec![]);
+    let (jdc, jdc_addr) = start_jdc(
+        &[(pool_addr, sniffer_addr_a)],
+        sv2_tp_config(tp_addr),
+        vec![],
+        vec![],
+    );
     sniffer_a
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
         .await;
@@ -36,7 +41,12 @@ async fn jds_should_not_panic_if_jdc_shutsdown() {
     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
     assert!(tokio::net::TcpListener::bind(jdc_addr).await.is_ok());
     let (sniffer, sniffer_addr) = start_sniffer("0", jds_addr, false, vec![], None);
-    let (_jdc_1, _jdc_addr_1) = start_jdc(&[(pool_addr, sniffer_addr)], tp_addr, vec![], vec![]);
+    let (_jdc_1, _jdc_addr_1) = start_jdc(
+        &[(pool_addr, sniffer_addr)],
+        sv2_tp_config(tp_addr),
+        vec![],
+        vec![],
+    );
     sniffer
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
         .await;
@@ -50,12 +60,12 @@ async fn jds_should_not_panic_if_jdc_shutsdown() {
 async fn jdc_tp_success_setup() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool, pool_addr) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (tp_jdc_sniffer, tp_jdc_sniffer_addr) = start_sniffer("0", tp_addr, false, vec![], None);
     let (_jdc, jdc_addr) = start_jdc(
         &[(pool_addr, jds_addr)],
-        tp_jdc_sniffer_addr,
+        sv2_tp_config(tp_jdc_sniffer_addr),
         vec![],
         vec![],
     );
@@ -83,7 +93,7 @@ async fn jds_receive_solution_while_processing_declared_job_test() {
     start_tracing();
     let (tp_1, tp_addr_1) = start_template_provider(None, DifficultyLevel::Low);
     let (tp_2, tp_addr_2) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool, pool_addr) = start_pool(Some(tp_addr_1), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr_1), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp_1.rpc_info());
 
     let prev_hash = U256::Owned(vec![
@@ -116,7 +126,12 @@ async fn jds_receive_solution_while_processing_declared_job_test() {
         vec![submit_solution_replace.into()],
         None,
     );
-    let (_jdc, jdc_addr) = start_jdc(&[(pool_addr, sniffer_a_addr)], tp_addr_2, vec![], vec![]);
+    let (_jdc, jdc_addr) = start_jdc(
+        &[(pool_addr, sniffer_a_addr)],
+        sv2_tp_config(tp_addr_2),
+        vec![],
+        vec![],
+    );
     let (_translator, tproxy_addr) = start_sv2_translator(&[jdc_addr], false, vec![], vec![]).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
     assert!(tp_2.fund_wallet().is_ok());
@@ -175,7 +190,7 @@ async fn jds_wont_exit_upon_receiving_unexpected_txids_in_provide_missing_transa
     assert!(tp_2.fund_wallet().is_ok());
     assert!(tp_2.create_mempool_transaction().is_ok());
 
-    let (_pool, pool_addr) = start_pool(Some(tp_addr_1), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr_1), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp_1.rpc_info());
 
     let provide_missing_transaction_success_replace = ReplaceMessage::new(
@@ -201,7 +216,12 @@ async fn jds_wont_exit_upon_receiving_unexpected_txids_in_provide_missing_transa
         None,
     );
 
-    let (_, jdc_addr_1) = start_jdc(&[(pool_addr, sniffer_addr)], tp_addr_2, vec![], vec![]);
+    let (_, jdc_addr_1) = start_jdc(
+        &[(pool_addr, sniffer_addr)],
+        sv2_tp_config(tp_addr_2),
+        vec![],
+        vec![],
+    );
     let (_translator, tproxy_addr) =
         start_sv2_translator(&[jdc_addr_1], false, vec![], vec![]).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;

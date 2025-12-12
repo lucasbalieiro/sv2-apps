@@ -1,6 +1,3 @@
-// pool_coinbase_output_key = wpkh(036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075)
-// jdc_coinbase_output_key = wpkh(02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc)
-
 use crate::{sniffer::*, sv1_minerd::MinerdProcess, template_provider::*};
 use corepc_node::{ConnectParams, CookieValues};
 use interceptor::InterceptAction;
@@ -44,7 +41,28 @@ pub(crate) mod utils;
 
 const SHARES_PER_MINUTE: f32 = 120.0;
 
+const POOL_COINBASE_REWARD_DESCRIPTOR: &str = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)";
+const JDS_COINBASE_REWARD_DESCRIPTOR: &str = POOL_COINBASE_REWARD_DESCRIPTOR;
+const JDC_COINBASE_REWARD_DESCRIPTOR: &str = "addr(tb1qpusf5256yxv50qt0pm0tue8k952fsu5lzsphft)";
+
 static LOGGER: OnceCell<()> = OnceCell::new();
+
+/// Helper to create Sv2Tp config for Pool/JDC with default public key.
+pub fn sv2_tp_config(address: SocketAddr) -> TemplateProviderType {
+    TemplateProviderType::Sv2Tp {
+        address: address.to_string(),
+        public_key: None,
+    }
+}
+
+/// Helper to create BitcoinCoreIpc config with default thresholds.
+pub fn ipc_config(socket_path: std::path::PathBuf) -> TemplateProviderType {
+    TemplateProviderType::BitcoinCoreIpc {
+        unix_socket_path: socket_path,
+        fee_threshold: 0,
+        min_interval: 1,
+    }
+}
 
 /// Each test function should call `start_tracing()` to enable logging.
 pub fn start_tracing() {
@@ -80,7 +98,7 @@ pub fn start_sniffer(
 }
 
 pub async fn start_pool(
-    template_provider_address: Option<SocketAddr>,
+    template_provider_config: TemplateProviderType,
     supported_extensions: Vec<u16>,
     required_extensions: Vec<u16>,
 ) -> (PoolSv2, SocketAddr) {
@@ -95,79 +113,14 @@ pub async fn start_pool(
     )
     .expect("failed");
     let cert_validity_sec = 3600;
-    let coinbase_reward_script = CoinbaseRewardScript::from_descriptor(
-        "wpkh(036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075)",
-    )
-    .unwrap();
-    let pool_signature = "Stratum V2 SRI Pool".to_string();
-    let tp_address = if let Some(tp_add) = template_provider_address {
-        tp_add.to_string()
-    } else {
-        "127.0.0.1:8442".to_string()
-    };
-    let connection_config = pool_sv2::config::ConnectionConfig::new(
-        listening_address,
-        cert_validity_sec,
-        pool_signature,
-    );
-    let template_provider_config = TemplateProviderType::Sv2Tp {
-        address: tp_address,
-        public_key: None,
-    };
-    let authority_config =
-        pool_sv2::config::AuthorityConfig::new(authority_public_key, authority_secret_key);
-    let share_batch_size = 1;
-    let config = PoolConfig::new(
-        connection_config,
-        template_provider_config,
-        authority_config,
-        coinbase_reward_script,
-        SHARES_PER_MINUTE,
-        share_batch_size,
-        1,
-        supported_extensions,
-        required_extensions,
-    );
-    let pool = PoolSv2::new(config);
-    let pool_clone = pool.clone();
-    tokio::spawn(async move {
-        _ = pool_clone.start().await;
-    });
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    (pool, listening_address)
-}
-
-pub async fn start_pool_ipc(
-    ipc_socket_path: std::path::PathBuf,
-    supported_extensions: Vec<u16>,
-    required_extensions: Vec<u16>,
-) -> (PoolSv2, SocketAddr) {
-    use pool_sv2::config::PoolConfig;
-    let listening_address = get_available_address();
-    let authority_public_key = Secp256k1PublicKey::try_from(
-        "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
-    )
-    .expect("failed");
-    let authority_secret_key = Secp256k1SecretKey::try_from(
-        "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n".to_string(),
-    )
-    .expect("failed");
-    let cert_validity_sec = 3600;
-    let coinbase_reward_script = CoinbaseRewardScript::from_descriptor(
-        "wpkh(036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075)",
-    )
-    .unwrap();
+    let coinbase_reward_script =
+        CoinbaseRewardScript::from_descriptor(POOL_COINBASE_REWARD_DESCRIPTOR).unwrap();
     let pool_signature = "Stratum V2 SRI Pool".to_string();
     let connection_config = pool_sv2::config::ConnectionConfig::new(
         listening_address,
         cert_validity_sec,
         pool_signature,
     );
-    let template_provider_config = TemplateProviderType::BitcoinCoreIpc {
-        unix_socket_path: ipc_socket_path,
-        fee_threshold: 0,
-        min_interval: 1,
-    };
     let authority_config =
         pool_sv2::config::AuthorityConfig::new(authority_public_key, authority_secret_key);
     let share_batch_size = 1;
@@ -211,7 +164,7 @@ pub fn start_bitcoin_core(difficulty_level: DifficultyLevel) -> BitcoinCore {
 
 pub fn start_jdc(
     pool: &[(SocketAddr, SocketAddr)], // (pool_address, jds_address)
-    tp_address: SocketAddr,
+    template_provider_config: TemplateProviderType,
     supported_extensions: Vec<u16>,
     required_extensions: Vec<u16>,
 ) -> (JobDeclaratorClient, SocketAddr) {
@@ -227,10 +180,8 @@ pub fn start_jdc(
         "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n".to_string(),
     )
     .unwrap();
-    let coinbase_reward_script = CoinbaseRewardScript::from_descriptor(
-        "wpkh(036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075)",
-    )
-    .unwrap();
+    let coinbase_reward_script =
+        CoinbaseRewardScript::from_descriptor(JDC_COINBASE_REWARD_DESCRIPTOR).unwrap();
     let authority_pubkey = Secp256k1PublicKey::try_from(
         "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
     )
@@ -248,10 +199,6 @@ pub fn start_jdc(
         })
         .collect();
     let pool_config = PoolConfig::new(authority_public_key, authority_secret_key);
-    let tp_config = TemplateProviderType::Sv2Tp {
-        address: tp_address.to_string(),
-        public_key: None,
-    };
     let protocol_config = ProtocolConfig::new(
         max_supported_version,
         min_supported_version,
@@ -269,81 +216,7 @@ pub fn start_jdc(
         shares_batch_size,
         pool_config,
         3600,
-        tp_config,
-        upstreams,
-        jdc_signature,
-        None,
-        supported_extensions,
-        required_extensions,
-    );
-    let ret = jd_client_sv2::JobDeclaratorClient::new(jd_client_proxy);
-    let ret_clone = ret.clone();
-    tokio::spawn(async move { ret_clone.start().await });
-    (ret, jdc_address)
-}
-
-pub fn start_jdc_ipc(
-    pool: &[(SocketAddr, SocketAddr)], // (pool_address, jds_address)
-    ipc_socket_path: std::path::PathBuf,
-    supported_extensions: Vec<u16>,
-    required_extensions: Vec<u16>,
-) -> (JobDeclaratorClient, SocketAddr) {
-    use jd_client_sv2::config::{JobDeclaratorClientConfig, PoolConfig, ProtocolConfig, Upstream};
-    let jdc_address = get_available_address();
-    let max_supported_version = 2;
-    let min_supported_version = 2;
-    let authority_public_key = Secp256k1PublicKey::try_from(
-        "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
-    )
-    .unwrap();
-    let authority_secret_key = Secp256k1SecretKey::try_from(
-        "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n".to_string(),
-    )
-    .unwrap();
-    let coinbase_reward_script = CoinbaseRewardScript::from_descriptor(
-        "wpkh(02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc)",
-    )
-    .unwrap();
-    let authority_pubkey = Secp256k1PublicKey::try_from(
-        "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
-    )
-    .unwrap();
-    let upstreams = pool
-        .iter()
-        .map(|(pool_addr, jds_addr)| {
-            Upstream::new(
-                authority_pubkey,
-                pool_addr.ip().to_string(),
-                pool_addr.port(),
-                jds_addr.ip().to_string(),
-                jds_addr.port(),
-            )
-        })
-        .collect();
-    let pool_config = PoolConfig::new(authority_public_key, authority_secret_key);
-    let tp_config = TemplateProviderType::BitcoinCoreIpc {
-        unix_socket_path: ipc_socket_path,
-        fee_threshold: 0,
-        min_interval: 1,
-    };
-    let protocol_config = ProtocolConfig::new(
-        max_supported_version,
-        min_supported_version,
-        coinbase_reward_script,
-    );
-    let shares_per_minute = 10.0;
-    let shares_batch_size = 1;
-    let user_identity = "IT-test".to_string();
-    let jdc_signature = "JDC".to_string();
-    let jd_client_proxy = JobDeclaratorClientConfig::new(
-        jdc_address,
-        protocol_config,
-        user_identity,
-        shares_per_minute,
-        shares_batch_size,
-        pool_config,
-        3600,
-        tp_config,
+        template_provider_config,
         upstreams,
         jdc_signature,
         None,
@@ -368,10 +241,8 @@ pub fn start_jds(tp_rpc_connection: &ConnectParams) -> (JobDeclaratorServer, Soc
     .unwrap();
     let listen_jd_address = get_available_address();
     let cert_validity_sec = 3600;
-    let coinbase_reward_script = JdServerCoinbaseRewardScript::from_descriptor(
-        "wpkh(036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075)",
-    )
-    .unwrap();
+    let coinbase_reward_script =
+        JdServerCoinbaseRewardScript::from_descriptor(JDS_COINBASE_REWARD_DESCRIPTOR).unwrap();
     if let Ok(Some(CookieValues { user, password })) = tp_rpc_connection.get_cookie_values() {
         let ip = tp_rpc_connection.rpc_socket.ip().to_string();
         let url = jd_server::Uri::builder()
