@@ -41,19 +41,6 @@ fn get_bitcoin_core_filename(os: &str, arch: &str) -> String {
     }
 }
 
-/// Represents a template provider using Bitcoin Core v30+ with IPC and standalone sv2-tp.
-///
-/// This implementation launches two separate processes:
-/// 1. Bitcoin Core v30+ (bitcoin-node) with IPC enabled
-/// 2. Standalone sv2-tp binary that connects to Bitcoin Core via IPC
-#[derive(Debug)]
-pub struct TemplateProvider {
-    bitcoind: Node,
-    sv2_tp_process: Child,
-    sv2_port: u16,
-    ipc_socket_path: PathBuf,
-}
-
 /// Represents the consensus difficulty level of the network.
 ///
 /// Low: regtest mode (every share is a block)
@@ -71,12 +58,18 @@ pub enum DifficultyLevel {
     High,
 }
 
-impl TemplateProvider {
-    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30+ and standalone sv2-tp.
-    pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
+/// Represents a Bitcoin Core v30+ node with IPC enabled.
+#[derive(Debug)]
+pub struct BitcoinCore {
+    bitcoind: Node,
+    ipc_socket_path: PathBuf,
+}
+
+impl BitcoinCore {
+    /// Start a new [`BitcoinCore`] instance with IPC enabled.
+    pub fn start(port: u16, difficulty_level: DifficultyLevel) -> Self {
         let current_dir: PathBuf = std::env::current_dir().expect("failed to read current dir");
         let bin_dir = current_dir.join("template-provider");
-
         // Use temp dir for Bitcoin datadir to avoid long Unix socket paths in CI
         let data_dir = std::env::temp_dir().join("sv2-integration-tests");
 
@@ -144,8 +137,8 @@ impl TemplateProvider {
 
             tarball::unpack(&tarball_bytes, &bin_dir);
 
+            // Sign the binaries on macOS
             if os == "macos" {
-                // Sign the binaries on macOS
                 for bin in &[&bitcoin_node_bin, &bitcoin_cli_bin] {
                     std::process::Command::new("codesign")
                         .arg("--sign")
@@ -185,78 +178,16 @@ impl TemplateProvider {
         // Wait for Bitcoin Core to fully start and create IPC socket
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        // Download and setup sv2-tp binary
-        let sv2_tp_filename = get_sv2_tp_filename(os, arch);
-        let sv2_tp_home = bin_dir.join(format!("sv2-tp-{VERSION_SV2_TP}"));
-        let sv2_tp_bin = sv2_tp_home.join("bin").join("sv2-tp");
-
-        if !sv2_tp_bin.exists() {
-            let tarball_bytes = match env::var("SV2TP_TARBALL_FILE") {
-                Ok(path) => tarball::read_from_file(&path),
-                Err(_) => {
-                    warn!("Downloading sv2-tp for the testing session. This could take a while...");
-                    let download_endpoint =
-                        env::var("SV2TP_DOWNLOAD_ENDPOINT").unwrap_or_else(|_| {
-                            "https://github.com/stratum-mining/sv2-tp/releases/download".to_owned()
-                        });
-                    let url = format!("{download_endpoint}/v{VERSION_SV2_TP}/{sv2_tp_filename}");
-                    http::make_get_request(&url, 5)
-                }
-            };
-
-            if let Some(parent) = sv2_tp_home.parent() {
-                create_dir_all(parent).unwrap();
-            }
-
-            tarball::unpack(&tarball_bytes, &bin_dir);
-
-            if os == "macos" {
-                // Sign the binary on macOS
-                std::process::Command::new("codesign")
-                    .arg("--sign")
-                    .arg("-")
-                    .arg(&sv2_tp_bin)
-                    .output()
-                    .expect("Failed to sign sv2-tp binary");
-            }
-        }
-
-        // Launch sv2-tp process
-        let datadir = conf.staticdir.as_ref().expect("staticdir should be set");
-        let network = if conf.network == "signet" {
-            "-signet"
-        } else {
-            "-regtest"
-        };
-
-        let sv2_tp_process = Command::new(&sv2_tp_bin)
-            .arg(network)
-            .arg(format!("-datadir={}", datadir.display()))
-            .arg(format!("-sv2port={}", port))
-            .arg(format!("-sv2interval={}", sv2_interval))
-            .arg("-sv2feedelta=0")
-            .arg("-debug=sv2")
-            .arg("-loglevel=sv2:trace")
-            .stdout(Stdio::null()) // Suppress output in tests
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("Failed to start sv2-tp process");
-
-        // Wait for sv2-tp to start and connect to Bitcoin Core
-        std::thread::sleep(std::time::Duration::from_secs(3));
-
-        // Compute the IPC socket path: <datadir>/<network>/node.sock
         let network_dir = if conf.network == "signet" {
             "signet"
         } else {
             "regtest"
         };
+        let datadir = conf.staticdir.as_ref().expect("staticdir should be set");
         let ipc_socket_path = datadir.join(network_dir).join("node.sock");
 
-        TemplateProvider {
+        BitcoinCore {
             bitcoind,
-            sv2_tp_process,
-            sv2_port: port,
             ipc_socket_path,
         }
     }
@@ -288,7 +219,7 @@ impl TemplateProvider {
 
     /// Create and broadcast a transaction to the mempool.
     ///
-    /// It is recommended to use [`TemplateProvider::fund_wallet`] before calling this method to
+    /// It is recommended to use [`BitcoinCore::fund_wallet`] before calling this method to
     /// ensure the wallet has enough funds.
     pub fn create_mempool_transaction(&self) -> Result<(Address, Txid), corepc_node::Error> {
         let client = &self.bitcoind.client;
@@ -303,7 +234,7 @@ impl TemplateProvider {
 
     /// Fund the node's wallet.
     ///
-    /// This can be useful before using [`TemplateProvider::create_mempool_transaction`].
+    /// This can be useful before using [`BitcoinCore::create_mempool_transaction`].
     pub fn fund_wallet(&self) -> Result<(), corepc_node::Error> {
         let client = &self.bitcoind.client;
         let address = client.new_address()?;
@@ -318,17 +249,150 @@ impl TemplateProvider {
         Ok(block_hash)
     }
 
+    /// Return the IPC socket path for connecting to this node.
+    pub fn ipc_socket_path(&self) -> &PathBuf {
+        &self.ipc_socket_path
+    }
+}
+
+/// Represents a template provider using Bitcoin Core v30+ with IPC and standalone sv2-tp.
+///
+/// This implementation launches two separate processes:
+/// 1. Bitcoin Core v30+ (bitcoin-node) with IPC enabled
+/// 2. Standalone sv2-tp binary that connects to Bitcoin Core via IPC
+#[derive(Debug)]
+pub struct TemplateProvider {
+    bitcoin_core: BitcoinCore,
+    sv2_tp_process: Child,
+    sv2_port: u16,
+}
+
+impl TemplateProvider {
+    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30+ and standalone sv2-tp.
+    pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
+        let bitcoin_core = BitcoinCore::start(port, difficulty_level);
+
+        let current_dir: PathBuf = std::env::current_dir().expect("failed to read current dir");
+        let bin_dir = current_dir.join("template-provider");
+
+        // Download and setup sv2-tp binary
+        let os = env::consts::OS;
+        let arch = env::consts::ARCH;
+        let sv2_tp_filename = get_sv2_tp_filename(os, arch);
+        let sv2_tp_home = bin_dir.join(format!("sv2-tp-{VERSION_SV2_TP}"));
+        let sv2_tp_bin = sv2_tp_home.join("bin").join("sv2-tp");
+
+        if !sv2_tp_bin.exists() {
+            let tarball_bytes = match env::var("SV2TP_TARBALL_FILE") {
+                Ok(path) => tarball::read_from_file(&path),
+                Err(_) => {
+                    warn!("Downloading sv2-tp for the testing session. This could take a while...");
+                    let download_endpoint =
+                        env::var("SV2TP_DOWNLOAD_ENDPOINT").unwrap_or_else(|_| {
+                            "https://github.com/stratum-mining/sv2-tp/releases/download".to_owned()
+                        });
+                    let url = format!("{download_endpoint}/v{VERSION_SV2_TP}/{sv2_tp_filename}");
+                    http::make_get_request(&url, 5)
+                }
+            };
+
+            if let Some(parent) = sv2_tp_home.parent() {
+                create_dir_all(parent).unwrap();
+            }
+
+            tarball::unpack(&tarball_bytes, &bin_dir);
+
+            // Sign the binary on macOS
+            if os == "macos" {
+                std::process::Command::new("codesign")
+                    .arg("--sign")
+                    .arg("-")
+                    .arg(&sv2_tp_bin)
+                    .output()
+                    .expect("Failed to sign sv2-tp binary");
+            }
+        }
+
+        // Launch sv2-tp process
+        let ipc_socket_path = bitcoin_core.ipc_socket_path();
+        let network_dir = ipc_socket_path
+            .parent()
+            .expect("Failed to get parent directory of IPC socket path");
+        let datadir = network_dir
+            .parent()
+            .expect("Failed to get parent directory of network dir");
+        let network = if network_dir.ends_with("signet") {
+            "-signet"
+        } else {
+            "-regtest"
+        };
+
+        let sv2_tp_process = Command::new(&sv2_tp_bin)
+            .arg(network)
+            .arg(format!("-datadir={}", datadir.display()))
+            .arg(format!("-sv2port={}", port))
+            .arg(format!("-sv2interval={}", sv2_interval))
+            .arg("-sv2feedelta=0")
+            .arg("-debug=sv2")
+            .arg("-loglevel=sv2:trace")
+            .stdout(Stdio::null()) // Suppress output in tests
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("Failed to start sv2-tp process");
+
+        // Wait for sv2-tp to start and connect to Bitcoin Core
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        TemplateProvider {
+            bitcoin_core,
+            sv2_tp_process,
+            sv2_port: port,
+        }
+    }
+
+    /// Mine `n` blocks.
+    pub fn generate_blocks(&self, n: u64) {
+        self.bitcoin_core.generate_blocks(n);
+    }
+
+    /// Return the node's RPC info.
+    pub fn rpc_info(&self) -> &ConnectParams {
+        self.bitcoin_core.rpc_info()
+    }
+
+    /// Return the result of `getblockchaininfo` RPC call.
+    pub fn get_blockchain_info(&self) -> Result<GetBlockchainInfo, corepc_node::Error> {
+        self.bitcoin_core.get_blockchain_info()
+    }
+
+    /// Create and broadcast a transaction to the mempool.
+    ///
+    /// It is recommended to use [`TemplateProvider::fund_wallet`] before calling this method to
+    /// ensure the wallet has enough funds.
+    pub fn create_mempool_transaction(&self) -> Result<(Address, Txid), corepc_node::Error> {
+        self.bitcoin_core.create_mempool_transaction()
+    }
+
+    /// Fund the node's wallet.
+    ///
+    /// This can be useful before using [`TemplateProvider::create_mempool_transaction`].
+    pub fn fund_wallet(&self) -> Result<(), corepc_node::Error> {
+        self.bitcoin_core.fund_wallet()
+    }
+
+    /// Return the hash of the most recent block.
+    pub fn get_best_block_hash(&self) -> Result<String, corepc_node::Error> {
+        self.bitcoin_core.get_best_block_hash()
+    }
+
     /// Return the sv2 port that sv2-tp is listening on.
     pub fn sv2_port(&self) -> u16 {
         self.sv2_port
     }
 
-    /// Return the IPC socket path for direct Bitcoin Core connection.
-    ///
-    /// This path can be used with `TemplateProviderType::BitcoinCoreIpc` to
-    /// connect Pool or JDC directly to Bitcoin Core via IPC, bypassing sv2-tp.
+    /// Return the IPC socket path for connecting to the Bitcoin Core node.
     pub fn ipc_socket_path(&self) -> &PathBuf {
-        &self.ipc_socket_path
+        self.bitcoin_core.ipc_socket_path()
     }
 }
 

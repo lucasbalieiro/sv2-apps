@@ -202,6 +202,13 @@ pub fn start_template_provider(
     (template_provider, address)
 }
 
+pub fn start_bitcoin_core(difficulty_level: DifficultyLevel) -> BitcoinCore {
+    let address = get_available_address();
+    let bitcoin_core = BitcoinCore::start(address.port(), difficulty_level);
+    bitcoin_core.generate_blocks(1);
+    bitcoin_core
+}
+
 pub fn start_jdc(
     pool: &[(SocketAddr, SocketAddr)], // (pool_address, jds_address)
     tp_address: SocketAddr,

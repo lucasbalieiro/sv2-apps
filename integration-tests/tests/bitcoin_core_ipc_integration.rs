@@ -9,9 +9,9 @@ use stratum_apps::stratum_core::{common_messages_sv2::*, job_declaration_sv2::*}
 #[tokio::test]
 async fn pool_propagates_block_with_bitcoin_core_ipc() {
     start_tracing();
-    let (tp, _tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let ipc_socket_path = tp.ipc_socket_path().clone();
-    let current_block_hash = tp.get_best_block_hash().unwrap();
+    let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
+    let ipc_socket_path = bitcoin_core.ipc_socket_path().clone();
+    let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
     let (_pool, pool_addr) = start_pool_ipc(ipc_socket_path, vec![], vec![]).await;
     let (_translator, tproxy_addr) =
         start_sv2_translator(&[pool_addr], false, vec![], vec![]).await;
@@ -21,7 +21,7 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
     let start_time = tokio::time::Instant::now();
     loop {
         tokio::time::sleep(poll_interval).await;
-        let new_block_hash = tp.get_best_block_hash().unwrap();
+        let new_block_hash = bitcoin_core.get_best_block_hash().unwrap();
         if new_block_hash != current_block_hash {
             return;
         }
