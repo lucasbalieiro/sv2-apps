@@ -18,16 +18,11 @@ use stratum_apps::{
     key_utils::Secp256k1PublicKey,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
-        bitcoin::{
-            self, absolute::LockTime, transaction::Version, OutPoint, ScriptBuf, Sequence,
-            Transaction, TxIn, TxOut, Witness,
-        },
         codec_sv2::HandshakeRole,
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
         noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, TemplateDistribution},
-        template_distribution_sv2::CoinbaseOutputConstraints,
     },
     task_manager::TaskManager,
     utils::{
@@ -201,15 +196,12 @@ impl Sv2Tp {
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
-        coinbase_outputs: Vec<u8>,
     ) {
         let status_sender = StatusSender::TemplateReceiver(status_sender);
         let mut shutdown_rx = notify_shutdown.subscribe();
 
         info!("Initialized state for starting template receiver");
         _ = self.setup_connection(socket_address).await;
-
-        _ = self.coinbase_constraints(coinbase_outputs).await;
 
         info!("Setup Connection done. connection with template receiver is now done");
         task_manager.spawn(
@@ -224,16 +216,6 @@ impl Sv2Tp {
                                     info!("Template Receiver: received shutdown signal");
                                     break;
                                 },
-                                Ok(ShutdownMessage::UpstreamShutdownFallback((coinbase_outputs,tx))) => {
-                                    info!("Template provider: Received Upstream shutdown.");
-                                    _ = self.coinbase_constraints(coinbase_outputs).await;
-                                    drop(tx);
-                                }
-                                Ok(ShutdownMessage::JobDeclaratorShutdownFallback((coinbase_outputs, tx))) => {
-                                    info!("Template provider: Received Job declarator shutdown.");
-                                    _ = self.coinbase_constraints(coinbase_outputs).await;
-                                    drop(tx);
-                                }
                                 Err(e) => {
                                     warn!(error = ?e, "Template Receiver: shutdown channel closed unexpectedly");
                                     break;
@@ -322,62 +304,6 @@ impl Sv2Tp {
             .send(sv2_frame)
             .await
             .map_err(|_| JDCError::ChannelErrorSender)?;
-
-        Ok(())
-    }
-
-    /// Build and send [`CoinbaseOutputConstraints`] upstream TP.
-    pub async fn coinbase_constraints(
-        &mut self,
-        coinbase_outputs: Vec<u8>,
-    ) -> Result<(), JDCError> {
-        debug!(
-            "Deserializing coinbase outputs ({} bytes)",
-            coinbase_outputs.len()
-        );
-        let outputs: Vec<TxOut> = bitcoin::consensus::deserialize(&coinbase_outputs)?;
-
-        let max_size: u32 = outputs.iter().map(|o| o.size() as u32).sum();
-        debug!(
-            max_size,
-            outputs_count = outputs.len(),
-            "Calculated max coinbase output size"
-        );
-
-        let dummy_coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint::null(),
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: Witness::from(vec![vec![0; 32]]),
-            }],
-            output: outputs,
-        };
-
-        let max_sigops = dummy_coinbase.total_sigop_cost(|_| None) as u16;
-        debug!(max_sigops, "Calculated max sigops for coinbase");
-
-        let constraints = CoinbaseOutputConstraints {
-            coinbase_output_max_additional_size: max_size,
-            coinbase_output_max_additional_sigops: max_sigops,
-        };
-
-        let msg = AnyMessage::TemplateDistribution(
-            TemplateDistribution::CoinbaseOutputConstraints(constraints),
-        );
-
-        let frame: Sv2Frame = msg.try_into()?;
-        info!("Sending CoinbaseOutputConstraints message upstream");
-        self.sv2_tp_channel
-            .tp_sender
-            .send(frame)
-            .await
-            .map_err(|_| {
-                error!("Failed to send CoinbaseOutputConstraints message upstream");
-                JDCError::ChannelErrorSender
-            })?;
 
         Ok(())
     }

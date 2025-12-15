@@ -142,7 +142,6 @@ impl JobDeclaratorClient {
                         notify_shutdown_cl,
                         status_sender_cl,
                         task_manager_cl,
-                        encoded_outputs.clone(),
                     )
                     .await;
 
