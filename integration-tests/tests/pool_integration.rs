@@ -3,7 +3,7 @@
 // `PoolSv2` is a module that implements the Pool role in the Stratum V2 protocol.
 use integration_tests_sv2::{interceptor::MessageDirection, template_provider::DifficultyLevel, *};
 use stratum_apps::stratum_core::{
-    common_messages_sv2::{Protocol, SetupConnection, *},
+    common_messages_sv2::{has_work_selection, Protocol, SetupConnection, *},
     mining_sv2::*,
     parsers_sv2::{AnyMessage, CommonMessages, Mining, TemplateDistribution},
     template_distribution_sv2::*,
@@ -223,4 +223,119 @@ async fn pool_standard_channel_receives_share() {
             MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
         )
         .await;
+}
+
+// This test verifies that the Pool does not send SetNewPrevHash and NewExtendedMiningJob (future
+// and non-future) messages to JDC.
+#[tokio::test]
+async fn pool_does_not_send_jobs_to_jdc() {
+    start_tracing();
+    let sv2_interval = Some(5);
+    let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
+    tp.fund_wallet().unwrap();
+    let (_pool, pool_addr) = start_pool(Some(tp_addr), vec![], vec![]).await;
+    let (pool_jdc_sniffer, pool_jdc_sniffer_addr) =
+        start_sniffer("pool_jdc", pool_addr, false, vec![], None);
+    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (_jdc, jdc_addr) = start_jdc(
+        &[(pool_jdc_sniffer_addr, jds_addr)],
+        tp_addr,
+        vec![],
+        vec![],
+    );
+    // Block NewExtendedMiningJob messages between JDC and translator proxy
+    let (_tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) = start_sniffer(
+        "tproxy_jdc",
+        jdc_addr,
+        false,
+        vec![integration_tests_sv2::interceptor::IgnoreMessage::new(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+        )
+        .into()],
+        None,
+    );
+    let (_translator, tproxy_addr) =
+        start_sv2_translator(&[tproxy_jdc_sniffer_addr], false, vec![], vec![]).await;
+
+    // Add SV1 sniffer between translator and miner
+    let (_sv1_sniffer, sv1_sniffer_addr) = start_sv1_sniffer(tproxy_addr);
+    let (_minerd_process, _minerd_addr) = start_minerd(sv1_sniffer_addr, None, None, false).await;
+
+    pool_jdc_sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+
+    // Verify SetupConnection has work_selection flag set (JDC requires custom work)
+    let setup_msg = pool_jdc_sniffer.next_message_from_downstream();
+    match setup_msg {
+        Some((_, AnyMessage::Common(CommonMessages::SetupConnection(msg)))) => {
+            assert!(
+                has_work_selection(msg.flags),
+                "JDC should set work_selection flag in SetupConnection"
+            );
+        }
+        _ => panic!("Expected SetupConnection message from JDC"),
+    }
+
+    pool_jdc_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    pool_jdc_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .await;
+
+    pool_jdc_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // Verify that future NewExtendedMiningJob messages are NOT sent to JDC
+    assert!(
+        pool_jdc_sniffer
+            .assert_message_not_present(
+                MessageDirection::ToDownstream,
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+            )
+            .await,
+        "Pool should NOT send future NewExtendedMiningJob messages to JDC"
+    );
+
+    // Verify that SetNewPrevHash is NOT sent to JDC
+    assert!(
+        pool_jdc_sniffer
+            .assert_message_not_present(
+                MessageDirection::ToDownstream,
+                MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+            )
+            .await,
+        "Pool should NOT send SetNewPrevHash messages to JDC"
+    );
+
+    // Trigger a new template by creating a mempool transaction
+    tp.create_mempool_transaction().unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    // Verify that non-future NewExtendedMiningJob messages are NOT sent to JDC
+    assert!(
+        pool_jdc_sniffer
+            .assert_message_not_present(
+                MessageDirection::ToDownstream,
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+            )
+            .await,
+        "Pool should NOT send non-future NewExtendedMiningJob messages to JDC"
+    );
 }
