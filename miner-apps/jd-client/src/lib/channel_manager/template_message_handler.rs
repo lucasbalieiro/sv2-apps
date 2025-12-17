@@ -326,16 +326,16 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             .map(|raw_tx| consensus::deserialize(raw_tx).expect("invalid tx"))
             .collect();
 
-        let txids_as_u256: Vec<U256<'static>> = tx_list
+        let wtxids_as_u256: Vec<U256<'static>> = tx_list
             .iter()
             .map(|tx| {
-                let txid = tx.compute_txid();
+                let txid = tx.compute_wtxid();
                 let byte_array: [u8; 32] = *txid.as_byte_array();
                 U256::Owned(byte_array.to_vec())
             })
             .collect();
 
-        let tx_ids = Seq064K::new(txids_as_u256).map_err(JDCError::BinarySv2)?;
+        let wtx_ids = Seq064K::new(wtxids_as_u256).map_err(JDCError::BinarySv2)?;
         let is_activated_future_template = template_message.future_template
             && prevhash
                 .map(|prev_hash| prev_hash.template_id != template_message.template_id)
@@ -365,7 +365,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                     version,
                     coinbase_tx_prefix: coinbase_tx_prefix.try_into().unwrap(),
                     coinbase_tx_suffix: coinbase_tx_suffix.try_into().unwrap(),
-                    tx_ids_list: tx_ids,
+                    wtxid_list: wtx_ids,
                     excess_data: excess_data.to_vec().try_into().unwrap(),
                 };
 
