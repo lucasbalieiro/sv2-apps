@@ -29,7 +29,8 @@ async fn propagated_from_jdc_to_tp() {
         vec![],
         vec![],
     );
-    let (_translator, tproxy_addr) = start_sv2_translator(&[jdc_addr], false, vec![], vec![]).await;
+    let (_translator, tproxy_addr) =
+        start_sv2_translator(&[jdc_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
     jdc_tp_sniffer
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SUBMIT_SOLUTION)

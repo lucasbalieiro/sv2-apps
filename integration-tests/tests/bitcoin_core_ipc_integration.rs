@@ -14,7 +14,7 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
     let (_pool, pool_addr) = start_pool(ipc_config(ipc_socket_path), vec![], vec![]).await;
     let (_translator, tproxy_addr) =
-        start_sv2_translator(&[pool_addr], false, vec![], vec![]).await;
+        start_sv2_translator(&[pool_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
     let timeout = tokio::time::Duration::from_secs(60);
     let poll_interval = tokio::time::Duration::from_secs(2);
@@ -58,7 +58,8 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
         vec![],
         vec![],
     );
-    let (_translator, tproxy_addr) = start_sv2_translator(&[jdc_addr], false, vec![], vec![]).await;
+    let (_translator, tproxy_addr) =
+        start_sv2_translator(&[jdc_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
     sniffer
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)

@@ -14,7 +14,8 @@ async fn jdc_submit_shares_success() {
         vec![],
         vec![],
     );
-    let (_translator, tproxy_addr) = start_sv2_translator(&[jdc_addr], false, vec![], vec![]).await;
+    let (_translator, tproxy_addr) =
+        start_sv2_translator(&[jdc_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
 
     // make sure sure JDC gets a share acknowledgement

@@ -282,7 +282,9 @@ pub async fn start_sv2_translator(
     aggregate_channels: bool,
     supported_extensions: Vec<u16>,
     required_extensions: Vec<u16>,
+    job_keepalive_interval_secs: Option<u16>,
 ) -> (TranslatorSv2, SocketAddr) {
+    let job_keepalive_interval_secs = job_keepalive_interval_secs.unwrap_or(60);
     let upstreams = upstreams
         .iter()
         .map(|upstream| {
@@ -313,6 +315,7 @@ pub async fn start_sv2_translator(
         min_individual_miner_hashrate,
         SHARES_PER_MINUTE,
         true,
+        job_keepalive_interval_secs,
     );
 
     let downstream_extranonce2_size = 4;
