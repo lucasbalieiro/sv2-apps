@@ -1,7 +1,10 @@
 use crate::interceptor::MessageDirection;
 use async_channel::{Receiver, Sender};
 use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
-use stratum_apps::{network_helpers::sv1_connection::ConnectionSV1, stratum_core::sv1_api};
+use stratum_apps::{
+    network_helpers::sv1_connection::ConnectionSV1,
+    stratum_core::sv1_api::{self, server_to_client},
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     select,
@@ -116,6 +119,42 @@ impl SnifferSV1 {
         );
     }
 
+    /// Wait for a mining.notify message with a job_id that is a keepalive job.
+    /// Keepalive job IDs contain the '#' delimiter (format: `{original_job_id}#{counter}`).
+    pub async fn wait_for_keepalive_notify(&self, direction: MessageDirection) {
+        let now = std::time::Instant::now();
+        tokio::select!(
+            _ = tokio::signal::ctrl_c() => { },
+            _ = async {
+                loop {
+                    let has_notify = match direction {
+                        MessageDirection::ToUpstream => {
+                            self.messages_from_downstream
+                                .has_keepalive_notify()
+                                .await
+                        }
+                        MessageDirection::ToDownstream => {
+                            self.messages_from_upstream
+                                .has_keepalive_notify()
+                                .await
+                        }
+                    };
+                    if has_notify {
+                        break;
+                    }
+                    if now.elapsed().as_secs() > 60 {
+                        panic!(
+                            "Timeout: keepalive mining.notify (job_id containing '#') not found"
+                        );
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                }
+            } => {}
+        );
+    }
+
     async fn recv_from_up_send_to_down_sv1(
         recv: Receiver<sv1_api::Message>,
         send: Sender<sv1_api::Message>,
@@ -189,5 +228,21 @@ impl MessagesAggregatorSV1 {
             }
         });
         ret
+    }
+
+    /// Checks if there's a keepalive mining.notify message.
+    /// Keepalive job IDs contain the '#' delimiter (format: `{original_job_id}#{counter}`).
+    async fn has_keepalive_notify(&self) -> bool {
+        let messages = self.messages.lock().await;
+        messages.iter().any(|msg| {
+            if let sv1_api::Message::Notification(notif) = msg {
+                if notif.method == "mining.notify" {
+                    if let Ok(notify) = server_to_client::Notify::try_from(notif.clone()) {
+                        return notify.job_id.contains('#');
+                    }
+                }
+            }
+            false
+        })
     }
 }
