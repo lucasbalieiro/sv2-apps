@@ -142,7 +142,6 @@ impl JobDeclaratorClient {
                         notify_shutdown_cl,
                         status_sender_cl,
                         task_manager_cl,
-                        encoded_outputs.clone(),
                     )
                     .await;
 
@@ -200,6 +199,7 @@ impl JobDeclaratorClient {
                 notify_shutdown.clone(),
                 status_sender.clone(),
                 task_manager.clone(),
+                miner_coinbase_outputs.clone(),
             )
             .await;
 

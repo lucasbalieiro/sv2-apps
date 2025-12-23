@@ -9,11 +9,12 @@ use std::{
 
 use async_channel::{Receiver, Sender};
 use stratum_apps::{
+    coinbase_output_constraints::coinbase_output_constraints_message,
     custom_mutex::Mutex,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
-        bitcoin::Target,
+        bitcoin::{Target, TxOut},
         channels_sv2::{
             client::extended::ExtendedChannel,
             server::{
@@ -470,9 +471,16 @@ impl ChannelManager {
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
+        coinbase_outputs: Vec<TxOut>,
     ) {
         let status_sender = StatusSender::ChannelManager(status_sender);
         let mut shutdown_rx = notify_shutdown.subscribe();
+
+        if let Err(e) = self.coinbase_output_constraints(coinbase_outputs).await {
+            error!(error = ?e, "Failed to send CoinbaseOutputConstraints message to TP");
+            handle_error(&status_sender, e).await;
+            return;
+        }
 
         task_manager.spawn(async move {
             let cm = self.clone();
@@ -1063,6 +1071,33 @@ impl ChannelManager {
         }
 
         info!("Vardiff update cycle complete");
+        Ok(())
+    }
+
+    /// Sends a CoinbaseOutputConstraints message to the template provider.
+    ///
+    /// # Purpose
+    /// - Calculates the max coinbase output size and sigops for the coinbase outputs.
+    /// - Sends the CoinbaseOutputConstraints message to the template provider.
+    ///
+    /// # Parameters
+    /// - `coinbase_outputs`: The coinbase outputs to calculate the max coinbase output size and
+    ///   sigops for.
+    pub async fn coinbase_output_constraints(
+        &self,
+        coinbase_outputs: Vec<TxOut>,
+    ) -> Result<(), JDCError> {
+        let msg = coinbase_output_constraints_message(coinbase_outputs);
+
+        self.channel_manager_channel
+            .tp_sender
+            .send(TemplateDistribution::CoinbaseOutputConstraints(msg))
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "Failed to send CoinbaseOutputConstraints message to TP");
+                JDCError::ChannelErrorSender
+            })?;
+
         Ok(())
     }
 }
