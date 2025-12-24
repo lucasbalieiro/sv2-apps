@@ -31,7 +31,7 @@ use stratum_apps::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    channel_manager::{ChannelManager, ChannelManagerChannel},
+    channel_manager::{ChannelManager, ChannelManagerChannel, FULL_EXTRANONCE_SIZE},
     error::{ChannelSv2Error, JDCError},
     jd_mode::{get_jd_mode, JdMode},
 };
@@ -285,7 +285,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 .upstream_channel
                                 .as_ref()
                                 .map(|channel| channel.get_full_extranonce_size())
-                                .unwrap_or(32);
+                                // This default only hits in solo-mining scenario
+                                .unwrap_or(FULL_EXTRANONCE_SIZE);
+
                             let mut group_channel =
                                 match GroupChannel::new_for_job_declaration_client(
                                     group_channel_id,
