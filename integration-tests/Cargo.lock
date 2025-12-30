@@ -2865,6 +2865,7 @@ dependencies = [
  "async-channel",
  "clap",
  "config",
+ "hotpath",
  "serde",
  "serde_json",
  "stratum-apps",
