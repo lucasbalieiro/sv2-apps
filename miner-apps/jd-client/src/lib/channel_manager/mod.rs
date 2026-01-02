@@ -37,7 +37,7 @@ use stratum_apps::{
         },
         mining_sv2::{
             ExtendedExtranonce, OpenExtendedMiningChannel, SetCustomMiningJob, SetTarget,
-            UpdateChannel, MAX_EXTRANONCE_LEN,
+            UpdateChannel,
         },
         noise_sv2::Responder,
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
@@ -73,6 +73,9 @@ mod template_message_handler;
 mod upstream_message_handler;
 
 pub const JDC_SEARCH_SPACE_BYTES: usize = 4;
+// These are only used for solo-mining, very similar to pool
+const CLIENT_SEARCH_SPACE_BYTES: usize = 16;
+pub const FULL_EXTRANONCE_SIZE: usize = JDC_SEARCH_SPACE_BYTES + CLIENT_SEARCH_SPACE_BYTES;
 
 /// A `DeclaredJob` encapsulates all the relevant data associated with a single
 /// job declaration, including its template, optional messages, coinbase output,
@@ -178,7 +181,7 @@ impl ChannelManagerData {
             (
                 0..range_1.start,
                 range_1.clone(),
-                range_1.end..MAX_EXTRANONCE_LEN,
+                range_1.end..FULL_EXTRANONCE_SIZE,
             )
         };
         self.extranonce_prefix_factory_extended =
@@ -276,7 +279,7 @@ impl ChannelManager {
             (
                 0..range_1.start,
                 range_1.clone(),
-                range_1.end..MAX_EXTRANONCE_LEN,
+                range_1.end..FULL_EXTRANONCE_SIZE,
             )
         };
 

@@ -343,12 +343,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
         let declare_job = self.channel_manager_data.super_safe_lock(|data| {
             let job_factory = data.job_factory.as_mut()?;
-
-            let full_extranonce_size = data
-                .upstream_channel
-                .as_ref()
-                .map(|channel| channel.get_full_extranonce_size())
-                .unwrap_or(32);
+            let full_extranonce_size = data.upstream_channel.as_mut()?.get_full_extranonce_size();
 
             if let Ok((coinbase_tx_prefix, coinbase_tx_suffix)) = job_factory
                 .new_coinbase_tx_prefix_and_suffix(
