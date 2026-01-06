@@ -124,7 +124,11 @@ impl BitcoinCore {
                     warn!("Downloading Bitcoin Core {} for the testing session. This could take a while...", VERSION_BITCOIN_CORE);
                     let download_endpoint = env::var("BITCOIN_CORE_DOWNLOAD_ENDPOINT")
                         .unwrap_or_else(|_| {
-                            "https://bitcoincore.org/bin/bitcoin-core-30.0".to_owned()
+                            // NOTE: Bitcoin Core moved the v30 download under a new path due to a
+                            // security issue. This link should be updated to v30.2 once it is released.
+                            // Ref: https://x.com/bitcoincoreorg/status/2008284092983369886
+                            "https://bitcoincore.org/bin/insecure-wallet-deletion/bitcoin-core-30.0"
+                                .to_owned()
                         });
                     let url = format!("{download_endpoint}/{bitcoin_filename}");
                     http::make_get_request(&url, 5)
