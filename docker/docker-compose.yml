@@ -82,7 +82,7 @@ services:
       - ./config/translator-proxy-config.toml.template:/app/proxy-config.toml.template:ro
     entrypoint: >
       sh -c '
-        envsubst < /app/proxy-config.toml.template > /app/proxy-config.toml &&
+        envsubst < /app/proxy-config.toml.template > /app/translator-config.toml &&
         exec /app/translator_sv2
       '
     networks:
