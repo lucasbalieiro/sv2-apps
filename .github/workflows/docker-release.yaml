@@ -1,6 +1,10 @@
-name: Build and Push Docker Images on Release
+name: Build and Push Docker Images
 
 on:
+  push:
+    branches:
+      - main
+
   release:
     types: [published]
   workflow_dispatch:
@@ -43,7 +47,5 @@ jobs:
             linux/arm64
 
           tags: |
-            stratumv2/${{ matrix.app }}:latest
             stratumv2/${{ matrix.app }}:${{ github.ref_name }}
-
 
