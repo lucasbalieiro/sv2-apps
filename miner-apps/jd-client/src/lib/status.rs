@@ -59,9 +59,9 @@ impl From<&StatusSender> for StatusType {
     }
 }
 
+#[hotpath::measure_all]
 impl StatusSender {
     /// Sends a status update for the associated component.
-    #[hotpath::measure_all]
     pub async fn send(&self, status: Status) -> Result<(), async_channel::SendError<Status>> {
         match self {
             Self::Downstream { downstream_id, tx } => {

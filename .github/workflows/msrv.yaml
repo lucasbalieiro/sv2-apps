@@ -24,13 +24,13 @@ jobs:
         run: cargo build --manifest-path=stratum-apps/Cargo.toml --all-features
 
       - name: Build pool
-        run: cargo build --manifest-path=pool-apps/Cargo.toml
+        run: cargo build --manifest-path=pool-apps/Cargo.toml --all-features
 
       - name: Build jd-server (separate workspace)
-        run: cargo build --manifest-path=pool-apps/jd-server/Cargo.toml
+        run: cargo build --manifest-path=pool-apps/jd-server/Cargo.toml --all-features
 
       - name: Build miner applications workspace
-        run: cargo build --manifest-path=miner-apps/Cargo.toml
+        run: cargo build --manifest-path=miner-apps/Cargo.toml --all-features
 
       - name: Build mining-device (separate workspace)
         run: cargo build --manifest-path=miner-apps/mining-device/Cargo.toml
