@@ -45,6 +45,8 @@ min_individual_miner_hashrate= ${TPROXY_MIN_INDIVIDUAL_MINER_HASHRATE}
 shares_per_minute = ${TPROXY_SHARES_PER_MINUTE}
 # disable variable difficulty adjustment when using with JDC (JDC handles vardiff)
 enable_vardiff = ${TPROXY_ENABLE_VARDIFF}
+# Interval in seconds for sending keepalive jobs to prevent miner timeout during low upstream activity (set to 0 to disable)
+job_keepalive_interval_secs = 60
 
 
 [[upstreams]]
