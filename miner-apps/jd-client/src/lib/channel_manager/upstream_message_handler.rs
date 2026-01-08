@@ -27,7 +27,7 @@ use crate::{
     utils::{create_close_channel_msg, UpstreamState},
 };
 
-#[hotpath::measure_all]
+#[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleMiningMessagesFromServerAsync for ChannelManager {
     type Error = JDCError;
 
