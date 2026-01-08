@@ -113,7 +113,7 @@ async fn header_timestamp_value_assertion_in_new_extended_mining_job() {
         None,
     );
     let (_tproxy, tproxy_addr) =
-        start_sv2_translator(&[pool_translator_sniffer_addr], false, vec![], vec![]).await;
+        start_sv2_translator(&[pool_translator_sniffer_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
 
     tp_pool_sniffer
@@ -256,7 +256,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
         None,
     );
     let (_translator, tproxy_addr) =
-        start_sv2_translator(&[tproxy_jdc_sniffer_addr], false, vec![], vec![]).await;
+        start_sv2_translator(&[tproxy_jdc_sniffer_addr], false, vec![], vec![], None).await;
 
     // Add SV1 sniffer between translator and miner
     let (_sv1_sniffer, sv1_sniffer_addr) = start_sv1_sniffer(tproxy_addr);

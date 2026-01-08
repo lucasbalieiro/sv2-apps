@@ -39,6 +39,7 @@ async fn test_extension_negotiation_with_tlv_in_submit_shares() {
         false, // aggregate_channels = false
         supported_extensions.clone(),
         required_extensions,
+        None,
     )
     .await;
     // Start SV1 miner (minerd) connected to translator with username "SRI-miner"

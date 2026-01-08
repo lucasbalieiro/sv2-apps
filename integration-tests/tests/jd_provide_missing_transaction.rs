@@ -15,7 +15,8 @@ async fn jds_ask_for_missing_transactions() {
         vec![],
         vec![],
     );
-    let (_translator, tproxy_addr) = start_sv2_translator(&[jdc_addr], false, vec![], vec![]).await;
+    let (_translator, tproxy_addr) =
+        start_sv2_translator(&[jdc_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
     assert!(tp_2.fund_wallet().is_ok());
     assert!(tp_2.create_mempool_transaction().is_ok());

@@ -18,7 +18,7 @@ async fn jd_non_aggregated_tproxy_integration() {
     let (tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) =
         start_sniffer("1", jdc_addr, false, vec![], None);
     let (_translator, tproxy_addr) =
-        start_sv2_translator(&[tproxy_jdc_sniffer_addr], false, vec![], vec![]).await;
+        start_sv2_translator(&[tproxy_jdc_sniffer_addr], false, vec![], vec![], None).await;
 
     // start two minerd processes
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
@@ -93,7 +93,7 @@ async fn jd_aggregated_tproxy_integration() {
     let (tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) =
         start_sniffer("1", jdc_addr, false, vec![], None);
     let (_translator, tproxy_addr) =
-        start_sv2_translator(&[tproxy_jdc_sniffer_addr], true, vec![], vec![]).await;
+        start_sv2_translator(&[tproxy_jdc_sniffer_addr], true, vec![], vec![], None).await;
 
     // start two minerd processes
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
