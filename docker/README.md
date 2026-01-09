@@ -166,14 +166,14 @@ Tags start at **`v0.1.0`** and will continue incrementing with future releases.
 You can choose:
 
 * A **specific version tag** (e.g. `v0.1.0`) for predictable, repeatable deployments.
-* The **`latest`** tag if you simply want the most recent released image.
+* The **`main`** tag if you want the most recent updates of the main branch of the repository.
 
 Example:
 
 ```yaml
 image: pool_sv2:v0.1.0   # pinned version
 # or
-image: pool_sv2:latest   # latest release
+image: pool_sv2:main   #latest changes in the main branch
 ```
 
 This applies to all images: `pool_sv2`, `jd_server`, `jd_client_sv2`, and `translator_sv2`.
