@@ -24,7 +24,7 @@ use crate::{
     status::{State, Status},
 };
 
-#[hotpath::measure_all]
+#[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
     type Error = JDCError;
 

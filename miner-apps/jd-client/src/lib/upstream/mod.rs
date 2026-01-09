@@ -71,7 +71,7 @@ pub struct Upstream {
     required_extensions: Vec<u16>,
 }
 
-#[hotpath::measure_all]
+#[cfg_attr(not(test), hotpath::measure_all)]
 impl Upstream {
     /// Create a new [`Upstream`] connection to the given address.
     ///
