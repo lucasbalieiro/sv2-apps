@@ -936,7 +936,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     ) -> Result<(), Self::Error> {
         info!("Received SubmitSharesStandard");
         let channel_id = msg.channel_id;
-        let job_id = msg.job_id;
+        let downstream_job_id = msg.job_id;
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
 
@@ -1038,71 +1038,97 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 }
 
                 if let Some(upstream_channel) = channel_manager_data.upstream_channel.as_mut() {
-                    let prefix = standard_channel.get_extranonce_prefix().clone();
-                    let mut extranonce_parts = Vec::new();
-                    let up_prefix = upstream_channel.get_extranonce_prefix();
-                    extranonce_parts.extend_from_slice(&prefix[up_prefix.len()..]);
+                    let key = (downstream_id, channel_id, downstream_job_id).into();
 
-                    let upstream_message = channel_manager_data
-                    .downstream_channel_id_and_job_id_to_template_id
-                    .get(&(downstream_id, channel_id, job_id).into())
-                    .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(tid))
-                    .map(|&upstream_job_id| {
-                        SubmitSharesExtended {
-                            channel_id: upstream_channel.get_channel_id(),
-                            job_id: upstream_job_id,
-                            extranonce: extranonce_parts.try_into().unwrap(),
-                            nonce: msg.nonce,
-                            ntime: msg.ntime,
-                            // We assign sequence number later, when we validate the share
-                            // and send it to upstream.
-                            sequence_number: 0,
-                            version: msg.version,
-                        }
-                    });
+                    let template_id = channel_manager_data
+                        .downstream_channel_id_and_job_id_to_template_id
+                        .get(&key)
+                        .copied();
 
-                    if let Some(mut upstream_message) = upstream_message {
-                        let res = upstream_channel.validate_share(upstream_message.clone());
-                        match res {
-                            Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
-                                upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
-                                info!(
-                                    "SubmitSharesStandard, forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
-                                    channel_id, upstream_message.sequence_number, share_hash
-                                );
-                                messages.push(Mining::SubmitSharesExtended(upstream_message).into());
-                            }
-                            Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
-                                upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
-                                info!("SubmitSharesStandard forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
-                                let push_solution = PushSolution {
-                                    extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into().map_err(JDCError::shutdown)?,
-                                    ntime: upstream_message.ntime,
-                                    nonce: upstream_message.nonce,
-                                    version: upstream_message.version,
-                                    nbits: prev_hash.n_bits,
-                                    prev_hash: prev_hash.prev_hash.clone(),
-                                };
-                                messages.push(JobDeclaration::PushSolution(push_solution).into());
-                                messages.push(Mining::SubmitSharesExtended(upstream_message).into());
-                            }
-                            Err(err) => {
-                                let code = match err {
-                                    client::share_accounting::ShareValidationError::Invalid => "invalid-share",
-                                    client::share_accounting::ShareValidationError::Stale => "stale-share",
-                                    client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
-                                    client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
-                                    client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
-                                    _ => unreachable!(),
-                                };
-                                debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
+                    let upstream_job_id = template_id
+                        .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(&tid))
+                        .copied();
+
+                    let extranonce_prefix = standard_channel.get_extranonce_prefix();
+                    let upstream_extranonce_prefix = upstream_channel.get_extranonce_prefix();
+                    let extranonce = &extranonce_prefix[upstream_extranonce_prefix.len()..];
+
+                    let mut upstream_message = SubmitSharesExtended {
+                        channel_id: upstream_channel.get_channel_id(),
+                        job_id: 0, // set later if known
+                        extranonce: extranonce.to_vec().try_into().map_err(JDCError::shutdown)?,
+                        nonce: msg.nonce,
+                        ntime: msg.ntime,
+                        // We assign sequence number later, when we validate the share
+                        // and send it to upstream.
+                        sequence_number: 0,
+                        version: msg.version,
+                    };
+
+                    match upstream_job_id {
+                        // The presence of an `upstream_job_id` indicates that the upstream
+                        // has acknowledged the template and is ready to accept shares for it.
+                        //
+                        // We use optimistic mining: downstream miners are instructed to start
+                        // mining before the upstream acknowledgement arrives. Once the template
+                        // is acknowledged, shares can be safely submitted.
+                        //
+                        // See the Job Declaration Modes section for details:
+                        // https://stratumprotocol.org/specification/06-job-declaration-protocol/#63-job-declaration-modes
+                        Some(upstream_job_id) => {
+                            upstream_message.job_id = upstream_job_id;
+                            match upstream_channel.validate_share(upstream_message.clone()) {
+                                Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
+                                    upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                    info!(
+                                        "SubmitSharesStandard, forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
+                                        channel_id, upstream_message.sequence_number, share_hash
+                                    );
+                                    messages.push(Mining::SubmitSharesExtended(upstream_message).into());
+                                }
+                                Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
+                                    upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                    info!("SubmitSharesStandard forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
+                                    let push_solution = PushSolution {
+                                        extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into().map_err(JDCError::shutdown)?,
+                                        ntime: upstream_message.ntime,
+                                        nonce: upstream_message.nonce,
+                                        version: upstream_message.version,
+                                        nbits: prev_hash.n_bits,
+                                        prev_hash: prev_hash.prev_hash.clone(),
+                                    };
+                                    messages.push(JobDeclaration::PushSolution(push_solution).into());
+                                    messages.push(Mining::SubmitSharesExtended(upstream_message).into());
+                                }
+                                Err(err) => {
+                                    let code = match err {
+                                        client::share_accounting::ShareValidationError::Invalid => "invalid-share",
+                                        client::share_accounting::ShareValidationError::Stale => "stale-share",
+                                        client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
+                                        client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
+                                        client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                                        _ => unreachable!(),
+                                    };
+                                    debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
+                                }
                             }
                         }
-                    } else {
-                        warn!(
-                            "⚠️ SubmitSharesStandard not forwarded to upstream: job_id={} not found in job-to-template mapping for downstream_id={}, channel_id={}",
-                            job_id, downstream_id, channel_id
-                        );
+                        None => {
+                            debug!(
+                                "SubmitSharesStandard: upstream job_id not yet known (still waiting for the SetCustomMiningJob.Success message), caching share (channel_id={}, downstream_job_id={})",
+                                channel_id, downstream_job_id
+                            );
+                            if let Some(template_id) = template_id {
+                                // If entry is not present the creates a new
+                                // vector with `or_default` and pushes the
+                                // element.
+                                channel_manager_data
+                                    .cached_shares
+                                    .entry(template_id)
+                                    .or_default()
+                                    .push(upstream_message);
+                            }
+                        }
                     }
                 }
 
@@ -1254,78 +1280,103 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 }
 
                 if let Some(upstream_channel) = channel_manager_data.upstream_channel.as_mut() {
-                    let prefix = extended_channel.get_extranonce_prefix().clone();
-                    let mut extranonce_parts = Vec::new();
-                    let up_prefix = upstream_channel.get_extranonce_prefix();
-                    extranonce_parts.extend_from_slice(&prefix[up_prefix.len()..]);
+                    let key = (downstream_id, channel_id, job_id).into();
 
-                    let upstream_message = channel_manager_data
-                    .downstream_channel_id_and_job_id_to_template_id
-                    .get(&(downstream_id, channel_id, job_id).into())
-                    .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(tid))
-                    .map(|&upstream_job_id| {
-                        let mut new_msg = msg.clone();
-                        new_msg.channel_id = upstream_channel.get_channel_id();
-                        new_msg.job_id = upstream_job_id;
-                        // We assign sequence number later, when we validate the share
-                        // and send it to upstream.
-                        new_msg.sequence_number = 0;
+                    let template_id = channel_manager_data
+                        .downstream_channel_id_and_job_id_to_template_id
+                        .get(&key)
+                        .copied();
 
-                        extranonce_parts.extend_from_slice(&msg.extranonce.to_vec());
-                        new_msg.extranonce = extranonce_parts.try_into().unwrap();
+                    let upstream_job_id = template_id
+                        .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(&tid))
+                        .copied();
 
-                        new_msg
-                    });
-                    if let Some(mut upstream_message) = upstream_message{
-                        let res = upstream_channel.validate_share(upstream_message.clone());
-                        match res {
-                            Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
-                                upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
-                                info!(
-                                    "SubmitSharesExtended forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
-                                    channel_id, upstream_message.sequence_number, share_hash
-                                );
-                                messages.push(
-                                    Mining::SubmitSharesExtended(upstream_message.into_static()).into(),
-                                );
-                            }
-                            Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
-                                upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
-                                info!("SubmitSharesExtended forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
-                                let mut channel_extranonce = upstream_channel.get_extranonce_prefix().to_vec();
-                                channel_extranonce.extend_from_slice(&upstream_message.extranonce.to_vec());
-                                let push_solution = PushSolution {
-                                    extranonce: channel_extranonce.try_into().map_err(JDCError::shutdown)?,
-                                    ntime: upstream_message.ntime,
-                                    nonce: upstream_message.nonce,
-                                    version: upstream_message.version,
-                                    nbits: prev_hash.n_bits,
-                                    prev_hash: prev_hash.prev_hash.clone(),
-                                };
-                                messages.push(JobDeclaration::PushSolution(push_solution.clone()).into());
-                                // TODO here we should add the user_identity TLV to the SubmitSharesExtended frame
-                                messages.push(
-                                    Mining::SubmitSharesExtended(upstream_message.into_static()).into(),
-                                );
-                            }
-                            Err(err) => {
-                                let code = match err {
-                                    client::share_accounting::ShareValidationError::Invalid=>"invalid-share",
-                                    client::share_accounting::ShareValidationError::Stale=>"stale-share",
-                                    client::share_accounting::ShareValidationError::InvalidJobId=>"invalid-job-id",
-                                    client::share_accounting::ShareValidationError::DoesNotMeetTarget=>"difficulty-too-low",
-                                    client::share_accounting::ShareValidationError::DuplicateShare=>"duplicate-share",
-                                    client::share_accounting::ShareValidationError::BadExtranonceSize=>"bad-extranonce-size",
+                    let extranonce_prefix = extended_channel.get_extranonce_prefix();
+                    let upstream_extranonce_prefix = upstream_channel.get_extranonce_prefix();
+                    let new_extranonce_prefix = &extranonce_prefix[upstream_extranonce_prefix.len()..];
+
+                    let mut upstream_message = msg.clone();
+                    upstream_message.channel_id = upstream_channel.get_channel_id();
+                    // We assign sequence number later, when we validate the share
+                    // and send it to upstream.
+                    upstream_message.sequence_number = 0;
+
+                    let mut extranonce = vec![];
+                    extranonce.extend_from_slice(new_extranonce_prefix);
+                    extranonce.extend_from_slice(&msg.extranonce.to_vec());
+                    upstream_message.extranonce = extranonce.try_into().map_err(|e| JDCError::disconnect(e, downstream_id))?;
+
+                    match upstream_job_id {
+                    // The presence of an `upstream_job_id` indicates that the upstream
+                    // has acknowledged the template and is ready to accept shares for it.
+                    //
+                    // We use optimistic mining: downstream miners are instructed to start
+                    // mining before the upstream acknowledgement arrives. Once the template
+                    // is acknowledged, shares can be safely submitted.
+                    //
+                    // See the Job Declaration Modes section for details:
+                    // https://stratumprotocol.org/specification/06-job-declaration-protocol/#63-job-declaration-modes
+                        Some(upstream_job_id) => {
+                            upstream_message.job_id = upstream_job_id;
+                            match upstream_channel.validate_share(upstream_message.clone()) {
+                                Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
+                                    upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                    info!(
+                                        "SubmitSharesExtended forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
+                                        channel_id, upstream_message.sequence_number, share_hash
+                                    );
+                                    messages.push(
+                                        Mining::SubmitSharesExtended(upstream_message.into_static()).into(),
+                                    );
+                                }
+                                Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
+                                    upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                    info!("SubmitSharesExtended forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
+                                    let mut channel_extranonce = upstream_channel.get_extranonce_prefix().to_vec();
+                                    channel_extranonce.extend_from_slice(&upstream_message.extranonce.to_vec());
+                                    let push_solution = PushSolution {
+                                        extranonce: channel_extranonce.try_into().map_err(JDCError::shutdown)?,
+                                        ntime: upstream_message.ntime,
+                                        nonce: upstream_message.nonce,
+                                        version: upstream_message.version,
+                                        nbits: prev_hash.n_bits,
+                                        prev_hash: prev_hash.prev_hash.clone(),
+                                    };
+                                    messages.push(JobDeclaration::PushSolution(push_solution.clone()).into());
+                                    // TODO here we should add the user_identity TLV to the SubmitSharesExtended frame
+                                    messages.push(
+                                        Mining::SubmitSharesExtended(upstream_message.into_static()).into(),
+                                    );
+                                }
+                                Err(err) => {
+                                    let code = match err {
+                                        client::share_accounting::ShareValidationError::Invalid=>"invalid-share",
+                                        client::share_accounting::ShareValidationError::Stale=>"stale-share",
+                                        client::share_accounting::ShareValidationError::InvalidJobId=>"invalid-job-id",
+                                        client::share_accounting::ShareValidationError::DoesNotMeetTarget=>"difficulty-too-low",
+                                        client::share_accounting::ShareValidationError::DuplicateShare=>"duplicate-share",
+                                        client::share_accounting::ShareValidationError::BadExtranonceSize=>"bad-extranonce-size",
                                     _ => unreachable!(),
-                                };
-                                debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
+                                    };
+                                    debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
+                                }
                             }
                         }
-                    } else {
-                        warn!(
-                            "⚠️ SubmitSharesExtended not forwarded to upstream: job_id={} not found in job-to-template mapping for downstream_id={}, channel_id={}",
-                            job_id, downstream_id, channel_id
-                        );
+                        None =>{
+                            debug!("Upstream job_id not yet known (still waiting for the SetCustomMiningJob.Success message), caching share");
+
+                            if let Some(template_id) = template_id {
+                                // If entry is not present the creates a new
+                                // vector with `or_default` and pushes the
+                                // element.
+                                channel_manager_data
+                                    .cached_shares
+                                    .entry(template_id)
+                                    .or_default()
+                                    .push(upstream_message.into_static());
+                            }
+
+                        }
                     }
                 }
 

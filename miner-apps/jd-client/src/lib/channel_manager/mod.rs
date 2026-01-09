@@ -41,7 +41,7 @@ use stratum_apps::{
         },
         mining_sv2::{
             ExtendedExtranonce, OpenExtendedMiningChannel, SetCustomMiningJob, SetTarget,
-            UpdateChannel,
+            SubmitSharesExtended, UpdateChannel,
         },
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
@@ -66,7 +66,7 @@ use crate::{
     status::{handle_error, Status, StatusSender},
     utils::{AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, UpstreamState},
 };
-mod downstream_message_handler;
+pub mod downstream_message_handler;
 mod extensions_message_handler;
 mod jd_message_handler;
 mod template_message_handler;
@@ -131,7 +131,7 @@ pub struct ChannelManagerData {
     // The last **future template** received from the upstream.
     last_future_template: Option<NewTemplate<'static>>,
     // The last **new prevhash** received from the upstream.
-    last_new_prev_hash: Option<SetNewPrevHashTdp<'static>>,
+    pub last_new_prev_hash: Option<SetNewPrevHashTdp<'static>>,
     // The most recent set of **allocation tokens** received from the JDS.
     allocate_tokens: Option<AllocateMiningJobTokenSuccess<'static>>,
     // Stores new templates as they arrive, mapped by their **template ID**.
@@ -164,6 +164,8 @@ pub struct ChannelManagerData {
     supported_extensions: Vec<u16>,
     /// Extensions that the JDC requires
     required_extensions: Vec<u16>,
+    /// Cached shares waiting for `SetCustomMiningJob.Success` to be propagated upstream
+    cached_shares: HashMap<TemplateId, Vec<SubmitSharesExtended<'static>>>,
 }
 
 impl ChannelManagerData {
@@ -320,6 +322,7 @@ impl ChannelManager {
             negotiated_extensions: vec![],
             supported_extensions,
             required_extensions,
+            cached_shares: HashMap::new(),
         }));
 
         let channel_manager_channel = ChannelManagerChannel {
