@@ -70,7 +70,7 @@ pub struct Upstream {
     /// Protocol extensions that the JDC requires
     required_extensions: Vec<u16>,
     /// Upstream address
-    address: SocketAddr
+    address: SocketAddr,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -131,7 +131,7 @@ impl Upstream {
             upstream_data,
             upstream_channel,
             required_extensions,
-            address: addr.clone()
+            address: addr.clone(),
         })
     }
 
@@ -145,6 +145,7 @@ impl Upstream {
     ) -> JDCResult<(), error::Upstream> {
         info!("Upstream: initiating SV2 handshake...");
         let setup_connection =
+           
             get_setup_connection_message(min_version, max_version, &self.address).map_err(JDCError::shutdown)?;
         debug!(?setup_connection, "Prepared `SetupConnection` message");
         let sv2_frame: Sv2Frame = Message::Common(setup_connection.into())
