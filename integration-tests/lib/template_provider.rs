@@ -11,7 +11,7 @@ use tracing::warn;
 use crate::utils::{fs_utils, http, tarball};
 
 const VERSION_SV2_TP: &str = "1.0.3";
-const VERSION_BITCOIN_CORE: &str = "30.0";
+const VERSION_BITCOIN_CORE: &str = "30.2";
 
 fn get_sv2_tp_filename(os: &str, arch: &str) -> String {
     match (os, arch) {
@@ -124,11 +124,7 @@ impl BitcoinCore {
                     warn!("Downloading Bitcoin Core {} for the testing session. This could take a while...", VERSION_BITCOIN_CORE);
                     let download_endpoint = env::var("BITCOIN_CORE_DOWNLOAD_ENDPOINT")
                         .unwrap_or_else(|_| {
-                            // NOTE: Bitcoin Core moved the v30 download under a new path due to a
-                            // security issue. This link should be updated to v30.2 once it is released.
-                            // Ref: https://x.com/bitcoincoreorg/status/2008284092983369886
-                            "https://bitcoincore.org/bin/insecure-wallet-deletion/bitcoin-core-30.0"
-                                .to_owned()
+                            "https://bitcoincore.org/bin/bitcoin-core-30.2".to_owned()
                         });
                     let url = format!("{download_endpoint}/{bitcoin_filename}");
                     http::make_get_request(&url, 5)
