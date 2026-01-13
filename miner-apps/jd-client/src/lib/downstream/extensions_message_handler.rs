@@ -1,4 +1,7 @@
-use crate::{downstream::Downstream, error::JDCError};
+use crate::{
+    downstream::Downstream,
+    error::{self, JDCError, JDCErrorKind},
+};
 use std::convert::TryInto;
 use stratum_apps::{
     stratum_core::{
@@ -13,7 +16,7 @@ use tracing::{error, info};
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleExtensionsFromClientAsync for Downstream {
-    type Error = JDCError;
+    type Error = JDCError<error::Downstream>;
 
     fn get_negotiated_extensions_with_client(
         &self,
@@ -75,13 +78,17 @@ impl HandleExtensionsFromClientAsync for Downstream {
 
             let error = RequestExtensionsError {
                 request_id: msg.request_id,
-                unsupported_extensions: Seq064K::new(unsupported)
-                    .map_err(|_| JDCError::InvalidUnsupportedExtensionsSequence)?,
-                required_extensions: Seq064K::new(missing_required.clone())
-                    .map_err(|_| JDCError::InvalidRequiredExtensionsSequence)?,
+                unsupported_extensions: Seq064K::new(unsupported).map_err(|_| {
+                    JDCError::shutdown(JDCErrorKind::InvalidUnsupportedExtensionsSequence)
+                })?,
+                required_extensions: Seq064K::new(missing_required.clone()).map_err(|_| {
+                    JDCError::shutdown(JDCErrorKind::InvalidRequiredExtensionsSequence)
+                })?,
             };
 
-            let frame: Sv2Frame = AnyMessage::Extensions(error.into()).try_into()?;
+            let frame: Sv2Frame = AnyMessage::Extensions(error.into())
+                .try_into()
+                .map_err(JDCError::shutdown)?;
             _ = self.downstream_channel.downstream_sender.send(frame).await;
 
             // If required extensions are missing, the server SHOULD disconnect the client
@@ -106,11 +113,14 @@ impl HandleExtensionsFromClientAsync for Downstream {
 
             let success = RequestExtensionsSuccess {
                 request_id: msg.request_id,
-                supported_extensions: Seq064K::new(supported.clone())
-                    .map_err(|_| JDCError::InvalidSupportedExtensionsSequence)?,
+                supported_extensions: Seq064K::new(supported.clone()).map_err(|_| {
+                    JDCError::shutdown(JDCErrorKind::InvalidSupportedExtensionsSequence)
+                })?,
             };
 
-            let frame: Sv2Frame = AnyMessage::Extensions(success.into()).try_into()?;
+            let frame: Sv2Frame = AnyMessage::Extensions(success.into())
+                .try_into()
+                .map_err(JDCError::shutdown)?;
             _ = self.downstream_channel.downstream_sender.send(frame).await;
 
             info!(

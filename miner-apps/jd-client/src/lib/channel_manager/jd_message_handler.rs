@@ -20,13 +20,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::ChannelManager,
-    error::JDCError,
-    status::{State, Status},
+    error::{self, JDCError, JDCErrorKind},
 };
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
-    type Error = JDCError;
+    type Error = JDCError<error::ChannelManager>;
 
     fn get_negotiated_extensions_with_server(
         &self,
@@ -65,7 +64,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
             info!("Coinbase outputs from JDS changed, recalculating constraints");
             let deserialized_jds_coinbase_outputs: Vec<TxOut> =
                 bitcoin::consensus::deserialize(&msg.coinbase_outputs.to_vec())
-                    .map_err(JDCError::BitcoinEncodeError)?;
+                    .map_err(JDCError::shutdown)?;
 
             let max_additional_size: usize = deserialized_jds_coinbase_outputs
                 .iter()
@@ -103,7 +102,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
                 .tp_sender
                 .send(coinbase_output_constraints_message)
                 .await
-                .map_err(|_e| JDCError::ChannelErrorSender)?;
+                .map_err(|_e| JDCError::shutdown(JDCErrorKind::ChannelErrorSender))?;
 
             info!("Sent updated CoinbaseOutputConstraints to TP channel");
         } else {
@@ -132,15 +131,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
     ) -> Result<(), Self::Error> {
         warn!("Received: {}", msg);
         warn!("⚠️ JDS refused the declared job with a DeclareMiningJobError ❌. Starting fallback mechanism.");
-        self.channel_manager_channel
-            .status_sender
-            .send(Status {
-                state: State::JobDeclaratorShutdownFallback(JDCError::Shutdown),
-            })
-            .await
-            .map_err(|_e| JDCError::ChannelErrorSender)?;
-
-        Ok(())
+        Err(JDCError::fallback(JDCErrorKind::DeclareMiningJobError))
     }
 
     // Handles a `DeclareMiningJobSuccess` message from the JDS.
@@ -175,17 +166,23 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
                 "No last_declare_job found for request_id={}",
                 msg.request_id
             );
-            return Err(JDCError::LastDeclareJobNotFound(msg.request_id));
+            return Err(JDCError::log(JDCErrorKind::LastDeclareJobNotFound(
+                msg.request_id,
+            )));
         };
 
         let Some(prevhash) = last_declare_job.prev_hash else {
             error!("Prevhash not found for request_id = {}", msg.request_id);
-            return Err(JDCError::LastNewPrevhashNotFound);
+            return Err(JDCError::log(JDCErrorKind::LastNewPrevhashNotFound));
         };
 
         let outputs = match deserialize_outputs(last_declare_job.coinbase_output.clone()) {
             Ok(outputs) => outputs,
-            Err(_) => return Err(JDCError::ChannelManagerHasBadCoinbaseOutputs),
+            Err(_) => {
+                return Err(JDCError::shutdown(
+                    JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs,
+                ))
+            }
         };
 
         let Some(custom_job) = self
@@ -206,10 +203,11 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
                 Some(custom_job)
             })
         else {
-            return Err(JDCError::FailedToCreateCustomJob);
+            return Err(JDCError::log(JDCErrorKind::FailedToCreateCustomJob));
         };
 
-        let custom_job = custom_job.map_err(|_e| JDCError::FailedToCreateCustomJob)?;
+        let custom_job =
+            custom_job.map_err(|_e| JDCError::log(JDCErrorKind::FailedToCreateCustomJob))?;
 
         self.channel_manager_data.super_safe_lock(|data| {
             if let Some(value) = data.last_declare_job_store.get_mut(&msg.request_id) {
@@ -221,12 +219,14 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
 
         debug!("Sending SetCustomMiningJob to the upstream with channel_id: {channel_id}");
         let message = Mining::SetCustomMiningJob(custom_job).into_static();
-        let sv2_frame: Sv2Frame = AnyMessage::Mining(message).try_into()?;
+        let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
+            .try_into()
+            .map_err(JDCError::shutdown)?;
         self.channel_manager_channel
             .upstream_sender
             .send(sv2_frame)
             .await
-            .map_err(|_e| JDCError::ChannelErrorSender)?;
+            .map_err(|_e| JDCError::fallback(JDCErrorKind::ChannelErrorSender))?;
 
         info!("Successfully sent SetCustomMiningJob to the upstream with channel_id: {channel_id}");
         Ok(())
@@ -259,7 +259,9 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
                 "No transaction list found for request_id={}",
                 msg.request_id
             );
-            return Err(JDCError::LastDeclareJobNotFound(msg.request_id));
+            return Err(JDCError::log(JDCErrorKind::LastDeclareJobNotFound(
+                msg.request_id,
+            )));
         };
 
         let full_tx_list: Vec<B016M> = entry
@@ -286,8 +288,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
 
         let response = ProvideMissingTransactionsSuccess {
             request_id: msg.request_id,
-            transaction_list: binary_sv2::Seq064K::new(missing_txns)
-                .map_err(JDCError::BinarySv2)?,
+            transaction_list: binary_sv2::Seq064K::new(missing_txns).map_err(JDCError::shutdown)?,
         };
         let message = JobDeclaration::ProvideMissingTransactionsSuccess(response);
 
@@ -295,7 +296,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
             .jd_sender
             .send(message)
             .await
-            .map_err(|_e| JDCError::ChannelErrorSender)?;
+            .map_err(|_e| JDCError::fallback(JDCErrorKind::ChannelErrorSender))?;
 
         info!("Successfully sent ProvideMissingTransactionsSuccess to the JDS with request_id: {request_id}");
 

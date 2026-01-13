@@ -21,15 +21,14 @@ use crate::{
         downstream_message_handler::RouteMessageTo, ChannelManager, DeclaredJob,
         JDC_SEARCH_SPACE_BYTES,
     },
-    error::{ChannelSv2Error, JDCError},
+    error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
-    status::{State, Status},
     utils::{create_close_channel_msg, UpstreamState},
 };
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleMiningMessagesFromServerAsync for ChannelManager {
-    type Error = JDCError;
+    type Error = JDCError<error::ChannelManager>;
 
     fn get_negotiated_extensions_with_server(
         &self,
@@ -65,14 +64,9 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         info!(
             "⚠️ JDC can only open extended channels with the upstream server, preparing fallback."
         );
-        _ = self
-            .channel_manager_channel
-            .status_sender
-            .send(Status {
-                state: State::UpstreamShutdownFallback(JDCError::Shutdown),
-            })
-            .await;
-        Ok(())
+        Err(JDCError::fallback(
+            JDCErrorKind::OpenStandardMiningChannelError,
+        ))
     }
 
     // Handles `OpenExtendedMiningChannelSuccess` messages from upstream.
@@ -99,7 +93,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
             .super_safe_lock(|data| data.coinbase_outputs.clone());
 
         let outputs = deserialize_outputs(coinbase_outputs)
-            .map_err(|_| JDCError::DeclaredJobHasBadCoinbaseOutputs)?;
+            .map_err(|_| JDCError::shutdown(JDCErrorKind::DeclaredJobHasBadCoinbaseOutputs))?;
 
         let (channel_state, template, custom_job, close_channel) =
             self.channel_manager_data.super_safe_lock(|data| {
@@ -230,19 +224,21 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                         .tp_sender
                         .send(tx_data_request)
                         .await
-                        .map_err(|_e| JDCError::ChannelErrorSender)?;
+                        .map_err(|_e| JDCError::shutdown(JDCErrorKind::ChannelErrorSender))?;
                 }
             }
 
             if get_jd_mode() == JdMode::CoinbaseOnly {
                 if let Some(custom_job) = custom_job {
                     let set_custom_job = Mining::SetCustomMiningJob(custom_job);
-                    let sv2_frame: Sv2Frame = AnyMessage::Mining(set_custom_job).try_into()?;
+                    let sv2_frame: Sv2Frame = AnyMessage::Mining(set_custom_job)
+                        .try_into()
+                        .map_err(JDCError::shutdown)?;
                     self.channel_manager_channel
                         .upstream_sender
                         .send(sv2_frame)
                         .await
-                        .map_err(|_e| JDCError::ChannelErrorSender)?;
+                        .map_err(|_e| JDCError::fallback(JDCErrorKind::ChannelErrorSender))?;
                     _ = self.allocate_tokens(1).await;
                 }
             }
@@ -264,12 +260,14 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         // In case of failure, close the channel with upstream.
         if let Some(close_channel) = close_channel {
             let close_channel = Mining::CloseChannel(close_channel);
-            let sv2_frame: Sv2Frame = AnyMessage::Mining(close_channel).try_into()?;
+            let sv2_frame: Sv2Frame = AnyMessage::Mining(close_channel)
+                .try_into()
+                .map_err(JDCError::shutdown)?;
             self.channel_manager_channel
                 .upstream_sender
                 .send(sv2_frame)
                 .await
-                .map_err(|_e| JDCError::ChannelErrorSender)?;
+                .map_err(|_e| JDCError::fallback(JDCErrorKind::ChannelErrorSender))?;
             _ = self.allocate_tokens(1).await;
         }
 
@@ -290,14 +288,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         warn!("Received: {}", msg);
         warn!("⚠️ Cannot open extended channel with the upstream server, preparing fallback.");
 
-        _ = self
-            .channel_manager_channel
-            .status_sender
-            .send(Status {
-                state: State::UpstreamShutdownFallback(JDCError::Shutdown),
-            })
-            .await;
-        Ok(())
+        Err(JDCError::fallback(JDCErrorKind::OpenMiningChannelError))
     }
 
     // Handles `UpdateChannelError` messages from upstream.
@@ -326,14 +317,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         self.channel_manager_data.super_safe_lock(|data| {
             data.upstream_channel = None;
         });
-        _ = self
-            .channel_manager_channel
-            .status_sender
-            .send(Status {
-                state: State::UpstreamShutdownFallback(JDCError::Shutdown),
-            })
-            .await;
-        Ok(())
+        Err(JDCError::fallback(JDCErrorKind::CloseChannel))
     }
 
     // Handles `SetExtranoncePrefix` messages from upstream.
@@ -357,9 +341,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                         if let Err(e) =
                             upstream_channel.set_extranonce_prefix(msg.extranonce_prefix.to_vec())
                         {
-                            return Err(JDCError::ChannelSv2(
-                                ChannelSv2Error::ExtendedChannelClientSide(e),
-                            ));
+                            return Err(JDCError::fallback(e));
                         }
 
                         let new_prefix_len = msg.extranonce_prefix.len();
@@ -368,7 +350,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                         let full_extranonce_size =
                             new_prefix_len + rollable_extranonce_size as usize;
                         if full_extranonce_size > MAX_EXTRANONCE_LEN {
-                            return Err(JDCError::ExtranonceSizeTooLarge);
+                            return Err(JDCError::fallback(JDCErrorKind::ExtranonceSizeTooLarge));
                         }
 
                         let range_0 = 0..new_prefix_len;
@@ -390,7 +372,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                             Ok(e) => e,
                             Err(e) => {
                                 warn!("Failed to build extranonce factory: {e:?}");
-                                return Err(JDCError::ExtranoncePrefixFactoryError(e));
+                                return Err(JDCError::fallback(e));
                             }
                         };
 
@@ -409,31 +391,22 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                                         .extranonce_prefix_factory_standard
                                         .next_prefix_standard()
                                     {
-                                        Ok(prefix) => match standard_channel
-                                            .set_extranonce_prefix(prefix.clone().to_vec())
-                                        {
-                                            Ok(_) => {
-                                                messages_results.push(Ok((
-                                                    *downstream_id,
-                                                    Mining::SetExtranoncePrefix(
-                                                        SetExtranoncePrefix {
-                                                            channel_id: *channel_id,
-                                                            extranonce_prefix: prefix.into(),
-                                                        },
-                                                    ),
-                                                )
-                                                    .into()));
-                                            }
-                                            Err(e) => {
-                                                messages_results.push(Err(JDCError::ChannelSv2(
-                                                    ChannelSv2Error::StandardChannelServerSide(e),
-                                                )));
-                                            }
-                                        },
+                                        Ok(prefix) => {
+                                            standard_channel
+                                                .set_extranonce_prefix(prefix.clone().to_vec())
+                                                .expect("Prefix will always be less than 32");
+                                            messages_results.push(Ok((
+                                                *downstream_id,
+                                                Mining::SetExtranoncePrefix(SetExtranoncePrefix {
+                                                    channel_id: *channel_id,
+                                                    extranonce_prefix: prefix.into(),
+                                                }),
+                                            )
+                                                .into()));
+                                        }
                                         Err(e) => {
-                                            messages_results.push(Err(
-                                                JDCError::ExtranoncePrefixFactoryError(e),
-                                            ));
+                                            messages_results
+                                                .push(Err(JDCError::disconnect(e, *downstream_id)));
                                         }
                                     }
                                 }
@@ -446,31 +419,23 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                                             extended_channel.get_rollable_extranonce_size()
                                                 as usize,
                                         ) {
-                                        Ok(prefix) => match extended_channel
-                                            .set_extranonce_prefix(prefix.clone().to_vec())
-                                        {
-                                            Ok(_) => {
-                                                messages_results.push(Ok((
-                                                    *downstream_id,
-                                                    Mining::SetExtranoncePrefix(
-                                                        SetExtranoncePrefix {
-                                                            channel_id: *channel_id,
-                                                            extranonce_prefix: prefix.into(),
-                                                        },
-                                                    ),
-                                                )
-                                                    .into()));
-                                            }
-                                            Err(e) => {
-                                                messages_results.push(Err(JDCError::ChannelSv2(
-                                                    ChannelSv2Error::ExtendedChannelServerSide(e),
-                                                )));
-                                            }
-                                        },
+                                        Ok(prefix) => {
+                                            extended_channel
+                                                .set_extranonce_prefix(prefix.clone().to_vec())
+                                                .expect("Prefix will always be less than 32");
+
+                                            messages_results.push(Ok((
+                                                *downstream_id,
+                                                Mining::SetExtranoncePrefix(SetExtranoncePrefix {
+                                                    channel_id: *channel_id,
+                                                    extranonce_prefix: prefix.into(),
+                                                }),
+                                            )
+                                                .into()));
+                                        }
                                         Err(e) => {
-                                            messages_results.push(Err(
-                                                JDCError::ExtranoncePrefixFactoryError(e),
-                                            ));
+                                            messages_results
+                                                .push(Err(JDCError::disconnect(e, *downstream_id)));
                                         }
                                     }
                                 }
@@ -598,14 +563,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
     ) -> Result<(), Self::Error> {
         warn!("⚠️ Received: {} ❌", msg);
         warn!("⚠️ Starting fallback mechanism.");
-        _ = self
-            .channel_manager_channel
-            .status_sender
-            .send(Status {
-                state: State::UpstreamShutdownFallback(JDCError::Shutdown),
-            })
-            .await;
-        Ok(())
+        Err(JDCError::fallback(JDCErrorKind::CustomJobError))
     }
 
     // Handles a `SetTarget` message from upstream.

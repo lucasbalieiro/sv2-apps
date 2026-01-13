@@ -1,4 +1,7 @@
-use crate::{channel_manager::ChannelManager, error::JDCError};
+use crate::{
+    channel_manager::ChannelManager,
+    error::{self, JDCError, JDCErrorKind},
+};
 use stratum_apps::{
     stratum_core::{
         binary_sv2::Seq064K,
@@ -12,7 +15,7 @@ use tracing::{error, info};
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleExtensionsFromServerAsync for ChannelManager {
-    type Error = JDCError;
+    type Error = JDCError<error::ChannelManager>;
 
     fn get_negotiated_extensions_with_server(
         &self,
@@ -47,7 +50,9 @@ impl HandleExtensionsFromServerAsync for ChannelManager {
                 "Server does not support our required extensions {:?}. Connection should fail over to another upstream.",
                 missing_required
             );
-            return Err(JDCError::RequiredExtensionsNotSupported(missing_required));
+            return Err(JDCError::fallback(
+                JDCErrorKind::RequiredExtensionsNotSupported(missing_required),
+            ));
         }
 
         // Store the negotiated extensions in the shared channel manager data
@@ -88,7 +93,9 @@ impl HandleExtensionsFromServerAsync for ChannelManager {
                 "Server does not support our required extensions {:?}. Connection should fail over to another upstream.",
                 missing_required
             );
-            return Err(JDCError::RequiredExtensionsNotSupported(missing_required));
+            return Err(JDCError::fallback(
+                JDCErrorKind::RequiredExtensionsNotSupported(missing_required),
+            ));
         }
 
         // Check if server requires extensions - if we support them, we should retry with them
@@ -117,8 +124,8 @@ impl HandleExtensionsFromServerAsync for ChannelManager {
                     "Server requires extensions {:?} that we don't support. Connection should fail over to another upstream.",
                     cannot_support
                 );
-                return Err(JDCError::ServerRequiresUnsupportedExtensions(
-                    cannot_support,
+                return Err(JDCError::fallback(
+                    JDCErrorKind::ServerRequiresUnsupportedExtensions(cannot_support),
                 ));
             }
 
@@ -134,7 +141,9 @@ impl HandleExtensionsFromServerAsync for ChannelManager {
             };
 
             let sv2_frame: Sv2Frame =
-                AnyMessage::Extensions(new_require_extensions.into_static().into()).try_into()?;
+                AnyMessage::Extensions(new_require_extensions.into_static().into())
+                    .try_into()
+                    .map_err(JDCError::shutdown)?;
 
             self.channel_manager_channel
                 .upstream_sender
@@ -142,7 +151,7 @@ impl HandleExtensionsFromServerAsync for ChannelManager {
                 .await
                 .map_err(|e| {
                     error!("Failed to send message to upstream: {:?}", e);
-                    JDCError::ChannelErrorSender
+                    JDCError::fallback(JDCErrorKind::ChannelErrorSender)
                 })?;
         }
 

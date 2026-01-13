@@ -14,13 +14,13 @@ use tracing::{error, info, warn};
 
 use crate::{
     channel_manager::{downstream_message_handler::RouteMessageTo, ChannelManager, DeclaredJob},
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
 };
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
-    type Error = JDCError;
+    type Error = JDCError<error::ChannelManager>;
 
     fn get_negotiated_extensions_with_server(
         &self,
@@ -61,7 +61,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
         });
 
         let mut coinbase_outputs = deserialize_outputs(coinbase_outputs)
-            .map_err(|_| JDCError::ChannelManagerHasBadCoinbaseOutputs)?;
+            .map_err(|_| JDCError::shutdown(JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs))?;
 
         if get_jd_mode() == JdMode::FullTemplate {
             let tx_data_request =
@@ -73,7 +73,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                 .tp_sender
                 .send(tx_data_request)
                 .await
-                .map_err(|_e| JDCError::ChannelErrorSender)?;
+                .map_err(|_e| JDCError::shutdown(JDCErrorKind::ChannelErrorSender))?;
         }
 
         let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
@@ -266,7 +266,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
         ) {
             return Ok(());
         }
-        Err(JDCError::TxDataError)
+        Err(JDCError::log(JDCErrorKind::TxDataError))
     }
 
     // Handles a `RequestTransactionDataSuccess` message from the Template Provider.
@@ -293,7 +293,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             .super_safe_lock(|data| data.coinbase_outputs.clone());
 
         let mut deserialized_outputs = deserialize_outputs(coinbase_outputs)
-            .map_err(|_| JDCError::ChannelManagerHasBadCoinbaseOutputs)?;
+            .map_err(|_| JDCError::shutdown(JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs))?;
 
         let (token, template_message, request_id, prevhash) =
             self.channel_manager_data.super_safe_lock(|data| {
@@ -308,12 +308,14 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
         _ = self.allocate_tokens(1).await;
         let Some(token) = token else {
             error!("Token not found, template id: {}", msg.template_id);
-            return Err(JDCError::TokenNotFound);
+            return Err(JDCError::log(JDCErrorKind::TokenNotFound));
         };
 
         let Some(template_message) = template_message else {
             error!("Template not found, template id: {}", msg.template_id);
-            return Err(JDCError::TemplateNotFound(msg.template_id));
+            return Err(JDCError::log(JDCErrorKind::TemplateNotFound(
+                msg.template_id,
+            )));
         };
 
         let mining_token = token.mining_job_token.clone();
@@ -336,7 +338,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             })
             .collect();
 
-        let wtx_ids = Seq064K::new(wtxids_as_u256).map_err(JDCError::BinarySv2)?;
+        let wtx_ids = Seq064K::new(wtxids_as_u256).map_err(JDCError::shutdown)?;
         let is_activated_future_template = template_message.future_template
             && prevhash
                 .map(|prev_hash| prev_hash.template_id != template_message.template_id)
@@ -413,7 +415,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             .super_safe_lock(|data| data.coinbase_outputs.clone());
 
         let outputs = deserialize_outputs(coinbase_outputs)
-            .map_err(|_| JDCError::ChannelManagerHasBadCoinbaseOutputs)?;
+            .map_err(|_| JDCError::shutdown(JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs))?;
 
         let (future_template, declare_job) = self.channel_manager_data.super_safe_lock(|data| {
             if let Some(upstream_channel) = data.upstream_channel.as_mut() {
@@ -444,7 +446,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                     .jd_sender
                     .send(message)
                     .await
-                    .map_err(|_e| JDCError::ChannelErrorSender)?;
+                    .map_err(|_e| JDCError::fallback(JDCErrorKind::ChannelErrorSender))?;
             }
         }
 

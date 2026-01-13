@@ -32,8 +32,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::{ChannelManager, ChannelManagerChannel, FULL_EXTRANONCE_SIZE},
-    error::{ChannelSv2Error, JDCError},
+    error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
+    utils::create_close_channel_msg,
 };
 
 /// `RouteMessageTo` is an abstraction used to route protocol messages
@@ -100,7 +101,7 @@ impl RouteMessageTo<'_> {
     pub async fn forward(
         self,
         channel_manager_channel: &ChannelManagerChannel,
-    ) -> Result<(), JDCError> {
+    ) -> Result<(), JDCErrorKind> {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
                 _ = channel_manager_channel.downstream_sender.send((
@@ -138,7 +139,7 @@ impl RouteMessageTo<'_> {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleMiningMessagesFromClientAsync for ChannelManager {
-    type Error = JDCError;
+    type Error = JDCError<error::ChannelManager>;
 
     fn get_negotiated_extensions_with_client(
         &self,
@@ -193,7 +194,10 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         "No downstream with channel_id: {:?} and downstream_id: {:?}, found",
                         msg.channel_id, downstream_id
                     );
-                    return Err(JDCError::DownstreamNotFound(downstream_id));
+                    return Err(JDCError::disconnect(
+                        JDCErrorKind::DownstreamNotFound(downstream_id),
+                        downstream_id,
+                    ));
                 };
                 downstream.downstream_data.super_safe_lock(|data| {
                     data.extended_channels.remove(&msg.channel_id);
@@ -240,7 +244,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             .super_safe_lock(|data| data.coinbase_outputs.clone());
 
         let mut coinbase_outputs = deserialize_outputs(coinbase_outputs)
-            .map_err(|_| JDCError::ChannelManagerHasBadCoinbaseOutputs)?;
+            .map_err(|_| JDCError::shutdown(JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs))?;
 
         info!(downstream_id, "Received: {}", msg);
 
@@ -258,19 +262,28 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         channel_manager_data.last_future_template.clone()
                     else {
                         error!("Missing last_future_template, cannot open channel");
-                        return Err(JDCError::FutureTemplateNotPresent);
+                        return Err(JDCError::disconnect(
+                            JDCErrorKind::FutureTemplateNotPresent,
+                            downstream_id,
+                        ));
                     };
 
                     let Some(last_new_prev_hash) = channel_manager_data.last_new_prev_hash.clone()
                     else {
                         error!("Missing last_new_prev_hash, cannot open channel");
-                        return Err(JDCError::LastNewPrevhashNotFound);
+                        return Err(JDCError::disconnect(
+                            JDCErrorKind::LastNewPrevhashNotFound,
+                            downstream_id,
+                        ));
                     };
 
                     let Some(downstream) = channel_manager_data.downstream.get(&downstream_id)
                     else {
                         error!(downstream_id, "Downstream not registered");
-                        return Err(JDCError::DownstreamNotFound(downstream_id));
+                        return Err(JDCError::disconnect(
+                            JDCErrorKind::DownstreamNotFound(downstream_id),
+                            downstream_id,
+                        ));
                     };
 
                     coinbase_outputs[0].value =
@@ -301,7 +314,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     Ok(channel) => channel,
                                     Err(e) => {
                                         error!(?e, "Failed to create group channel");
-                                        return Err(JDCError::FailedToCreateGroupChannel(e));
+                                        return Err(JDCError::shutdown(e));
                                     }
                                 };
 
@@ -310,18 +323,14 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 coinbase_outputs.clone(),
                             ) {
                                 error!(?e, "Failed to apply template to group channel");
-                                return Err(JDCError::ChannelSv2(
-                                    ChannelSv2Error::GroupChannelServerSide(e),
-                                ));
+                                return Err(JDCError::shutdown(e));
                             }
 
                             if let Err(e) =
                                 group_channel.on_set_new_prev_hash(last_new_prev_hash.clone())
                             {
                                 error!(?e, "Failed to apply prevhash to group channel");
-                                return Err(JDCError::ChannelSv2(
-                                    ChannelSv2Error::GroupChannelServerSide(e),
-                                ));
+                                return Err(JDCError::shutdown(e));
                             };
 
                             data.group_channels = Some(group_channel);
@@ -347,7 +356,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             Ok(p) => p,
                             Err(e) => {
                                 error!(?e, "Failed to get extranonce prefix");
-                                return Err(JDCError::ExtranoncePrefixFactoryError(e));
+                                return Err(JDCError::shutdown(e));
                             }
                         };
 
@@ -381,9 +390,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                             )
                                                 .into()])
                                         }
-                                        other => Err(JDCError::ChannelSv2(
-                                            ChannelSv2Error::StandardChannelServerSide(other),
-                                        )),
+                                        other => Err(JDCError::disconnect(other, downstream_id)),
                                     };
                                 }
                             };
@@ -397,7 +404,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     .get_extranonce_prefix()
                                     .clone()
                                     .try_into()
-                                    .expect("extranonce_prefix must be valid"),
+                                    .map_err(JDCError::shutdown)?,
                                 group_channel_id,
                             }
                             .into_static();
@@ -416,9 +423,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             .on_new_template(last_future_template.clone(), coinbase_outputs.clone())
                         {
                             error!(?e, "Failed to apply template to standard channel");
-                            return Err(JDCError::ChannelSv2(
-                                ChannelSv2Error::StandardChannelServerSide(e),
-                            ));
+                            return Err(JDCError::shutdown(e));
                         }
 
                         let future_standard_job_id = standard_channel
@@ -455,9 +460,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             standard_channel.on_set_new_prev_hash(last_new_prev_hash.clone())
                         {
                             error!(?e, "Failed to apply prevhash to standard channel");
-                            return Err(JDCError::ChannelSv2(
-                                ChannelSv2Error::StandardChannelServerSide(e),
-                            ));
+                            return Err(JDCError::shutdown(e));
                         }
                         messages.push(
                             (
@@ -543,17 +546,17 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                     let Some(last_future_template) = channel_manager_data.last_future_template.clone() else {
                         error!("No template to share");
-                        return Err(JDCError::FutureTemplateNotPresent);
+                        return Err(JDCError::disconnect(JDCErrorKind::FutureTemplateNotPresent, downstream_id));
                     };
 
                     let Some(last_new_prev_hash) = channel_manager_data.last_new_prev_hash.clone() else {
                         error!("No prevhash in system");
-                        return Err(JDCError::LastNewPrevhashNotFound);
+                        return Err(JDCError::disconnect(JDCErrorKind::LastNewPrevhashNotFound, downstream_id));
                     };
 
                     let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) else {
                         error!(downstream_id, "Downstream not found");
-                        return Err(JDCError::DownstreamNotFound(downstream_id));
+                        return Err(JDCError::disconnect(JDCErrorKind::DownstreamNotFound(downstream_id), downstream_id));
                     };
 
                    downstream.downstream_data.super_safe_lock(|data| {
@@ -567,7 +570,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             Ok(p) => p,
                             Err(e) => {
                                 error!(?e, "Extranonce prefix error");
-                                return Err(JDCError::ExtranoncePrefixFactoryError(e));
+                                return Err(JDCError::shutdown(e));
                             }
                         };
 
@@ -602,9 +605,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                         Ok(vec![(downstream_id, build_error("min-extranonce-size-too-large")).into()])
                                     }
                                     other => Err(
-                                        JDCError::ChannelSv2(
-                                            ChannelSv2Error::ExtendedChannelServerSide(other)
-                                        )
+                                        JDCError::disconnect(other, downstream_id)
                                     ),
                                 }
                             }
@@ -633,7 +634,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                         let mut coinbase_outputs = match deserialize_outputs(channel_manager_data.coinbase_outputs.clone()) {
                             Ok(outputs) => outputs,
-                            Err(_) => return Err(JDCError::ChannelManagerHasBadCoinbaseOutputs),
+                            Err(_) => return Err(JDCError::shutdown(JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs)),
                         };
                         coinbase_outputs[0].value =
                             Amount::from_sat(last_future_template.coinbase_tx_value_remaining);
@@ -644,7 +645,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             extended_channel.on_new_template(last_future_template.clone(), coinbase_outputs)
                         {
                             error!(?e, "Failed to apply template to extended channel");
-                            return Err(JDCError::ChannelSv2(ChannelSv2Error::ExtendedChannelServerSide(e)));
+                            return Err(JDCError::shutdown(e));
                         }
 
                         let future_extended_job_id = extended_channel
@@ -679,7 +680,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         };
                         if let Err(e) = extended_channel.on_set_new_prev_hash(last_new_prev_hash) {
                             error!(?e, "Failed to set prevhash on extended channel");
-                            return Err(JDCError::ChannelSv2(ChannelSv2Error::ExtendedChannelServerSide(e)));
+                            return Err(JDCError::shutdown(e));
                         }
                         messages.push((
                             downstream_id,
@@ -928,11 +929,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
             let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) else {
                 warn!("No downstream found for downstream_id={downstream_id}");
-                return Err(JDCError::DownstreamNotFound(downstream_id));
+                return Err(JDCError::disconnect(JDCErrorKind::DownstreamNotFound(downstream_id), downstream_id));
             };
             let Some(prev_hash) = channel_manager_data.last_new_prev_hash.as_ref() else {
                 warn!("No prev_hash available yet, ignoring share");
-                return Err(JDCError::LastNewPrevhashNotFound);
+                return Err(JDCError::disconnect(JDCErrorKind::LastNewPrevhashNotFound, downstream_id));
             };
 
             downstream.downstream_data.super_safe_lock(|data| {
@@ -944,7 +945,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 };
 
                 let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
-                    return Err(JDCError::VardiffNotFound((downstream_id, channel_id).into()));
+                    return Ok(vec![(downstream_id, Mining::CloseChannel(create_close_channel_msg(channel_id, "invalid-channel-id"))).into()]);
                 };
                 vardiff.increment_shares_since_last_update();
                 let res = standard_channel.validate_share(msg.clone());
@@ -979,7 +980,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 version: msg.version,
                                 header_timestamp: msg.ntime,
                                 header_nonce: msg.nonce,
-                                coinbase_tx: coinbase.try_into()?,
+                                coinbase_tx: coinbase.try_into().map_err(JDCError::shutdown)?,
                             };
 
                             messages.push(TemplateDistribution::SubmitSolution(solution.clone()).into());
@@ -1053,7 +1054,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
                                 info!("SubmitSharesStandard forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
                                 let push_solution = PushSolution {
-                                    extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into()?,
+                                    extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into().map_err(JDCError::shutdown)?,
                                     ntime: upstream_message.ntime,
                                     nonce: upstream_message.nonce,
                                     version: upstream_message.version,
@@ -1124,11 +1125,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
             let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id) else {
                 warn!("No downstream found for downstream_id={downstream_id}");
-                return Err(JDCError::DownstreamNotFound(downstream_id));
+                return Err(JDCError::disconnect(JDCErrorKind::DownstreamNotFound(downstream_id), downstream_id));
             };
             let Some(prev_hash) = channel_manager_data.last_new_prev_hash.as_ref() else {
                 warn!("No prev_hash available yet, ignoring share");
-                return Err(JDCError::LastNewPrevhashNotFound);
+                return Err(JDCError::disconnect(JDCErrorKind::LastNewPrevhashNotFound, downstream_id));
             };
             downstream.downstream_data.super_safe_lock(|data| {
                 let mut messages: Vec<RouteMessageTo> = vec![];
@@ -1155,7 +1156,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 }
 
                 let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
-                    return Err(JDCError::VardiffNotFound((downstream_id, channel_id).into()));
+                    return Ok(vec![(downstream_id, Mining::CloseChannel(create_close_channel_msg(channel_id, "invalid-channel-id"))).into()]);
                 };
                 vardiff.increment_shares_since_last_update();
                 let res = extended_channel.validate_share(msg.clone());
@@ -1189,7 +1190,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 version: msg.version,
                                 header_timestamp: msg.ntime,
                                 header_nonce: msg.nonce,
-                                coinbase_tx: coinbase.try_into()?,
+                                coinbase_tx: coinbase.try_into().map_err(JDCError::shutdown)?,
                             };
                             messages.push(TemplateDistribution::SubmitSolution(solution.clone()).into());
                         }
@@ -1266,7 +1267,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 let mut channel_extranonce = upstream_channel.get_extranonce_prefix().to_vec();
                                 channel_extranonce.extend_from_slice(&upstream_message.extranonce.to_vec());
                                 let push_solution = PushSolution {
-                                    extranonce: channel_extranonce.try_into()?,
+                                    extranonce: channel_extranonce.try_into().map_err(JDCError::shutdown)?,
                                     ntime: upstream_message.ntime,
                                     nonce: upstream_message.nonce,
                                     version: upstream_message.version,
@@ -1299,7 +1300,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         })?;
 
         for messages in messages {
-            messages.forward(&self.channel_manager_channel).await?;
+            _ = messages.forward(&self.channel_manager_channel).await;
         }
 
         Ok(())
@@ -1313,9 +1314,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
         warn!("Received: {}", msg);
-        Err(Self::Error::UnexpectedMessage(
+        Err(JDCError::log(JDCErrorKind::UnexpectedMessage(
             0,
             MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
-        ))
+        )))
     }
 }

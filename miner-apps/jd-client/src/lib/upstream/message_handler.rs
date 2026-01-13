@@ -7,11 +7,14 @@ use stratum_apps::stratum_core::{
 };
 use tracing::{info, warn};
 
-use crate::{error::JDCError, upstream::Upstream};
+use crate::{
+    error::{self, JDCError, JDCErrorKind},
+    upstream::Upstream,
+};
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleCommonMessagesFromServerAsync for Upstream {
-    type Error = JDCError;
+    type Error = JDCError<error::Upstream>;
 
     fn get_negotiated_extensions_with_server(
         &self,
@@ -58,6 +61,6 @@ impl HandleCommonMessagesFromServerAsync for Upstream {
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
         warn!("Received: {}", msg);
-        Err(JDCError::Shutdown)
+        Err(JDCError::fallback(JDCErrorKind::SetupConnectionError))
     }
 }
