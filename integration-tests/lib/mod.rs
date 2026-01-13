@@ -56,9 +56,18 @@ pub fn sv2_tp_config(address: SocketAddr) -> TemplateProviderType {
 }
 
 /// Helper to create BitcoinCoreIpc config with default thresholds.
-pub fn ipc_config(socket_path: std::path::PathBuf) -> TemplateProviderType {
+pub fn ipc_config(data_dir: std::path::PathBuf, is_signet: bool) -> TemplateProviderType {
+    use stratum_apps::tp_type::BitcoinNetwork;
+
+    let network = if is_signet {
+        BitcoinNetwork::Signet
+    } else {
+        BitcoinNetwork::Regtest
+    };
+
     TemplateProviderType::BitcoinCoreIpc {
-        unix_socket_path: socket_path,
+        network,
+        data_dir: Some(data_dir),
         fee_threshold: 0,
         min_interval: 1,
     }

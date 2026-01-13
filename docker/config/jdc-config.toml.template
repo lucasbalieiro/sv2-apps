@@ -67,6 +67,6 @@ jds_port = "${JDC_UPSTREAM_JDS_PORT}"
 
 # Bitcoin Core IPC config
 [template_provider_type.BitcoinCoreIpc]
-unix_socket_path = "/app/node.sock"
+network = "mainnet"
 fee_threshold = ${JDC_FEE_THRESHOLD}
 min_interval = ${JDC_MIN_INTERVAL}
