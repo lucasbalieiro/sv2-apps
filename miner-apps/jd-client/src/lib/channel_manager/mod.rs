@@ -59,7 +59,7 @@ use crate::{
     channel_manager::downstream_message_handler::RouteMessageTo,
     config::JobDeclaratorClientConfig,
     downstream::Downstream,
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind, JDCResult},
     status::{handle_error, Status, StatusSender},
     utils::{
         AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, ShutdownMessage,
@@ -234,7 +234,6 @@ pub struct ChannelManagerChannel {
     tp_receiver: Receiver<TemplateDistribution<'static>>,
     downstream_sender: broadcast::Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
     downstream_receiver: Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-    status_sender: Sender<Status>,
 }
 
 /// Contains all the state of mutable and immutable data required
@@ -270,11 +269,10 @@ impl ChannelManager {
         tp_receiver: Receiver<TemplateDistribution<'static>>,
         downstream_sender: broadcast::Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         downstream_receiver: Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-        status_sender: Sender<Status>,
         coinbase_outputs: Vec<u8>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
-    ) -> Result<Self, JDCError> {
+    ) -> JDCResult<Self, error::ChannelManager> {
         let (range_0, range_1, range_2) = {
             let range_1 = 0..JDC_SEARCH_SPACE_BYTES;
             (
@@ -326,7 +324,6 @@ impl ChannelManager {
             tp_receiver,
             downstream_sender,
             downstream_receiver,
-            status_sender,
         };
 
         let channel_manager = ChannelManager {
@@ -361,11 +358,11 @@ impl ChannelManager {
         )>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
-    ) -> Result<(), JDCError> {
+    ) -> JDCResult<(), error::ChannelManager> {
         info!("Starting downstream server at {listening_address}");
         let server = TcpListener::bind(listening_address).await.map_err(|e| {
             error!(error = ?e, "Failed to bind downstream server at {listening_address}");
-            e
+            JDCError::shutdown(e)
         })?;
 
         let mut shutdown_rx = notify_shutdown.subscribe();
@@ -533,42 +530,34 @@ impl ChannelManager {
                     }
                     res = cm_jds.handle_jds_message() => {
                         if let Err(e) = res {
-                            if !e.is_critical() {
-                                continue;
-                            }
                             error!(error = ?e, "Error handling JDS message");
-                            handle_error(&status_sender, e).await;
-                            break;
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
                         }
                     }
                     res = cm_pool.handle_pool_message_frame() => {
                         if let Err(e) = res {
-                            if !e.is_critical() {
-                                continue;
-                            }
                             error!(error = ?e, "Error handling Pool message");
-                            handle_error(&status_sender, e).await;
-                            break;
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
                         }
                     }
                     res = cm_template.handle_template_provider_message() => {
                         if let Err(e) = res {
-                            if !e.is_critical() {
-                                continue;
-                            }
                             error!(error = ?e, "Error handling Template Receiver message");
-                            handle_error(&status_sender, e).await;
-                            break;
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
                         }
                     }
                     res = cm_downstreams.handle_downstream_message() => {
                         if let Err(e) = res {
-                            if !e.is_critical() {
-                                continue;
-                            }
                             error!(error = ?e, "Error handling Downstreams message");
-                            handle_error(&status_sender, e).await;
-                            break;
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
                         }
                     }
                 }
@@ -580,7 +569,11 @@ impl ChannelManager {
     //
     // Given a `downstream_id`, this method:
     // 1. Removes the corresponding downstream from the `downstream` map.
-    fn remove_downstream(&mut self, downstream_id: DownstreamId) -> Result<(), JDCError> {
+    #[allow(clippy::result_large_err)]
+    fn remove_downstream(
+        &mut self,
+        downstream_id: DownstreamId,
+    ) -> JDCResult<(), error::ChannelManager> {
         self.channel_manager_data.super_safe_lock(|cm_data| {
             cm_data.downstream.remove(&downstream_id);
             cm_data
@@ -599,7 +592,7 @@ impl ChannelManager {
     /// - If the frame contains a JobDeclaration message, it forwards it to the   job declaration
     ///   message handler.
     /// - If the frame contains any unsupported message type, an error is returned.
-    async fn handle_jds_message(&mut self) -> Result<(), JDCError> {
+    async fn handle_jds_message(&mut self) -> JDCResult<(), error::ChannelManager> {
         if let Ok(message) = self.channel_manager_channel.jd_receiver.recv().await {
             self.handle_job_declaration_message_from_server(None, message, None)
                 .await?;
@@ -613,11 +606,11 @@ impl ChannelManager {
     /// - If the frame contains a **Mining** message, it forwards it to the   mining message
     ///   handler.
     /// - If the frame contains any unsupported message type, an error is returned.
-    async fn handle_pool_message_frame(&mut self) -> Result<(), JDCError> {
+    async fn handle_pool_message_frame(&mut self) -> JDCResult<(), error::ChannelManager> {
         if let Ok(mut sv2_frame) = self.channel_manager_channel.upstream_receiver.recv().await {
             let header = sv2_frame.get_header().ok_or_else(|| {
                 error!("SV2 frame missing header");
-                JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+                JDCError::fallback(framing_sv2::Error::MissingHeader)
             })?;
             let message_type = header.msg_type();
             let extension_type = header.ext_type();
@@ -633,7 +626,10 @@ impl ChannelManager {
                 }
                 _ => {
                     warn!("Received unsupported message type from upstream: {message_type}");
-                    return Err(JDCError::UnexpectedMessage(extension_type, message_type));
+                    return Err(JDCError::log(JDCErrorKind::UnexpectedMessage(
+                        extension_type,
+                        message_type,
+                    )));
                 }
             }
         }
@@ -646,7 +642,7 @@ impl ChannelManager {
     // - If the frame contains a TemplateDistribution message, it forwards it to the   template
     //   distribution message handler.
     // - If the frame contains any unsupported message type, an error is returned.
-    async fn handle_template_provider_message(&mut self) -> Result<(), JDCError> {
+    async fn handle_template_provider_message(&mut self) -> JDCResult<(), error::ChannelManager> {
         if let Ok(message) = self.channel_manager_channel.tp_receiver.recv().await {
             self.handle_template_distribution_message_from_server(None, message, None)
                 .await?;
@@ -687,7 +683,7 @@ impl ChannelManager {
     // - Only one upstream channel is created per JDC instance.
     // - After the upstream channel is established, all new downstream requests bypass the pending
     //   mechanism and are sent directly to the mining handler.
-    async fn handle_downstream_message(&mut self) -> Result<(), JDCError> {
+    async fn handle_downstream_message(&mut self) -> JDCResult<(), error::ChannelManager> {
         if let Ok((downstream_id, message, tlvs)) = self
             .channel_manager_channel
             .downstream_receiver
@@ -711,21 +707,27 @@ impl ChannelManager {
                                 .is_ok()
                             {
                                 let mut upstream_message = downstream_channel_request;
-                                upstream_message.user_identity =
-                                    self.user_identity.clone().try_into()?;
+                                upstream_message.user_identity = self
+                                    .user_identity
+                                    .clone()
+                                    .try_into()
+                                    .map_err(JDCError::shutdown)?;
                                 upstream_message.request_id = 1;
                                 upstream_message.min_extranonce_size +=
                                     JDC_SEARCH_SPACE_BYTES as u16;
                                 let upstream_message =
                                     Mining::OpenExtendedMiningChannel(upstream_message)
                                         .into_static();
-                                let sv2_frame: Sv2Frame =
-                                    AnyMessage::Mining(upstream_message).try_into()?;
+                                let sv2_frame: Sv2Frame = AnyMessage::Mining(upstream_message)
+                                    .try_into()
+                                    .map_err(JDCError::shutdown)?;
                                 self.channel_manager_channel
                                     .upstream_sender
                                     .send(sv2_frame)
                                     .await
-                                    .map_err(|_| JDCError::ChannelErrorSender)?;
+                                    .map_err(|_| {
+                                        JDCError::fallback(JDCErrorKind::ChannelErrorSender)
+                                    })?;
                             }
                         }
                         UpstreamState::Pending => {
@@ -777,12 +779,16 @@ impl ChannelManager {
 
                                 let message =
                                     Mining::OpenExtendedMiningChannel(upstream_open).into_static();
-                                let sv2_frame: Sv2Frame = AnyMessage::Mining(message).try_into()?;
+                                let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
+                                    .try_into()
+                                    .map_err(JDCError::shutdown)?;
                                 self.channel_manager_channel
                                     .upstream_sender
                                     .send(sv2_frame)
                                     .await
-                                    .map_err(|_| JDCError::ChannelErrorSender)?;
+                                    .map_err(|_| {
+                                        JDCError::fallback(JDCErrorKind::ChannelErrorSender)
+                                    })?;
                             }
                         }
                         UpstreamState::Pending => {
@@ -830,14 +836,17 @@ impl ChannelManager {
         downstream_id: DownstreamId,
         message: Mining<'_>,
         tlvs: Option<&[Tlv]>,
-    ) -> Result<(), JDCError> {
+    ) -> JDCResult<(), error::ChannelManager> {
         self.handle_mining_message_from_client(Some(downstream_id), message, tlvs)
             .await?;
         Ok(())
     }
 
     /// Utility method to request for more token to JDS.
-    pub async fn allocate_tokens(&self, token_to_allocate: u32) -> Result<(), JDCError> {
+    pub async fn allocate_tokens(
+        &self,
+        token_to_allocate: u32,
+    ) -> JDCResult<(), error::ChannelManager> {
         debug!("Allocating {} job tokens", token_to_allocate);
 
         for i in 0..token_to_allocate {
@@ -867,7 +876,7 @@ impl ChannelManager {
                 .await
                 .map_err(|e| {
                     info!(error = ?e, "Failed to send AllocateMiningJobToken frame");
-                    JDCError::ChannelErrorSender
+                    JDCError::fallback(JDCErrorKind::ChannelErrorSender)
                 })?;
         }
 
@@ -969,7 +978,7 @@ impl ChannelManager {
     // # Purpose
     // - Executes the vardiff cycle every 60 seconds for all downstreams.
     // - Delegates to [`Self::run_vardiff`] on each tick.
-    async fn run_vardiff_loop(&self) -> Result<(), JDCError> {
+    async fn run_vardiff_loop(&self) -> JDCResult<(), error::ChannelManager> {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             ticker.tick().await;
@@ -988,7 +997,7 @@ impl ChannelManager {
     // - Runs vardiff for each channel and collects the resulting updates.
     // - Propagates difficulty changes to downstreams and also sends an `UpdateChannel` message
     //   upstream if applicable.
-    async fn run_vardiff(&self) -> Result<(), JDCError> {
+    async fn run_vardiff(&self) -> JDCResult<(), error::ChannelManager> {
         let mut messages: Vec<RouteMessageTo> = vec![];
         self.channel_manager_data
             .super_safe_lock(|channel_manager_data| {
@@ -1090,7 +1099,7 @@ impl ChannelManager {
     pub async fn coinbase_output_constraints(
         &self,
         coinbase_outputs: Vec<TxOut>,
-    ) -> Result<(), JDCError> {
+    ) -> JDCResult<(), error::ChannelManager> {
         let msg = coinbase_output_constraints_message(coinbase_outputs);
 
         self.channel_manager_channel
@@ -1099,7 +1108,7 @@ impl ChannelManager {
             .await
             .map_err(|e| {
                 error!(error = ?e, "Failed to send CoinbaseOutputConstraints message to TP");
-                JDCError::ChannelErrorSender
+                JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
             })?;
 
         Ok(())

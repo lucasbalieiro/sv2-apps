@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     channel_manager::ChannelManager,
     config::{ConfigJDCMode, JobDeclaratorClientConfig},
-    error::JDCError,
+    error::JDCErrorKind,
     jd_mode::{set_jd_mode, JdMode},
     job_declarator::JobDeclarator,
     status::{State, Status},
@@ -105,7 +105,6 @@ impl JobDeclaratorClient {
             tp_to_channel_manager_receiver.clone(),
             channel_manager_to_downstream_sender.clone(),
             downstream_to_channel_manager_receiver,
-            status_sender.clone(),
             encoded_outputs.clone(),
             self.config.supported_extensions().to_vec(),
             self.config.required_extensions().to_vec(),
@@ -410,7 +409,7 @@ impl JobDeclaratorClient {
         status_sender: Sender<Status>,
         mode: ConfigJDCMode,
         task_manager: Arc<TaskManager>,
-    ) -> Result<(Upstream, JobDeclarator), JDCError> {
+    ) -> Result<(Upstream, JobDeclarator), JDCErrorKind> {
         const MAX_RETRIES: usize = 3;
         let upstream_len = upstreams.len();
         for (i, upstream_addr) in upstreams.iter_mut().enumerate() {
@@ -474,7 +473,7 @@ impl JobDeclaratorClient {
         }
 
         tracing::error!("All upstreams failed after {} retries each", MAX_RETRIES);
-        Err(JDCError::Shutdown)
+        Err(JDCErrorKind::CouldNotInitiateSystem)
     }
 }
 
@@ -492,7 +491,7 @@ async fn try_initialize_single(
     mode: ConfigJDCMode,
     task_manager: Arc<TaskManager>,
     config: &JobDeclaratorClientConfig,
-) -> Result<(Upstream, JobDeclarator), JDCError> {
+) -> Result<(Upstream, JobDeclarator), JDCErrorKind> {
     info!("Upstream connection in-progress at initialize single");
     let upstream = Upstream::new(
         upstream_addr,
@@ -503,7 +502,8 @@ async fn try_initialize_single(
         status_sender.clone(),
         config.required_extensions().to_vec(),
     )
-    .await?;
+    .await
+    .map_err(|error| error.kind)?;
 
     info!("Upstream connection done at initialize single");
 
@@ -516,7 +516,8 @@ async fn try_initialize_single(
         task_manager.clone(),
         status_sender.clone(),
     )
-    .await?;
+    .await
+    .map_err(|error| error.kind)?;
 
     Ok((upstream, job_declarator))
 }

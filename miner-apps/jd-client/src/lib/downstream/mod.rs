@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, warn};
 
 use crate::{
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
     utils::ShutdownMessage,
@@ -200,15 +200,17 @@ impl Downstream {
                     res = self_clone_1.handle_downstream_message() => {
                         if let Err(e) = res {
                             error!(?e, "Error handling downstream message for {downstream_id}");
-                            handle_error(&status_sender, e).await;
-                            break;
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
                         }
                     }
                     res = self_clone_2.handle_channel_manager_message(&mut receiver) => {
                         if let Err(e) = res {
                             error!(?e, "Error handling channel manager message for {downstream_id}");
-                            handle_error(&status_sender, e).await;
-                            break;
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
                         }
                     }
 
@@ -219,17 +221,22 @@ impl Downstream {
     }
 
     // Performs the initial handshake with a downstream peer.
-    async fn setup_connection_with_downstream(&mut self) -> Result<(), JDCError> {
-        let mut frame = self.downstream_channel.downstream_receiver.recv().await?;
+    async fn setup_connection_with_downstream(&mut self) -> JDCResult<(), error::Downstream> {
+        let mut frame = self
+            .downstream_channel
+            .downstream_receiver
+            .recv()
+            .await
+            .map_err(|error| JDCError::disconnect(error, self.downstream_id))?;
         let header = frame.get_header().expect("frame header must be present");
         if header.msg_type() == MESSAGE_TYPE_SETUP_CONNECTION {
             self.handle_common_message_frame_from_client(None, header, frame.payload())
                 .await?;
             return Ok(());
         }
-        Err(JDCError::UnexpectedMessage(
-            header.ext_type(),
-            header.msg_type(),
+        Err(JDCError::disconnect(
+            JDCErrorKind::UnexpectedMessage(header.ext_type(), header.msg_type()),
+            self.downstream_id,
         ))
     }
 
@@ -237,12 +244,14 @@ impl Downstream {
     async fn handle_channel_manager_message(
         self,
         receiver: &mut broadcast::Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-    ) -> Result<(), JDCError> {
+    ) -> JDCResult<(), error::Downstream> {
         let (downstream_id, message, _tlv_fields) = match receiver.recv().await {
             Ok(msg) => msg,
             Err(e) => {
                 warn!(?e, "Broadcast receive failed");
-                return Ok(());
+                return Err(JDCError::shutdown(
+                    JDCErrorKind::BroadcastChannelErrorReceiver(e),
+                ));
             }
         };
 
@@ -255,7 +264,7 @@ impl Downstream {
         }
 
         let message = AnyMessage::Mining(message);
-        let sv2_frame: Sv2Frame = message.try_into()?;
+        let sv2_frame: Sv2Frame = message.try_into().map_err(JDCError::shutdown)?;
 
         self.downstream_channel
             .downstream_sender
@@ -263,17 +272,20 @@ impl Downstream {
             .await
             .map_err(|e| {
                 error!(?e, "Downstream send failed");
-                JDCError::CodecNoise(
-                    stratum_apps::stratum_core::noise_sv2::Error::ExpectedIncomingHandshakeMessage,
-                )
+                JDCError::disconnect(JDCErrorKind::ChannelErrorSender, self.downstream_id)
             })?;
 
         Ok(())
     }
 
     // Handles incoming messages from the downstream peer.
-    async fn handle_downstream_message(mut self) -> Result<(), JDCError> {
-        let mut sv2_frame = self.downstream_channel.downstream_receiver.recv().await?;
+    async fn handle_downstream_message(mut self) -> JDCResult<(), error::Downstream> {
+        let mut sv2_frame = self
+            .downstream_channel
+            .downstream_receiver
+            .recv()
+            .await
+            .map_err(|error| JDCError::disconnect(error, self.downstream_id))?;
         let header = sv2_frame
             .get_header()
             .expect("frame header must be present");
@@ -282,7 +294,8 @@ impl Downstream {
             .downstream_data
             .super_safe_lock(|data| data.negotiated_extensions.clone());
         let (any_message, tlv_fields) =
-            parse_message_frame_with_tlvs(header, payload, &negotiated_extensions)?;
+            parse_message_frame_with_tlvs(header, payload, &negotiated_extensions)
+                .map_err(|error| JDCError::disconnect(error, self.downstream_id))?;
         match any_message {
             AnyMessage::Mining(message) => {
                 self.downstream_channel
@@ -291,7 +304,7 @@ impl Downstream {
                     .await
                     .map_err(|e| {
                         error!(?e, "Failed to send mining message to channel manager.");
-                        JDCError::ChannelErrorSender
+                        JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
                     })?;
             }
             AnyMessage::Extensions(message) => {

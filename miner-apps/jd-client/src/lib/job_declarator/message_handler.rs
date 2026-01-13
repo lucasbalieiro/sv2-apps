@@ -8,14 +8,14 @@ use stratum_apps::stratum_core::{
 use tracing::{info, warn};
 
 use crate::{
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind},
     jd_mode::{set_jd_mode, JdMode},
     job_declarator::JobDeclarator,
 };
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleCommonMessagesFromServerAsync for JobDeclarator {
-    type Error = JDCError;
+    type Error = JDCError<error::JobDeclarator>;
 
     fn get_negotiated_extensions_with_server(
         &self,
@@ -38,10 +38,6 @@ impl HandleCommonMessagesFromServerAsync for JobDeclarator {
             _ => JdMode::SoloMining,
         };
         set_jd_mode(jd_mode);
-
-        if jd_mode == JdMode::SoloMining {
-            return Err(JDCError::Shutdown);
-        }
 
         Ok(())
     }
@@ -73,6 +69,6 @@ impl HandleCommonMessagesFromServerAsync for JobDeclarator {
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
         warn!("Received: {}", msg);
-        Err(JDCError::Shutdown)
+        Err(JDCError::fallback(JDCErrorKind::SetupConnectionError))
     }
 }

@@ -26,7 +26,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::ConfigJDCMode,
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
     utils::{get_setup_connection_message_jds, ShutdownMessage},
@@ -75,19 +75,22 @@ impl JobDeclarator {
         mode: ConfigJDCMode,
         task_manager: Arc<TaskManager>,
         status_sender: Sender<Status>,
-    ) -> Result<Self, JDCError> {
+    ) -> JDCResult<Self, error::JobDeclarator> {
         let (_, addr, pubkey, _) = upstreams;
         info!("Connecting to JD Server at {addr}");
         let stream = tokio::time::timeout(
             tokio::time::Duration::from_secs(5),
             TcpStream::connect(addr),
         )
-        .await??;
+        .await
+        .map_err(JDCError::fallback)?
+        .map_err(JDCError::fallback)?;
         info!("Connection established with JD Server at {addr} in mode: {mode:?}");
-        let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
+        let initiator = Initiator::from_raw_k(pubkey.into_bytes()).map_err(JDCError::fallback)?;
         let (noise_stream_reader, noise_stream_writer) =
             NoiseTcpStream::<Message>::new(stream, HandshakeRole::Initiator(initiator))
-                .await?
+                .await
+                .map_err(JDCError::fallback)?
                 .into_split();
 
         let status_sender = StatusSender::JobDeclarator(status_sender);
@@ -178,15 +181,17 @@ impl JobDeclarator {
                         res = self_clone_1.handle_job_declarator_message() => {
                             if let Err(e) = res {
                                 error!(error = ?e, "Job Declarator message handling failed");
-                                handle_error(&status_sender, e).await;
-                                break;
+                                if handle_error(&status_sender, e).await {
+                                    break;
+                                }
                             }
                         }
                         res = self_clone_2.handle_channel_manager_message() => {
                             if let Err(e) = res {
                                 error!(error = ?e, "Channel Manager message handling failed");
-                                handle_error(&status_sender, e).await;
-                                break;
+                                if handle_error(&status_sender, e).await {
+                                    break;
+                                }
                             }
                         },
                     }
@@ -202,7 +207,7 @@ impl JobDeclarator {
     /// - Sends `SetupConnection` message.
     /// - Waits for and validates server response.
     /// - Completes SV2 protocol handshake.
-    pub async fn setup_connection(&mut self) -> Result<(), JDCError> {
+    pub async fn setup_connection(&mut self) -> JDCResult<(), error::JobDeclarator> {
         info!("Sending SetupConnection to JDS at {}", self.socket_address);
 
         let setup_connection = get_setup_connection_message_jds(&self.socket_address, &self.mode);
@@ -210,14 +215,12 @@ impl JobDeclarator {
             .try_into()
             .map_err(|e| {
                 error!(error=?e, "Failed to serialize SetupConnection message.");
-                JDCError::CodecNoise(
-                    stratum_apps::stratum_core::noise_sv2::Error::ExpectedIncomingHandshakeMessage,
-                )
+                JDCError::shutdown(e)
             })?;
 
         if let Err(e) = self.job_declarator_channel.jds_sender.send(sv2_frame).await {
             error!(error=?e, "Failed to send SetupConnection frame.");
-            return Err(JDCError::ChannelErrorSender);
+            return Err(JDCError::fallback(JDCErrorKind::ChannelErrorSender));
         }
         debug!("SetupConnection frame sent successfully.");
 
@@ -228,14 +231,12 @@ impl JobDeclarator {
             .await
             .map_err(|e| {
                 error!(error=?e, "No handshake response received from Job declarator.");
-                JDCError::CodecNoise(
-                    stratum_apps::stratum_core::noise_sv2::Error::ExpectedIncomingHandshakeMessage,
-                )
+                JDCError::fallback(JDCErrorKind::ChannelErrorSender)
             })?;
 
         let header = incoming.get_header().ok_or_else(|| {
             error!("Handshake frame missing header.");
-            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+            JDCError::fallback(framing_sv2::Error::MissingHeader)
         })?;
 
         debug!(ext_type = ?header.ext_type(),
@@ -250,7 +251,7 @@ impl JobDeclarator {
     }
 
     // Handles messages coming from the Channel Manager and forwards them to the Job Declarator.
-    async fn handle_channel_manager_message(&self) -> Result<(), JDCError> {
+    async fn handle_channel_manager_message(&self) -> JDCResult<(), error::JobDeclarator> {
         match self
             .job_declarator_channel
             .channel_manager_receiver
@@ -260,14 +261,14 @@ impl JobDeclarator {
             Ok(msg) => {
                 debug!("Forwarding message from channel manager to JDS.");
                 let message = AnyMessage::JobDeclaration(msg);
-                let sv2_frame: Sv2Frame = message.try_into()?;
+                let sv2_frame: Sv2Frame = message.try_into().map_err(JDCError::shutdown)?;
                 self.job_declarator_channel
                     .jds_sender
                     .send(sv2_frame)
                     .await
                     .map_err(|e| {
                         error!("Failed to send message to outbound channel: {:?}", e);
-                        JDCError::ChannelErrorSender
+                        JDCError::fallback(JDCErrorKind::ChannelErrorSender)
                     })?;
             }
             Err(e) => {
@@ -282,13 +283,18 @@ impl JobDeclarator {
     // - Forwards `JobDeclaration` messages to Channel Manager.
     // - Processes `Common` messages via handler.
     // - Rejects unsupported message types.
-    async fn handle_job_declarator_message(&mut self) -> Result<(), JDCError> {
-        let mut sv2_frame = self.job_declarator_channel.jds_receiver.recv().await?;
+    async fn handle_job_declarator_message(&mut self) -> JDCResult<(), error::JobDeclarator> {
+        let mut sv2_frame = self
+            .job_declarator_channel
+            .jds_receiver
+            .recv()
+            .await
+            .map_err(JDCError::fallback)?;
 
         debug!("Received SV2 frame from JDS.");
         let header = sv2_frame.get_header().ok_or_else(|| {
             error!("SV2 frame missing header");
-            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+            JDCError::fallback(framing_sv2::Error::MissingHeader)
         })?;
         let message_type = header.msg_type();
         let extension_type = header.ext_type();
@@ -300,15 +306,16 @@ impl JobDeclarator {
                     .await?;
             }
             MessageType::JobDeclaration => {
-                let message =
-                    JobDeclaration::try_from((message_type, sv2_frame.payload()))?.into_static();
+                let message = JobDeclaration::try_from((message_type, sv2_frame.payload()))
+                    .map_err(JDCError::fallback)?
+                    .into_static();
                 self.job_declarator_channel
                     .channel_manager_sender
                     .send(message)
                     .await
                     .map_err(|e| {
                         error!(error=?e, "Failed to send Job declaration message to channel manager.");
-                        JDCError::ChannelErrorSender
+                        JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
                     })?;
             }
             _ => {

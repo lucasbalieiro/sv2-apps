@@ -29,7 +29,7 @@ use stratum_apps::{
     utils::types::{ChannelId, DownstreamId, Hashrate, JobId},
 };
 
-use crate::{config::ConfigJDCMode, error::JDCError};
+use crate::{config::ConfigJDCMode, error::JDCErrorKind};
 
 /// Represents a message that can trigger shutdown of various system components.
 #[derive(Debug, Clone)]
@@ -54,7 +54,7 @@ pub enum ShutdownMessage {
 pub fn get_setup_connection_message(
     min_version: u16,
     max_version: u16,
-) -> Result<SetupConnection<'static>, JDCError> {
+) -> Result<SetupConnection<'static>, JDCErrorKind> {
     let endpoint_host = "0.0.0.0".to_string().into_bytes().try_into()?;
     let vendor = String::new().try_into()?;
     let hardware_version = String::new().try_into()?;

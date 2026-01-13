@@ -21,7 +21,7 @@ use stratum_apps::{
         codec_sv2::HandshakeRole,
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
-        noise_sv2::Initiator,
+        noise_sv2::{self, Initiator},
         parsers_sv2::{AnyMessage, TemplateDistribution},
     },
     task_manager::TaskManager,
@@ -34,7 +34,7 @@ use tokio::{net::TcpStream, sync::broadcast};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
     utils::{get_setup_connection_message_tp, ShutdownMessage},
@@ -96,7 +96,7 @@ impl Sv2Tp {
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
         task_manager: Arc<TaskManager>,
         status_sender: Sender<Status>,
-    ) -> Result<Sv2Tp, JDCError> {
+    ) -> JDCResult<Sv2Tp, error::TemplateProvider> {
         const MAX_RETRIES: usize = 3;
 
         for attempt in 1..=MAX_RETRIES {
@@ -111,7 +111,8 @@ impl Sv2Tp {
                     debug!(attempt, "Using anonymous initiator (no public key)");
                     Initiator::without_pk()
                 }
-            }?;
+            }
+            .map_err(JDCError::shutdown)?;
 
             match TcpStream::connect(tp_address.as_str()).await {
                 Ok(stream) => {
@@ -179,7 +180,7 @@ impl Sv2Tp {
         }
 
         error!("Exhausted all connection attempts, shutting down TemplateReceiver");
-        Err(JDCError::Shutdown)
+        Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem))
     }
 
     /// Start unified message loop for template receiver.
@@ -227,15 +228,17 @@ impl Sv2Tp {
                         res = self_clone_1.handle_template_provider_message() => {
                             if let Err(e) = res {
                                 error!("TemplateReceiver template provider handler failed: {e:?}");
-                                handle_error(&status_sender, e).await;
-                                break;
+                                if handle_error(&status_sender, e).await {
+                                    break;
+                                }
                             }
                         }
                         res = self_clone_2.handle_channel_manager_message() => {
                             if let Err(e) = res {
                                 error!("TemplateReceiver channel manager handler failed: {e:?}");
-                                handle_error(&status_sender, e).await;
-                                break;
+                                if handle_error(&status_sender, e).await {
+                                    break;
+                                }
                             }
                         },
                     }
@@ -251,13 +254,20 @@ impl Sv2Tp {
     /// - `Common` messages → handled locally
     /// - `TemplateDistribution` messages → forwarded to channel manager
     /// - Unsupported messages → logged and ignored
-    pub async fn handle_template_provider_message(&mut self) -> Result<(), JDCError> {
-        let mut sv2_frame = self.sv2_tp_channel.tp_receiver.recv().await?;
+    pub async fn handle_template_provider_message(
+        &mut self,
+    ) -> JDCResult<(), error::TemplateProvider> {
+        let mut sv2_frame = self
+            .sv2_tp_channel
+            .tp_receiver
+            .recv()
+            .await
+            .map_err(JDCError::shutdown)?;
 
         debug!("Received SV2 frame from Template provider.");
         let header = sv2_frame.get_header().ok_or_else(|| {
             error!("SV2 frame missing header");
-            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+            JDCError::shutdown(framing_sv2::Error::MissingHeader)
         })?;
         let message_type = header.msg_type();
         let extension_type = header.ext_type();
@@ -273,7 +283,8 @@ impl Sv2Tp {
                     .await?;
             }
             MessageType::TemplateDistribution => {
-                let message = TemplateDistribution::try_from((message_type, sv2_frame.payload()))?
+                let message = TemplateDistribution::try_from((message_type, sv2_frame.payload()))
+                    .map_err(JDCError::shutdown)?
                     .into_static();
                 self.sv2_tp_channel
                     .channel_manager_sender
@@ -281,7 +292,7 @@ impl Sv2Tp {
                     .await
                     .map_err(|e| {
                         error!(error=?e, "Failed to send template distribution message to channel manager.");
-                        JDCError::ChannelErrorSender
+                        JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
                     })?;
             }
             _ => {
@@ -294,31 +305,40 @@ impl Sv2Tp {
     /// Handle messages from channel manager → template provider.
     ///
     /// Forwards outbound frames upstream
-    pub async fn handle_channel_manager_message(&self) -> Result<(), JDCError> {
+    pub async fn handle_channel_manager_message(&self) -> JDCResult<(), error::TemplateProvider> {
         let msg = AnyMessage::TemplateDistribution(
-            self.sv2_tp_channel.channel_manager_receiver.recv().await?,
+            self.sv2_tp_channel
+                .channel_manager_receiver
+                .recv()
+                .await
+                .map_err(JDCError::shutdown)?,
         );
         debug!("Forwarding message from channel manager to outbound_tx");
-        let sv2_frame: Sv2Frame = msg.try_into()?;
+        let sv2_frame: Sv2Frame = msg.try_into().map_err(JDCError::shutdown)?;
         self.sv2_tp_channel
             .tp_sender
             .send(sv2_frame)
             .await
-            .map_err(|_| JDCError::ChannelErrorSender)?;
+            .map_err(|_| JDCError::shutdown(JDCErrorKind::ChannelErrorSender))?;
 
         Ok(())
     }
 
     // Performs the initial handshake with template provider.
-    pub async fn setup_connection(&mut self, addr: String) -> Result<(), JDCError> {
+    pub async fn setup_connection(
+        &mut self,
+        addr: String,
+    ) -> JDCResult<(), error::TemplateProvider> {
         let socket: SocketAddr = addr.parse().map_err(|_| {
             error!(%addr, "Invalid socket address");
-            JDCError::InvalidSocketAddress(addr.clone())
+            JDCError::shutdown(JDCErrorKind::InvalidSocketAddress(addr.clone()))
         })?;
 
         info!(%socket, "Building setup connection message for upstream");
         let setup_msg = get_setup_connection_message_tp(socket);
-        let frame: Sv2Frame = Message::Common(setup_msg.into()).try_into()?;
+        let frame: Sv2Frame = Message::Common(setup_msg.into())
+            .try_into()
+            .map_err(JDCError::shutdown)?;
 
         info!("Sending setup connection message to upstream");
         self.sv2_tp_channel
@@ -327,20 +347,18 @@ impl Sv2Tp {
             .await
             .map_err(|_| {
                 error!("Failed to send setup connection message upstream");
-                JDCError::ChannelErrorSender
+                JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
             })?;
 
         info!("Waiting for upstream handshake response");
         let mut incoming: Sv2Frame = self.sv2_tp_channel.tp_receiver.recv().await.map_err(|e| {
             error!(?e, "Upstream connection closed during handshake");
-            JDCError::CodecNoise(
-                stratum_apps::stratum_core::noise_sv2::Error::ExpectedIncomingHandshakeMessage,
-            )
+            JDCError::shutdown(noise_sv2::Error::ExpectedIncomingHandshakeMessage)
         })?;
 
         let header = incoming.get_header().ok_or_else(|| {
             error!("Handshake frame missing header");
-            JDCError::FramingSv2(framing_sv2::Error::MissingHeader)
+            JDCError::shutdown(framing_sv2::Error::MissingHeader)
         })?;
         debug!(ext_type = ?header.ext_type(),
             msg_type = ?header.msg_type(),

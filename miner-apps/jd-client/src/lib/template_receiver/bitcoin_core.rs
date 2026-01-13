@@ -1,5 +1,5 @@
 use crate::{
-    error::JDCError,
+    error::{self, JDCError, JDCErrorKind},
     status::{handle_error, State, Status, StatusSender},
     utils::ShutdownMessage,
 };
@@ -44,10 +44,9 @@ pub async fn connect_to_bitcoin_core(
                 _ = cancellation_token_clone.cancelled() => {
                     // turn status_sender into a StatusSender::TemplateReceiver
                     let status_sender = StatusSender::TemplateReceiver(status_sender_clone);
-
                     handle_error(
                         &status_sender,
-                        JDCError::BitcoinCoreSv2CancellationTokenActivated,
+                        JDCError::<error::TemplateProvider>::shutdown(JDCErrorKind::BitcoinCoreSv2CancellationTokenActivated),
                     )
                     .await;
                     break;
@@ -71,7 +70,7 @@ pub async fn connect_to_bitcoin_core(
                 // we can't use handle_error here because we're not in a async context yet
                 let _ = status_sender_clone.send_blocking(Status {
                     state: State::TemplateReceiverShutdown(
-                        JDCError::FailedToCreateBitcoinCoreTokioRuntime,
+                        JDCErrorKind::FailedToCreateBitcoinCoreTokioRuntime,
                     ),
                 });
                 return;

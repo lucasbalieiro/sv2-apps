@@ -1,6 +1,6 @@
 use clap::Parser;
 use ext_config::{Config, File, FileFormat};
-use jd_client_sv2::{config::JobDeclaratorClientConfig, error::JDCError};
+use jd_client_sv2::{config::JobDeclaratorClientConfig, error::JDCErrorKind};
 
 use std::path::PathBuf;
 use tracing::error;
@@ -23,12 +23,12 @@ pub struct Args {
 }
 
 #[allow(clippy::result_large_err)]
-pub fn process_cli_args() -> Result<JobDeclaratorClientConfig, JDCError> {
+pub fn process_cli_args() -> Result<JobDeclaratorClientConfig, JDCErrorKind> {
     let args = Args::parse();
 
     let config_path = args.config_path.to_str().ok_or_else(|| {
         error!("Invalid configuration path.");
-        JDCError::BadCliArgs
+        JDCErrorKind::BadCliArgs
     })?;
 
     let settings = Config::builder()

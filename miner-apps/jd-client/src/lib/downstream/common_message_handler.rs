@@ -1,4 +1,7 @@
-use crate::{downstream::Downstream, error::JDCError};
+use crate::{
+    downstream::Downstream,
+    error::{self, JDCError, JDCErrorKind},
+};
 use std::convert::TryInto;
 use stratum_apps::{
     stratum_core::{
@@ -15,7 +18,7 @@ use tracing::info;
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleCommonMessagesFromClientAsync for Downstream {
-    type Error = JDCError;
+    type Error = JDCError<error::Downstream>;
 
     fn get_negotiated_extensions_with_client(
         &self,
@@ -61,12 +64,17 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
                 error_code: "unsupported-protocol"
                     .to_string()
                     .try_into()
-                    .expect("error code must be valid string"),
+                    .map_err(JDCError::shutdown)?,
             };
-            let frame: Sv2Frame = AnyMessage::Common(response.into_static().into()).try_into()?;
+            let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
+                .try_into()
+                .map_err(JDCError::shutdown)?;
             _ = self.downstream_channel.downstream_sender.send(frame).await;
 
-            return Err(JDCError::Shutdown);
+            return Err(JDCError::disconnect(
+                JDCErrorKind::SetupConnectionError,
+                self.downstream_id,
+            ));
         }
 
         if has_work_selection(msg.flags) {
@@ -76,14 +84,17 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
                 error_code: "unsupported-feature-flags"
                     .to_string()
                     .try_into()
-                    .expect("error code must be valid string"),
+                    .map_err(JDCError::shutdown)?,
             };
             let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
-                .unwrap();
+                .map_err(JDCError::shutdown)?;
             _ = self.downstream_channel.downstream_sender.send(frame).await;
 
-            return Err(JDCError::Shutdown);
+            return Err(JDCError::disconnect(
+                JDCErrorKind::SetupConnectionError,
+                self.downstream_id,
+            ));
         }
 
         if has_requires_std_job(msg.flags) {
@@ -94,7 +105,9 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             used_version: 2,
             flags: msg.flags,
         };
-        let frame: Sv2Frame = AnyMessage::Common(response.into_static().into()).try_into()?;
+        let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
+            .try_into()
+            .map_err(JDCError::shutdown)?;
 
         _ = self.downstream_channel.downstream_sender.send(frame).await;
 

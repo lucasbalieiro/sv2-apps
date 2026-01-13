@@ -12,7 +12,10 @@
 //! This module ensures that all errors can be passed around consistently, including across async
 //! boundaries.
 use ext_config::ConfigError;
-use std::fmt;
+use std::{
+    fmt::{self, Formatter},
+    marker::PhantomData,
+};
 use stratum_apps::{
     network_helpers,
     stratum_core::{
@@ -31,21 +34,117 @@ use stratum_apps::{
         parsers_sv2::ParserError,
     },
     utils::types::{
-        DownstreamId, ExtensionType, JobId, MessageType, RequestId, TemplateId, VardiffKey,
+        CanDisconnect, CanFallback, CanShutdown, DownstreamId, ExtensionType, JobId, MessageType,
+        RequestId, TemplateId, VardiffKey,
     },
 };
 use tokio::{sync::broadcast, time::error::Elapsed};
+
+pub type JDCResult<T, Owner> = Result<T, JDCError<Owner>>;
+
+#[derive(Debug)]
+pub struct ChannelManager;
+
+#[derive(Debug)]
+pub struct TemplateProvider;
+
+#[derive(Debug)]
+pub struct JobDeclarator;
+
+#[derive(Debug)]
+pub struct Upstream;
+
+#[derive(Debug)]
+pub struct Downstream;
+
+#[derive(Debug)]
+pub struct JDCError<Owner> {
+    pub kind: JDCErrorKind,
+    pub action: Action,
+    _owner: PhantomData<Owner>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Action {
+    Log,
+    Disconnect(DownstreamId),
+    Fallback,
+    Shutdown,
+}
+
+impl CanDisconnect for Downstream {}
+impl CanDisconnect for ChannelManager {}
+
+impl CanFallback for Upstream {}
+impl CanFallback for JobDeclarator {}
+impl CanFallback for ChannelManager {}
+
+impl CanShutdown for ChannelManager {}
+impl CanShutdown for TemplateProvider {}
+impl CanShutdown for Downstream {}
+impl CanShutdown for Upstream {}
+impl CanShutdown for JobDeclarator {}
+
+impl<O> JDCError<O> {
+    pub fn log<E: Into<JDCErrorKind>>(kind: E) -> Self {
+        Self {
+            kind: kind.into(),
+            action: Action::Log,
+            _owner: PhantomData,
+        }
+    }
+}
+
+impl<O> JDCError<O>
+where
+    O: CanDisconnect,
+{
+    pub fn disconnect<E: Into<JDCErrorKind>>(kind: E, downstream_id: DownstreamId) -> Self {
+        Self {
+            kind: kind.into(),
+            action: Action::Disconnect(downstream_id),
+            _owner: PhantomData,
+        }
+    }
+}
+
+impl<O> JDCError<O>
+where
+    O: CanFallback,
+{
+    pub fn fallback<E: Into<JDCErrorKind>>(kind: E) -> Self {
+        Self {
+            kind: kind.into(),
+            action: Action::Fallback,
+            _owner: PhantomData,
+        }
+    }
+}
+
+impl<O> JDCError<O>
+where
+    O: CanShutdown,
+{
+    pub fn shutdown<E: Into<JDCErrorKind>>(kind: E) -> Self {
+        Self {
+            kind: kind.into(),
+            action: Action::Shutdown,
+            _owner: PhantomData,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ChannelSv2Error {
     ExtendedChannelClientSide(ExtendedChannelClientError),
     ExtendedChannelServerSide(ExtendedChannelServerError),
+    ExtranonceError(ExtendedExtranonceError),
     StandardChannelServerSide(StandardChannelError),
     GroupChannelServerSide(GroupChannelError),
 }
 
 #[derive(Debug)]
-pub enum JDCError {
+pub enum JDCErrorKind {
     /// Errors on bad CLI argument input.
     BadCliArgs,
     /// Errors on bad `config` TOML deserialize.
@@ -67,8 +166,6 @@ pub enum JDCError {
     ChannelErrorSender,
     /// Broadcast channel receiver error
     BroadcastChannelErrorReceiver(broadcast::error::RecvError),
-    /// Shutdown
-    Shutdown,
     /// Network helpers error
     NetworkHelpersError(network_helpers::Error),
     /// Unexpected message
@@ -133,13 +230,31 @@ pub enum JDCError {
     FailedToCreateBitcoinCoreTokioRuntime,
     /// Failed to send CoinbaseOutputConstraints message
     FailedToSendCoinbaseOutputConstraints,
+    /// Setup Connection Error
+    SetupConnectionError,
+    /// Endpoint changed
+    ChangeEndpoint,
+    /// Received upstream message during solo mining
+    UpstreamMessageDuringSoloMining,
+    /// Declare mining job error
+    DeclareMiningJobError,
+    /// Channel opening error
+    OpenMiningChannelError,
+    /// Standard channel opening error
+    OpenStandardMiningChannelError,
+    /// Close channel
+    CloseChannel,
+    /// Custom job error
+    CustomJobError,
+    /// Could not initiate subsystem
+    CouldNotInitiateSystem,
 }
 
-impl std::error::Error for JDCError {}
+impl std::error::Error for JDCErrorKind {}
 
-impl fmt::Display for JDCError {
+impl fmt::Display for JDCErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use JDCError::*;
+        use JDCErrorKind::*;
         match self {
             BadCliArgs => write!(f, "Bad CLI arg input"),
             BadConfigDeserialize(ref e) => write!(f, "Bad `config` TOML deserialize: `{e:?}`"),
@@ -154,7 +269,6 @@ impl fmt::Display for JDCError {
                 write!(f, "Broadcast channel receive error: {e:?}")
             }
             ChannelErrorSender => write!(f, "Sender error"),
-            Shutdown => write!(f, "Shutdown"),
             NetworkHelpersError(ref e) => write!(f, "Network error: {e:?}"),
             UnexpectedMessage(extension_type, message_type) => {
                 write!(f, "Unexpected Message: {extension_type} {message_type}")
@@ -259,132 +373,151 @@ impl fmt::Display for JDCError {
             FailedToSendCoinbaseOutputConstraints => {
                 write!(f, "Failed to send CoinbaseOutputConstraints message")
             }
+            SetupConnectionError => {
+                write!(f, "Failed to Setup connection")
+            }
+            ChangeEndpoint => {
+                write!(f, "Change endpoint")
+            }
+            OpenMiningChannelError => write!(f, "failed to open mining channel"),
+            OpenStandardMiningChannelError => write!(f, "failed to open standard mining channel"),
+            DeclareMiningJobError => write!(f, "job declaration rejected by server"),
+            UpstreamMessageDuringSoloMining => {
+                write!(f, "received upstream message during solo mining mode")
+            }
+            CloseChannel => write!(f, "channel closed by upstream"),
+            CustomJobError => write!(f, "Custom job not acknowledged"),
+            CouldNotInitiateSystem => write!(f, "Could not initiate subsystem"),
         }
     }
 }
 
-impl JDCError {
-    fn is_non_critical_variant(&self) -> bool {
-        matches!(
-            self,
-            JDCError::LastNewPrevhashNotFound
-                | JDCError::FutureTemplateNotPresent
-                | JDCError::LastDeclareJobNotFound(_)
-                | JDCError::ActiveJobNotFound(_)
-                | JDCError::TokenNotFound
-                | JDCError::TemplateNotFound(_)
-                | JDCError::DownstreamNotFound(_)
-                | JDCError::VardiffNotFound(_)
-                | JDCError::TxDataError
-                | JDCError::FrameConversionError
-                | JDCError::FailedToCreateCustomJob
-                | JDCError::RequiredExtensionsNotSupported(_)
-                | JDCError::ServerRequiresUnsupportedExtensions(_)
-        )
-    }
-
-    /// Adds basic priority to error types:
-    /// todo: design a better error priority system.
-    pub fn is_critical(&self) -> bool {
-        if self.is_non_critical_variant() {
-            tracing::error!("Non-critical error: {self}");
-            return false;
-        }
-
-        true
-    }
-}
-
-impl From<ParserError> for JDCError {
+impl From<ParserError> for JDCErrorKind {
     fn from(e: ParserError) -> Self {
-        JDCError::Parser(e)
+        JDCErrorKind::Parser(e)
     }
 }
 
-impl From<binary_sv2::Error> for JDCError {
+impl From<binary_sv2::Error> for JDCErrorKind {
     fn from(e: binary_sv2::Error) -> Self {
-        JDCError::BinarySv2(e)
+        JDCErrorKind::BinarySv2(e)
     }
 }
 
-impl From<noise_sv2::Error> for JDCError {
+impl From<noise_sv2::Error> for JDCErrorKind {
     fn from(e: noise_sv2::Error) -> Self {
-        JDCError::CodecNoise(e)
+        JDCErrorKind::CodecNoise(e)
     }
 }
 
-impl From<framing_sv2::Error> for JDCError {
+impl From<framing_sv2::Error> for JDCErrorKind {
     fn from(e: framing_sv2::Error) -> Self {
-        JDCError::FramingSv2(e)
+        JDCErrorKind::FramingSv2(e)
     }
 }
 
-impl From<std::io::Error> for JDCError {
+impl From<std::io::Error> for JDCErrorKind {
     fn from(e: std::io::Error) -> Self {
-        JDCError::Io(e)
+        JDCErrorKind::Io(e)
     }
 }
 
-impl From<std::num::ParseIntError> for JDCError {
+impl From<std::num::ParseIntError> for JDCErrorKind {
     fn from(e: std::num::ParseIntError) -> Self {
-        JDCError::ParseInt(e)
+        JDCErrorKind::ParseInt(e)
     }
 }
 
-impl From<ConfigError> for JDCError {
+impl From<ConfigError> for JDCErrorKind {
     fn from(e: ConfigError) -> Self {
-        JDCError::BadConfigDeserialize(e)
+        JDCErrorKind::BadConfigDeserialize(e)
     }
 }
 
-impl From<async_channel::RecvError> for JDCError {
+impl From<async_channel::RecvError> for JDCErrorKind {
     fn from(e: async_channel::RecvError) -> Self {
-        JDCError::ChannelErrorReceiver(e)
+        JDCErrorKind::ChannelErrorReceiver(e)
     }
 }
 
-impl From<network_helpers::Error> for JDCError {
+impl From<network_helpers::Error> for JDCErrorKind {
     fn from(value: network_helpers::Error) -> Self {
-        JDCError::NetworkHelpersError(value)
+        JDCErrorKind::NetworkHelpersError(value)
     }
 }
 
-impl From<stratum_apps::stratum_core::bitcoin::consensus::encode::Error> for JDCError {
+impl From<stratum_apps::stratum_core::bitcoin::consensus::encode::Error> for JDCErrorKind {
     fn from(value: stratum_apps::stratum_core::bitcoin::consensus::encode::Error) -> Self {
-        JDCError::BitcoinEncodeError(value)
+        JDCErrorKind::BitcoinEncodeError(value)
     }
 }
 
-impl From<Elapsed> for JDCError {
+impl From<Elapsed> for JDCErrorKind {
     fn from(_value: Elapsed) -> Self {
         Self::Timeout
     }
 }
 
-impl HandlerErrorType for JDCError {
+impl HandlerErrorType for JDCErrorKind {
     fn parse_error(error: ParserError) -> Self {
-        JDCError::Parser(error)
+        JDCErrorKind::Parser(error)
     }
 
     fn unexpected_message(extension_type: ExtensionType, message_type: MessageType) -> Self {
-        JDCError::UnexpectedMessage(extension_type, message_type)
+        JDCErrorKind::UnexpectedMessage(extension_type, message_type)
     }
 }
 
-impl From<ExtendedChannelClientError> for JDCError {
+impl From<ExtendedChannelClientError> for JDCErrorKind {
     fn from(value: ExtendedChannelClientError) -> Self {
-        JDCError::ChannelSv2(ChannelSv2Error::ExtendedChannelClientSide(value))
+        JDCErrorKind::ChannelSv2(ChannelSv2Error::ExtendedChannelClientSide(value))
     }
 }
 
-impl From<ExtendedChannelServerError> for JDCError {
+impl From<ExtendedChannelServerError> for JDCErrorKind {
     fn from(value: ExtendedChannelServerError) -> Self {
-        JDCError::ChannelSv2(ChannelSv2Error::ExtendedChannelServerSide(value))
+        JDCErrorKind::ChannelSv2(ChannelSv2Error::ExtendedChannelServerSide(value))
     }
 }
 
-impl From<StandardChannelError> for JDCError {
+impl From<StandardChannelError> for JDCErrorKind {
     fn from(value: StandardChannelError) -> Self {
-        JDCError::ChannelSv2(ChannelSv2Error::StandardChannelServerSide(value))
+        JDCErrorKind::ChannelSv2(ChannelSv2Error::StandardChannelServerSide(value))
+    }
+}
+
+impl From<ExtendedExtranonceError> for JDCErrorKind {
+    fn from(value: ExtendedExtranonceError) -> Self {
+        JDCErrorKind::ChannelSv2(ChannelSv2Error::ExtranonceError(value))
+    }
+}
+
+impl From<GroupChannelError> for JDCErrorKind {
+    fn from(value: GroupChannelError) -> Self {
+        JDCErrorKind::ChannelSv2(ChannelSv2Error::GroupChannelServerSide(value))
+    }
+}
+
+impl<Owner> HandlerErrorType for JDCError<Owner> {
+    fn parse_error(error: ParserError) -> Self {
+        Self {
+            kind: JDCErrorKind::Parser(error),
+            action: Action::Log,
+            _owner: PhantomData,
+        }
+    }
+
+    fn unexpected_message(extension_type: ExtensionType, message_type: MessageType) -> Self {
+        Self {
+            kind: JDCErrorKind::UnexpectedMessage(extension_type, message_type),
+            action: Action::Log,
+            _owner: PhantomData,
+        }
+    }
+}
+
+impl<Owner> std::fmt::Display for JDCError<Owner> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "[{:?}/{:?}]", self.kind, self.action)
     }
 }

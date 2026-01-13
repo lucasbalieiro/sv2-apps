@@ -7,9 +7,9 @@
 //! converted into shutdown signals, allowing coordinated teardown of tasks.
 
 use stratum_apps::utils::types::DownstreamId;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
-use crate::error::JDCError;
+use crate::error::{Action, JDCError, JDCErrorKind};
 
 /// Sender type for propagating status updates from different system components.
 #[derive(Debug, Clone)]
@@ -97,16 +97,16 @@ pub enum State {
     /// A downstream connection has shut down with a reason.
     DownstreamShutdown {
         downstream_id: DownstreamId,
-        reason: JDCError,
+        reason: JDCErrorKind,
     },
     /// Template receiver has shut down with a reason.
-    TemplateReceiverShutdown(JDCError),
+    TemplateReceiverShutdown(JDCErrorKind),
     /// Job declarator has shut down during fallback with a reason.
-    JobDeclaratorShutdownFallback(JDCError),
+    JobDeclaratorShutdownFallback(JDCErrorKind),
     /// Channel manager has shut down with a reason.
-    ChannelManagerShutdown(JDCError),
+    ChannelManagerShutdown(JDCErrorKind),
     /// Upstream has shut down during fallback with a reason.
-    UpstreamShutdownFallback(JDCError),
+    UpstreamShutdownFallback(JDCErrorKind),
 }
 
 /// Wrapper around a component’s state, sent as status updates across the system.
@@ -116,43 +116,75 @@ pub struct Status {
     pub state: State,
 }
 
-/// Sends a shutdown status for the given component, logging the error cause.
 #[cfg_attr(not(test), hotpath::measure)]
-async fn send_status(sender: &StatusSender, error: JDCError) {
-    let state = match sender {
-        StatusSender::Downstream { downstream_id, .. } => {
-            warn!("Downstream [{downstream_id}] shutting down due to error: {error:?}");
-            State::DownstreamShutdown {
-                downstream_id: *downstream_id,
-                reason: error,
-            }
-        }
-        StatusSender::TemplateReceiver(_) => {
-            warn!("Template Receiver shutting down due to error: {error:?}");
-            State::TemplateReceiverShutdown(error)
-        }
-        StatusSender::ChannelManager(_) => {
-            warn!("ChannelManager shutting down due to error: {error:?}");
-            State::ChannelManagerShutdown(error)
-        }
-        StatusSender::Upstream(_) => {
-            warn!("Upstream shutting down due to error: {error:?}");
-            State::UpstreamShutdownFallback(error)
-        }
-        StatusSender::JobDeclarator(_) => {
-            warn!("Job declarator shutting down due to error: {error:?}");
-            State::JobDeclaratorShutdownFallback(error)
-        }
-    };
+async fn send_status<O>(sender: &StatusSender, error: JDCError<O>) -> bool {
+    use Action::*;
 
-    if let Err(e) = sender.send(Status { state }).await {
-        tracing::error!("Failed to send status update from {sender:?}: {e:?}");
+    match error.action {
+        Log => {
+            warn!("Log-only error from {:?}: {:?}", sender, error.kind);
+            false
+        }
+
+        Disconnect(downstream_id) => {
+            let state = State::DownstreamShutdown {
+                downstream_id,
+                reason: error.kind,
+            };
+
+            if let Err(e) = sender.send(Status { state }).await {
+                tracing::error!(
+                    "Failed to send downstream shutdown status from {:?}: {:?}",
+                    sender,
+                    e
+                );
+                std::process::abort();
+            }
+            matches!(sender, StatusSender::Downstream { .. })
+        }
+
+        Fallback => {
+            let state = State::UpstreamShutdownFallback(error.kind);
+
+            if let Err(e) = sender.send(Status { state }).await {
+                tracing::error!("Failed to send fallback status from {:?}: {:?}", sender, e);
+                std::process::abort();
+            }
+            matches!(sender, StatusSender::Upstream { .. })
+        }
+
+        Shutdown => {
+            let state = match sender {
+                StatusSender::ChannelManager(_) => {
+                    warn!(
+                        "Channel Manager shutdown requested due to error: {:?}",
+                        error.kind
+                    );
+                    State::ChannelManagerShutdown(error.kind)
+                }
+                StatusSender::TemplateReceiver(_) => {
+                    warn!(
+                        "Template Receiver shutdown requested due to error: {:?}",
+                        error.kind
+                    );
+                    State::TemplateReceiverShutdown(error.kind)
+                }
+                _ => {
+                    tracing::error!("Shutdown action received from invalid sender: {:?}", sender);
+                    State::ChannelManagerShutdown(error.kind)
+                }
+            };
+
+            if let Err(e) = sender.send(Status { state }).await {
+                tracing::error!("Failed to send shutdown status from {:?}: {:?}", sender, e);
+                std::process::abort();
+            }
+            true
+        }
     }
 }
 
-/// Logs an error and propagates a corresponding shutdown status for the component.
 #[cfg_attr(not(test), hotpath::measure)]
-pub async fn handle_error(sender: &StatusSender, e: JDCError) {
-    error!("Error in {:?}: {:?}", sender, e);
-    send_status(sender, e).await;
+pub async fn handle_error<O>(sender: &StatusSender, e: JDCError<O>) -> bool {
+    send_status(sender, e).await
 }
