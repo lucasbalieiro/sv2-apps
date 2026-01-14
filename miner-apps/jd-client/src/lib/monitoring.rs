@@ -15,11 +15,11 @@ use crate::{channel_manager::ChannelManager, downstream::Downstream};
 
 impl ServerMonitoring for ChannelManager {
     fn get_server(&self) -> ServerInfo {
-        let mut extended_channels = Vec::new();
-        let standard_channels = Vec::new(); // JDC only uses extended channels
-
         self.channel_manager_data
             .safe_lock(|d| {
+                let mut extended_channels = Vec::new();
+                let standard_channels = Vec::new(); // JDC only uses extended channels
+
                 if let Some(upstream_channel) = &d.upstream_channel {
                     let channel_id = upstream_channel.get_channel_id();
                     let target = upstream_channel.get_target();
@@ -43,24 +43,28 @@ impl ServerMonitoring for ChannelManager {
                         best_diff: share_accounting.get_best_diff(),
                     });
                 }
-            })
-            .unwrap();
 
-        ServerInfo {
-            extended_channels,
-            standard_channels,
-        }
+                ServerInfo {
+                    extended_channels,
+                    standard_channels,
+                }
+            })
+            .unwrap_or_else(|_| ServerInfo {
+                extended_channels: Vec::new(),
+                standard_channels: Vec::new(),
+            })
     }
 }
 
-/// Helper to convert a Downstream to ClientInfo
-fn downstream_to_client_info(client: &Downstream) -> ClientInfo {
-    let mut extended_channels = Vec::new();
-    let mut standard_channels = Vec::new();
-
+/// Helper to convert a Downstream to ClientInfo.
+/// Returns None if the lock cannot be acquired (graceful degradation for monitoring).
+fn downstream_to_client_info(client: &Downstream) -> Option<ClientInfo> {
     client
         .downstream_data
         .safe_lock(|dd| {
+            let mut extended_channels = Vec::new();
+            let mut standard_channels = Vec::new();
+
             for (_channel_id, extended_channel) in dd.extended_channels.iter() {
                 let channel_id = extended_channel.get_channel_id();
                 let target = extended_channel.get_target();
@@ -112,34 +116,38 @@ fn downstream_to_client_info(client: &Downstream) -> ClientInfo {
                     share_batch_size: share_accounting.get_share_batch_size(),
                 });
             }
-        })
-        .unwrap();
 
-    ClientInfo {
-        client_id: client.downstream_id,
-        extended_channels,
-        standard_channels,
-    }
+            ClientInfo {
+                client_id: client.downstream_id,
+                extended_channels,
+                standard_channels,
+            }
+        })
+        .ok()
 }
 
 impl ClientsMonitoring for ChannelManager {
     fn get_clients(&self) -> Vec<ClientInfo> {
-        let mut clients = Vec::new();
+        // Clone Downstream references and release lock immediately to avoid contention
+        // with template distribution and message handling
+        let downstream_refs: Vec<Downstream> = self
+            .channel_manager_data
+            .safe_lock(|data| data.downstream.values().cloned().collect())
+            .unwrap_or_default();
 
-        self.channel_manager_data
-            .safe_lock(|d| {
-                for (_client_id, client) in d.downstream.iter() {
-                    clients.push(downstream_to_client_info(client));
-                }
-            })
-            .unwrap();
-
-        clients
+        downstream_refs
+            .iter()
+            .filter_map(downstream_to_client_info)
+            .collect()
     }
 
     fn get_client_by_id(&self, client_id: usize) -> Option<ClientInfo> {
         self.channel_manager_data
-            .safe_lock(|d| d.downstream.get(&client_id).map(downstream_to_client_info))
-            .unwrap()
+            .safe_lock(|d| {
+                d.downstream
+                    .get(&client_id)
+                    .and_then(downstream_to_client_info)
+            })
+            .unwrap_or(None)
     }
 }
