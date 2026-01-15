@@ -5,6 +5,7 @@ use std::{
     str::FromStr,
 };
 use stratum_apps::{
+    config_helpers::opt_path_from_toml,
     config_helpers::CoinbaseRewardScript,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
     stratum_core::bitcoin::{Amount, TxOut},
@@ -37,6 +38,7 @@ pub struct JobDeclaratorClientConfig {
     /// A signature string identifying this JDC instance.
     jdc_signature: String,
     /// The path to the log file where JDC will write logs.
+    #[serde(default, deserialize_with = "opt_path_from_toml")]
     log_file: Option<PathBuf>,
     /// User Identity
     user_identity: String,
