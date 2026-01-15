@@ -15,7 +15,7 @@ The services are wired together on a dedicated Docker network and can be enabled
 
 * Docker
 * Docker Compose (v2+)
-* A fully synced **Bitcoin Core v30+** node running on **testnet4** (or any network you prefer)
+* A fully synced **Bitcoin Core v30.2++** node running on **testnet4** (or any network you prefer)
 * Access to the `node.sock` file in your Bitcoin data directory
 
 ---
