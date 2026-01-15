@@ -73,7 +73,10 @@ jds_port = 3334
 # jds_port = "34264"
 
 # Bitcoin Core IPC config
+# Supported networks: mainnet, testnet4, signet, regtest
+# Default data_dir: ~/.bitcoin (Linux) or ~/Library/Application Support/Bitcoin (macOS)
 [template_provider_type.BitcoinCoreIpc]
-unix_socket_path = "/path/to/node.sock"
+network = "mainnet"
+# data_dir = "/custom/bitcoin/data"  # Optional: override default data directory
 fee_threshold = 100
 min_interval = 5

@@ -62,7 +62,8 @@ pub enum DifficultyLevel {
 #[derive(Debug)]
 pub struct BitcoinCore {
     bitcoind: Node,
-    ipc_socket_path: PathBuf,
+    data_dir: PathBuf,
+    is_signet: bool,
 }
 
 impl BitcoinCore {
@@ -178,17 +179,13 @@ impl BitcoinCore {
         // Wait for Bitcoin Core to fully start and create IPC socket
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        let network_dir = if conf.network == "signet" {
-            "signet"
-        } else {
-            "regtest"
-        };
-        let datadir = conf.staticdir.as_ref().expect("staticdir should be set");
-        let ipc_socket_path = datadir.join(network_dir).join("node.sock");
+        let is_signet = conf.network == "signet";
+        let data_dir = conf.staticdir.clone().expect("staticdir should be set");
 
         BitcoinCore {
             bitcoind,
-            ipc_socket_path,
+            data_dir,
+            is_signet,
         }
     }
 
@@ -250,8 +247,19 @@ impl BitcoinCore {
     }
 
     /// Return the IPC socket path for connecting to this node.
-    pub fn ipc_socket_path(&self) -> &PathBuf {
-        &self.ipc_socket_path
+    pub fn ipc_socket_path(&self) -> PathBuf {
+        let network_dir = if self.is_signet { "signet" } else { "regtest" };
+        self.data_dir.join(network_dir).join("node.sock")
+    }
+
+    /// Return the data directory (without network subdirectory).
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
+    }
+
+    /// Return whether this node is running on signet.
+    pub fn is_signet(&self) -> bool {
+        self.is_signet
     }
 }
 
@@ -314,14 +322,8 @@ impl TemplateProvider {
         }
 
         // Launch sv2-tp process
-        let ipc_socket_path = bitcoin_core.ipc_socket_path();
-        let network_dir = ipc_socket_path
-            .parent()
-            .expect("Failed to get parent directory of IPC socket path");
-        let datadir = network_dir
-            .parent()
-            .expect("Failed to get parent directory of network dir");
-        let network = if network_dir.ends_with("signet") {
+        let datadir = bitcoin_core.data_dir();
+        let network = if bitcoin_core.is_signet() {
             "-signet"
         } else {
             "-regtest"
@@ -391,8 +393,18 @@ impl TemplateProvider {
     }
 
     /// Return the IPC socket path for connecting to the Bitcoin Core node.
-    pub fn ipc_socket_path(&self) -> &PathBuf {
+    pub fn ipc_socket_path(&self) -> PathBuf {
         self.bitcoin_core.ipc_socket_path()
+    }
+
+    /// Return the data directory (without network subdirectory).
+    pub fn data_dir(&self) -> &PathBuf {
+        self.bitcoin_core.data_dir()
+    }
+
+    /// Return whether this node is running on signet.
+    pub fn is_signet(&self) -> bool {
+        self.bitcoin_core.is_signet()
     }
 }
 

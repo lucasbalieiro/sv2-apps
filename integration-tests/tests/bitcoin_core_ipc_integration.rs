@@ -10,9 +10,13 @@ use stratum_apps::stratum_core::{common_messages_sv2::*, job_declaration_sv2::*}
 async fn pool_propagates_block_with_bitcoin_core_ipc() {
     start_tracing();
     let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
-    let ipc_socket_path = bitcoin_core.ipc_socket_path().clone();
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
-    let (_pool, pool_addr) = start_pool(ipc_config(ipc_socket_path), vec![], vec![]).await;
+    let (_pool, pool_addr) = start_pool(
+        ipc_config(bitcoin_core.data_dir().clone(), bitcoin_core.is_signet()),
+        vec![],
+        vec![],
+    )
+    .await;
     let (_translator, tproxy_addr) =
         start_sv2_translator(&[pool_addr], false, vec![], vec![], None).await;
     let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
@@ -39,7 +43,6 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
 async fn jdc_propagates_block_with_bitcoin_core_ipc() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let ipc_socket_path = tp.ipc_socket_path().clone();
     let current_block_hash = tp.get_best_block_hash().unwrap();
     let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
@@ -54,7 +57,7 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
     );
     let (_jdc, jdc_addr) = start_jdc(
         &[(pool_addr, sniffer_addr)],
-        ipc_config(ipc_socket_path),
+        ipc_config(tp.data_dir().clone(), tp.is_signet()),
         vec![],
         vec![],
     );

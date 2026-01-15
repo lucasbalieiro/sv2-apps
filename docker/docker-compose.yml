@@ -6,7 +6,7 @@ services:
       - docker_env
     volumes:
       - ./config/pool-config.toml.template:/app/pool-config.toml.template:ro
-      - "${BITCOIN_SOCKET_PATH?}:/app/node.sock"
+      - "${BITCOIN_SOCKET_PATH?}:/root/.bitcoin/node.sock"
     entrypoint: >
       sh -c '
         envsubst < /app/pool-config.toml.template> /app/pool-config.toml &&
@@ -55,7 +55,7 @@ services:
       - docker_env
     volumes:
       - ./config/jdc-config.toml.template:/app/jdc-config.toml.template:ro
-      - "${BITCOIN_SOCKET_PATH?}:/app/node.sock"
+      - "${BITCOIN_SOCKET_PATH?}:/root/.bitcoin/node.sock"
     entrypoint: >
       sh -c '
         envsubst < /app/jdc-config.toml.template> /app/jdc-config.toml &&
