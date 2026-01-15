@@ -1,3 +1,4 @@
+use crate::config_helpers::path_from_toml;
 use crate::key_utils::Secp256k1PublicKey;
 use std::path::PathBuf;
 
@@ -10,6 +11,7 @@ pub enum TemplateProviderType {
         public_key: Option<Secp256k1PublicKey>,
     },
     BitcoinCoreIpc {
+        #[serde(deserialize_with = "path_from_toml")]
         unix_socket_path: PathBuf,
         fee_threshold: u64,
         min_interval: u8,
