@@ -51,6 +51,9 @@ pub struct JobDeclaratorClientConfig {
     supported_extensions: Vec<u16>,
     /// Protocol extensions that the JDC requires (downstream clients must support these).
     required_extensions: Vec<u16>,
+    /// Optional monitoring server bind address
+    #[serde(default)]
+    monitoring_address: Option<SocketAddr>,
 }
 
 impl JobDeclaratorClientConfig {
@@ -90,7 +93,13 @@ impl JobDeclaratorClientConfig {
                 .unwrap_or_default(),
             supported_extensions,
             required_extensions,
+            monitoring_address: None,
         }
+    }
+
+    /// Returns the monitoring server bind address (if enabled)
+    pub fn monitoring_address(&self) -> Option<SocketAddr> {
+        self.monitoring_address
     }
 
     /// Returns the listening address of the Job Declartor Client.
