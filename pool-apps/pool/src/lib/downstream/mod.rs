@@ -172,6 +172,11 @@ impl Downstream {
         // Setup initial connection
         if let Err(e) = self.setup_connection_with_downstream().await {
             error!(?e, "Failed to set up downstream connection");
+
+            // sleep to make sure SetupConnectionError is sent
+            // before we break the TCP connection
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
             handle_error(&status_sender, e).await;
             return;
         }
@@ -234,8 +239,12 @@ impl Downstream {
         // The first ever message received on a new downstream connection
         // should always be a setup connection message.
         if header.msg_type() == MESSAGE_TYPE_SETUP_CONNECTION {
-            self.handle_common_message_frame_from_client(None, header, frame.payload())
-                .await?;
+            self.handle_common_message_frame_from_client(
+                Some(self.downstream_id),
+                header,
+                frame.payload(),
+            )
+            .await?;
             return Ok(());
         }
         Err(PoolError::disconnect(
