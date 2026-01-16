@@ -1,6 +1,6 @@
 use crate::BitcoinCoreSv2;
 
-use std::{collections::HashSet, sync::atomic::Ordering};
+use std::collections::HashSet;
 use stratum_core::parsers_sv2::TemplateDistribution;
 use tracing::info;
 
@@ -16,7 +16,7 @@ impl BitcoinCoreSv2 {
     pub fn monitor_ipc_templates(&self) {
         let mut self_clone = self.clone();
 
-        tokio::task::spawn_local(async move {
+        let handle = tokio::task::spawn_local(async move {
             tracing::debug!("monitor_ipc_templates() task started");
             // a dedicated thread_ipc_client is used for waitNext requests
             // this is because waitNext requests are blocking, and we don't want to block the main
@@ -53,54 +53,27 @@ impl BitcoinCoreSv2 {
                     }
                 };
 
-                // todo: remove this once https://github.com/bitcoin/bitcoin/pull/33676 lands in a release
-                // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-                let current_coinbase_output_constraints_count = self_clone
-                    .coinbase_output_constraints_counter
-                    .load(Ordering::SeqCst);
-                tracing::debug!(
-                    "Captured current_coinbase_output_constraints_count: {}",
-                    current_coinbase_output_constraints_count
-                );
-
                 tokio::select! {
-                    // // todo: re-enable this once https://github.com/bitcoin/bitcoin/pull/33676 lands in a release
-                    // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-                    // // and also cancel the wait_next_request
-                    // _ = self_clone.global_cancellation_token.cancelled() => {
-                    //     tracing::warn!("Exiting mempool change monitoring loop");
-                    //     break;
-                    // }
-                    // // todo: remove this once https://github.com/bitcoin/bitcoin/pull/33676 lands in a release
-                    // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-                    // // and also cancel the wait_next_request
-                    // _ = self_clone.template_ipc_client_cancellation_token.cancelled() => {
-                    //     tracing::debug!("template cancellation token activated");
-                    //     break;
-                    // }
+                    _ = self_clone.global_cancellation_token.cancelled() => {
+                        tracing::debug!("Interrupting waitNext request");
+                        self_clone.interrupt_wait_request().await.expect("Failed to interrupt waitNext request");
+                        tracing::warn!("Exiting mempool change monitoring loop");
+                        break;
+                    }
+                    _ = self_clone.template_ipc_client_cancellation_token.cancelled() => {
+                        tracing::debug!("Interrupting waitNext request");
+                        if let Err(e) = self_clone.interrupt_wait_request().await {
+                            tracing::error!("Failed to interrupt waitNext request: {:?}", e);
+                            tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
+                            self_clone.global_cancellation_token.cancel();
+                            break;
+                        }
+                        tracing::warn!("Exiting mempool change monitoring loop");
+                        break;
+                    }
                     wait_next_request_response = wait_next_request.send().promise => {
                         match wait_next_request_response {
                             Ok(response) => {
-                                // todo: remove this once https://github.com/bitcoin/bitcoin/pull/33676 lands in a release
-                                // see https://github.com/stratum-mining/sv2-apps/issues/81 for more details
-                                {
-                                    self_clone.wait_next_request_counter.fetch_sub(1, Ordering::SeqCst);
-                                    tracing::debug!("waitNext request succeeded - counter decremented to: {}",
-                                        self_clone.wait_next_request_counter.load(Ordering::SeqCst));
-
-                                    let coinbase_output_constraints_count = self_clone.coinbase_output_constraints_counter.load(Ordering::SeqCst);
-                                    let coinbase_output_constraints_changed = coinbase_output_constraints_count != current_coinbase_output_constraints_count;
-                                    tracing::debug!("waitNext timeout check - current_count: {}, captured_count: {}, changed: {}",
-                                        coinbase_output_constraints_count,
-                                        current_coinbase_output_constraints_count,
-                                        coinbase_output_constraints_changed);
-
-                                    if self_clone.global_cancellation_token.is_cancelled() || coinbase_output_constraints_changed {
-                                        tracing::debug!("Breaking monitor_ipc_templates loop - cancellation or constraints changed");
-                                        break;
-                                    }
-                                }
-
                                 let result = match response.get() {
                                     Ok(result) => result,
                                     Err(e) => {
@@ -290,8 +263,13 @@ impl BitcoinCoreSv2 {
                     }
                 }
             }
+
             tracing::debug!("monitor_ipc_templates() task exiting");
         });
+
+        // Store the handle so we can wait for this task to finish before spawning a new one
+        // when handle_coinbase_output_constraints is called
+        *self.monitor_ipc_templates_handle.borrow_mut() = Some(handle);
     }
 
     /// Spawns a new task to monitor the incoming messages

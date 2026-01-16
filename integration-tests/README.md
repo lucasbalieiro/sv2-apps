@@ -14,7 +14,7 @@ other tests in the `tests` folder.
 
 All tests run in either regtest or signet network.
 
-Bitcoin Core v30 binaries are downloaded from https://bitcoincore.org/bin/bitcoin-core-30.0/ and the
+Bitcoin Core v30.2 binaries are downloaded from https://bitcoincore.org/bin/bitcoin-core-30.2/ and the
 Template provider (sv2-tp) binaries from https://github.com/stratum-mining/sv2-tp/releases.
 
 Bitcoin Core runs via IPC, and sv2-tp provides Stratum V2 template distribution. These are the only

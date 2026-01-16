@@ -58,7 +58,7 @@ pub enum DifficultyLevel {
     High,
 }
 
-/// Represents a Bitcoin Core v30+ node with IPC enabled.
+/// Represents a Bitcoin Core v30.2+ node with IPC enabled.
 #[derive(Debug)]
 pub struct BitcoinCore {
     bitcoind: Node,
@@ -110,7 +110,7 @@ impl BitcoinCore {
             }
         }
 
-        // Download and setup Bitcoin Core v30 with IPC support
+        // Download and setup Bitcoin Core v30.2 with IPC support
         let os = env::consts::OS;
         let arch = env::consts::ARCH;
         let bitcoin_filename = get_bitcoin_core_filename(os, arch);
@@ -263,10 +263,10 @@ impl BitcoinCore {
     }
 }
 
-/// Represents a template provider using Bitcoin Core v30+ with IPC and standalone sv2-tp.
+/// Represents a template provider using Bitcoin Core v30.2+ with IPC and standalone sv2-tp.
 ///
 /// This implementation launches two separate processes:
-/// 1. Bitcoin Core v30+ (bitcoin-node) with IPC enabled
+/// 1. Bitcoin Core v30.2+ (bitcoin-node) with IPC enabled
 /// 2. Standalone sv2-tp binary that connects to Bitcoin Core via IPC
 #[derive(Debug)]
 pub struct TemplateProvider {
@@ -276,7 +276,7 @@ pub struct TemplateProvider {
 }
 
 impl TemplateProvider {
-    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30+ and standalone sv2-tp.
+    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30.2+ and standalone sv2-tp.
     pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
         let bitcoin_core = BitcoinCore::start(port, difficulty_level);
 
