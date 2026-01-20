@@ -91,11 +91,17 @@ impl<'a> Sniffer<'a> {
                 create_downstream(wait_for_client(listening_address).await)
                     .await
                     .expect("Failed to create downstream");
-            let (upstream_receiver, upstream_sender) = create_upstream(
-                TcpStream::connect(upstream_address)
-                    .await
-                    .expect("Failed to connect to upstream"),
-            )
+            let (upstream_receiver, upstream_sender) = create_upstream(loop {
+                match TcpStream::connect(upstream_address).await {
+                    Ok(stream) => break stream,
+                    Err(_) => {
+                        println!(
+                            "Sniffer {}: unable to connect to upstream {}, retrying",
+                            identifier, upstream_address
+                        );
+                    }
+                }
+            })
             .await
             .expect("Failed to create upstream");
             select! {
