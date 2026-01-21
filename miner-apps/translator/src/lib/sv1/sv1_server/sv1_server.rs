@@ -16,7 +16,7 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicU32, Ordering},
         Arc, RwLock,
     },
     time::{Duration, Instant},
@@ -65,7 +65,6 @@ pub struct Sv1Server {
     shares_per_minute: SharesPerMinute,
     listener_addr: SocketAddr,
     config: TranslatorConfig,
-    clean_job: AtomicBool,
     sequence_counter: AtomicU32,
     miner_counter: AtomicU32,
 }
@@ -103,7 +102,6 @@ impl Sv1Server {
             config,
             listener_addr,
             shares_per_minute,
-            clean_job: AtomicBool::new(true),
             miner_counter: AtomicU32::new(0),
             sequence_counter: AtomicU32::new(0),
         }
@@ -578,16 +576,14 @@ impl Sv1Server {
                     "Received NewExtendedMiningJob for channel id: {}",
                     m.channel_id
                 );
-                if let Some(prevhash) = self.sv1_server_data.super_safe_lock(|v| v.prevhash.clone())
+                if let Some(prevhash) = self
+                    .sv1_server_data
+                    .super_safe_lock(|v| v.get_prevhash(m.channel_id))
                 {
-                    let notify = build_sv1_notify_from_sv2(
-                        prevhash,
-                        m.clone().into_static(),
-                        self.clean_job.load(Ordering::SeqCst),
-                    )
-                    .map_err(TproxyError::shutdown)?;
-                    let clean_jobs = self.clean_job.load(Ordering::SeqCst);
-                    self.clean_job.store(false, Ordering::SeqCst);
+                    let clean_jobs = m.job_id == prevhash.job_id;
+                    let notify =
+                        build_sv1_notify_from_sv2(prevhash, m.clone().into_static(), clean_jobs)
+                            .map_err(TproxyError::shutdown)?;
 
                     // Update job storage based on the configured mode
                     let notify_parsed = notify.clone();
@@ -621,9 +617,8 @@ impl Sv1Server {
 
             Mining::SetNewPrevHash(m) => {
                 debug!("Received SetNewPrevHash for channel id: {}", m.channel_id);
-                self.clean_job.store(true, Ordering::SeqCst);
                 self.sv1_server_data
-                    .super_safe_lock(|v| v.prevhash = Some(m.clone().into_static()));
+                    .super_safe_lock(|v| v.set_prevhash(m.channel_id, m.clone().into_static()));
             }
 
             Mining::SetTarget(m) => {
@@ -1188,21 +1183,5 @@ mod tests {
         let seq_id = server.sequence_counter.fetch_add(1, Ordering::SeqCst);
         assert_eq!(seq_id, 0);
         assert_eq!(server.sequence_counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_sv1_server_clean_job_flag() {
-        let server = create_test_sv1_server();
-
-        // Test initial value
-        assert!(server.clean_job.load(Ordering::SeqCst));
-
-        // Test setting to false
-        server.clean_job.store(false, Ordering::SeqCst);
-        assert!(!server.clean_job.load(Ordering::SeqCst));
-
-        // Test setting back to true
-        server.clean_job.store(true, Ordering::SeqCst);
-        assert!(server.clean_job.load(Ordering::SeqCst));
     }
 }
