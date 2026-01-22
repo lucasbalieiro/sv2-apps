@@ -32,8 +32,9 @@ jobs:
       - name: Publish stratum-apps crate
         run: ./scripts/release-apps.sh stratum-apps
 
-      - name: Publish bitcoin-core-sv2 crate
-        run: ./scripts/release-apps.sh bitcoin-core-sv2
+      # todo: uncomment once bitcoin-capnp-types is published to crates.io
+      # - name: Publish bitcoin-core-sv2 crate
+      #   run: ./scripts/release-apps.sh bitcoin-core-sv2
 
       - name: Publish jd-client-sv2 crate
         run: ./scripts/release-apps.sh miner-apps/jd-client
