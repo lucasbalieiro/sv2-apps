@@ -1,26 +1,23 @@
-use std::{
-    cell::RefCell,
-    sync::{atomic::AtomicBool, Arc},
-    time::Instant,
-};
+use std::{cell::RefCell, sync::atomic::AtomicBool, time::Instant};
 use stratum_apps::{
-    custom_mutex::Mutex,
     stratum_core::{
         bitcoin::Target,
-        sv1_api::{json_rpc, utils::HexU32Be},
+        sv1_api::{
+            json_rpc,
+            utils::{Extranonce, HexU32Be},
+        },
     },
     utils::types::{ChannelId, DownstreamId, Hashrate},
 };
 use tracing::debug;
 
 use super::SubmitShareWithChannelId;
-use crate::sv1::sv1_server::data::Sv1ServerData;
 
 #[derive(Debug)]
 pub struct DownstreamData {
     pub channel_id: Option<ChannelId>,
     pub downstream_id: DownstreamId,
-    pub extranonce1: Vec<u8>,
+    pub extranonce1: Extranonce<'static>,
     pub extranonce2_len: usize,
     pub version_rolling_mask: Option<HexU32Be>,
     pub version_rolling_min_bit: Option<HexU32Be>,
@@ -41,9 +38,6 @@ pub struct DownstreamData {
     pub processing_queued_sv1_handshake_responses: AtomicBool,
     // Stores pending shares to be sent to the sv1_server
     pub pending_share: RefCell<Option<SubmitShareWithChannelId>>,
-    // Reference to shared sv1_server data for accessing valid_jobs during downstream sv1
-    // validation
-    pub sv1_server_data: Arc<Mutex<Sv1ServerData>>,
     // Tracks the upstream target for this downstream, used for vardiff target comparison
     pub upstream_target: Option<Target>,
     // Timestamp of when the last job was received by this downstream, used for keepalive check
@@ -51,16 +45,13 @@ pub struct DownstreamData {
 }
 
 impl DownstreamData {
-    pub fn new(
-        downstream_id: DownstreamId,
-        target: Target,
-        hashrate: Option<Hashrate>,
-        sv1_server_data: Arc<Mutex<Sv1ServerData>>,
-    ) -> Self {
+    pub fn new(downstream_id: DownstreamId, target: Target, hashrate: Option<Hashrate>) -> Self {
         DownstreamData {
             channel_id: None,
             downstream_id,
-            extranonce1: vec![0; 8],
+            extranonce1: vec![0; 8]
+                .try_into()
+                .expect("8-byte extranonce is always valid"),
             extranonce2_len: 4,
             version_rolling_mask: None,
             version_rolling_min_bit: None,
@@ -77,7 +68,6 @@ impl DownstreamData {
             queued_sv1_handshake_messages: Vec::new(),
             processing_queued_sv1_handshake_responses: AtomicBool::new(false),
             pending_share: RefCell::new(None),
-            sv1_server_data,
             upstream_target: None,
             last_job_received_time: None,
         }
