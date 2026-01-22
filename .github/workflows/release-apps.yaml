@@ -32,24 +32,28 @@ jobs:
       - name: Publish stratum-apps crate
         run: ./scripts/release-apps.sh stratum-apps
 
-      # todo: uncomment once bitcoin-capnp-types is published to crates.io
+      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
       # - name: Publish bitcoin-core-sv2 crate
       #   run: ./scripts/release-apps.sh bitcoin-core-sv2
 
-      - name: Publish jd-client-sv2 crate
-        run: ./scripts/release-apps.sh miner-apps/jd-client
+      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
+      # - name: Publish jd-client-sv2 crate
+      #   run: ./scripts/release-apps.sh miner-apps/jd-client
 
-      - name: Publish translator-sv2 crate
-        run: ./scripts/release-apps.sh miner-apps/translator
+      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
+      # - name: Publish translator-sv2 crate
+      #   run: ./scripts/release-apps.sh miner-apps/translator
 
-      - name: Publish pool-sv2 crate
-        run: ./scripts/release-apps.sh pool-apps/pool
+      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
+      # - name: Publish pool-sv2 crate
+      #   run: ./scripts/release-apps.sh pool-apps/pool
 
       # todo: uncomment after https://github.com/stratum-mining/sv2-apps/issues/24
       # - name: Publish jd-server crate
       #   run: ./scripts/release-apps.sh jd-server
 
-      - name: Publish integration-tests-sv2 crate
-        run: ./scripts/release-apps.sh integration-tests
+      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
+      # - name: Publish integration-tests-sv2 crate
+      #   run: ./scripts/release-apps.sh integration-tests
 
 
