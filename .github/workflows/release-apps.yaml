@@ -7,12 +7,11 @@
 name: Release Apps
 
 on:
-  # Manually run by going to "Actions/Release" in Github and running the workflow
+  # Manually run by going to "Actions/Release Apps" in Github and running the workflow
   workflow_dispatch:
-  # every time a new release tag is created
-  push:
-    tags:
-      - "v*.*.*"
+  # every time a new release is published
+  release:
+    types: [published]
 
 jobs:
   release-apps:
@@ -32,28 +31,23 @@ jobs:
       - name: Publish stratum-apps crate
         run: ./scripts/release-apps.sh stratum-apps
 
-      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
-      # - name: Publish bitcoin-core-sv2 crate
-      #   run: ./scripts/release-apps.sh bitcoin-core-sv2
+      - name: Publish bitcoin-core-sv2 crate
+        run: ./scripts/release-apps.sh bitcoin-core-sv2
 
-      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
-      # - name: Publish jd-client-sv2 crate
-      #   run: ./scripts/release-apps.sh miner-apps/jd-client
+      - name: Publish jd-client-sv2 crate
+        run: ./scripts/release-apps.sh miner-apps/jd-client
 
-      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
-      # - name: Publish translator-sv2 crate
-      #   run: ./scripts/release-apps.sh miner-apps/translator
+      - name: Publish translator-sv2 crate
+        run: ./scripts/release-apps.sh miner-apps/translator
 
-      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
-      # - name: Publish pool-sv2 crate
-      #   run: ./scripts/release-apps.sh pool-apps/pool
+      - name: Publish pool-sv2 crate
+        run: ./scripts/release-apps.sh pool-apps/pool
 
       # todo: uncomment after https://github.com/stratum-mining/sv2-apps/issues/24
       # - name: Publish jd-server crate
       #   run: ./scripts/release-apps.sh jd-server
 
-      # TODO: uncomment once bitcoin-capnp-types is published to crates.io
-      # - name: Publish integration-tests-sv2 crate
-      #   run: ./scripts/release-apps.sh integration-tests
+      - name: Publish integration-tests-sv2 crate
+        run: ./scripts/release-apps.sh integration-tests
 
 
