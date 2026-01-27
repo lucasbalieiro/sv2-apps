@@ -3261,6 +3261,7 @@ dependencies = [
  "serde_json",
  "stratum-apps",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
