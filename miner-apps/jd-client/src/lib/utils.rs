@@ -31,25 +31,6 @@ use stratum_apps::{
 
 use crate::{config::ConfigJDCMode, error::JDCErrorKind};
 
-/// Represents a message that can trigger shutdown of various system components.
-#[derive(Debug, Clone)]
-pub enum ShutdownMessage {
-    /// Shutdown all components immediately
-    ShutdownAll,
-    /// Shutdown all downstream connections
-    DownstreamShutdownAll,
-    /// Shutdown a specific downstream connection by ID
-    DownstreamShutdown(DownstreamId),
-    /// Shutdown Upstream and JD part of JDC during fallback
-    JobDeclaratorShutdownFallback((Vec<u8>, tokio::sync::mpsc::Sender<()>)),
-    /// Shutdown Upstream and JD part during fallback
-    UpstreamShutdownFallback((Vec<u8>, tokio::sync::mpsc::Sender<()>)),
-    /// Shutdown Job Declarator during initialization.
-    JobDeclaratorShutdown(tokio::sync::mpsc::Sender<()>),
-    /// Shutdown Job Declarator during initialization.
-    UpstreamShutdown(tokio::sync::mpsc::Sender<()>),
-}
-
 /// Constructs a `SetupConnection` message for the mining protocol.
 pub fn get_setup_connection_message(
     min_version: u16,

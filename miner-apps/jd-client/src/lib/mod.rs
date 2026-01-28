@@ -3,14 +3,14 @@ use std::{net::SocketAddr, sync::Arc, thread::JoinHandle, time::Duration};
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::CancellationToken;
 use stratum_apps::{
+    fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
     stratum_core::{bitcoin::consensus::Encodable, parsers_sv2::JobDeclaration},
     task_manager::TaskManager,
     tp_type::TemplateProviderType,
     utils::types::Sv2Frame,
-    SHUTDOWN_BROADCAST_CAPACITY,
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -25,7 +25,7 @@ use crate::{
         sv2_tp::Sv2Tp,
     },
     upstream::Upstream,
-    utils::{ShutdownMessage, UpstreamState},
+    utils::UpstreamState,
 };
 
 mod channel_manager;
@@ -45,18 +45,16 @@ pub mod utils;
 #[derive(Clone)]
 pub struct JobDeclaratorClient {
     config: JobDeclaratorClientConfig,
-    notify_shutdown: broadcast::Sender<ShutdownMessage>,
+    cancellation_token: CancellationToken,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl JobDeclaratorClient {
     /// Creates a new [`JobDeclaratorClient`] instance.
     pub fn new(config: JobDeclaratorClientConfig) -> Self {
-        let (notify_shutdown, _) =
-            tokio::sync::broadcast::channel::<ShutdownMessage>(SHUTDOWN_BROADCAST_CAPACITY);
         Self {
             config,
-            notify_shutdown,
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -74,8 +72,7 @@ impl JobDeclaratorClient {
             .consensus_encode(&mut encoded_outputs)
             .expect("Invalid coinbase output in config");
 
-        let notify_shutdown = self.notify_shutdown.clone();
-        let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel::<()>(1);
+        let mut fallback_coordinator = FallbackCoordinator::new();
         let task_manager = Arc::new(TaskManager::new());
 
         let (status_sender, status_receiver) = async_channel::unbounded::<Status>();
@@ -98,7 +95,7 @@ impl JobDeclaratorClient {
 
         debug!("Channels initialized.");
 
-        let channel_manager = ChannelManager::new(
+        let mut channel_manager = ChannelManager::new(
             self.config.clone(),
             channel_manager_to_upstream_sender.clone(),
             upstream_to_channel_manager_receiver.clone(),
@@ -130,22 +127,33 @@ impl JobDeclaratorClient {
             )
             .expect("Failed to initialize monitoring server");
 
-            // Create shutdown signal that waits for ShutdownAll
-            let mut notify_shutdown_monitoring = notify_shutdown.subscribe();
+            // Create shutdown signal using cancellation token
+            let cancellation_token_clone = self.cancellation_token.clone();
+            let fallback_coordinator_token = fallback_coordinator.token();
             let shutdown_signal = async move {
-                loop {
-                    match notify_shutdown_monitoring.recv().await {
-                        Ok(ShutdownMessage::ShutdownAll) => break,
-                        Ok(_) => continue, // Ignore other shutdown messages
-                        Err(_) => break,
+                tokio::select! {
+                    _ = cancellation_token_clone.cancelled() => {
+                        info!("Monitoring server: received shutdown signal.");
+                    }
+                    _ = fallback_coordinator_token.cancelled() => {
+                        info!("Monitoring server: fallback triggered.");
                     }
                 }
             };
 
+            let fallback_coordinator_clone = fallback_coordinator.clone();
             task_manager.spawn(async move {
+                // we just spawned a new task that's relevant to fallback coordination
+                // so register it with the fallback coordinator
+                let fallback_handler = fallback_coordinator_clone.register();
+
                 if let Err(e) = monitoring_server.run(shutdown_signal).await {
                     error!("Monitoring server error: {:?}", e);
                 }
+
+                // signal fallback coordinator that this task has completed its cleanup
+                fallback_handler.done();
+                info!("Monitoring server task exited and signaled fallback coordinator");
             });
         }
 
@@ -162,21 +170,21 @@ impl JobDeclaratorClient {
                     public_key,
                     channel_manager_to_tp_receiver,
                     tp_to_channel_manager_sender,
-                    notify_shutdown.clone(),
+                    self.cancellation_token.clone(),
+                    fallback_coordinator.clone(),
                     task_manager.clone(),
-                    status_sender.clone(),
                 )
                 .await
                 .unwrap();
 
-                let notify_shutdown_cl = notify_shutdown.clone();
+                let cancellation_token_tp = self.cancellation_token.clone();
                 let status_sender_cl = status_sender.clone();
                 let task_manager_cl = task_manager.clone();
 
                 template_receiver
                     .start(
                         address,
-                        notify_shutdown_cl,
+                        cancellation_token_tp,
                         status_sender_cl,
                         task_manager_cl,
                     )
@@ -218,7 +226,7 @@ impl JobDeclaratorClient {
                 bitcoin_core_sv2_join_handle = Some(
                     connect_to_bitcoin_core(
                         bitcoin_core_config,
-                        notify_shutdown.clone(),
+                        self.cancellation_token.clone(),
                         task_manager.clone(),
                         status_sender.clone(),
                     )
@@ -245,8 +253,10 @@ impl JobDeclaratorClient {
             .collect();
 
         channel_manager
+            .clone()
             .start(
-                notify_shutdown.clone(),
+                self.cancellation_token.clone(),
+                fallback_coordinator.clone(),
                 status_sender.clone(),
                 task_manager.clone(),
                 miner_coinbase_outputs.clone(),
@@ -262,8 +272,8 @@ impl JobDeclaratorClient {
                 upstream_to_channel_manager_sender.clone(),
                 channel_manager_to_jd_receiver.clone(),
                 jd_to_channel_manager_sender.clone(),
-                notify_shutdown.clone(),
-                status_sender.clone(),
+                self.cancellation_token.clone(),
+                fallback_coordinator.clone(),
                 self.config.mode.clone(),
                 task_manager.clone(),
             )
@@ -274,8 +284,8 @@ impl JobDeclaratorClient {
                     .start(
                         self.config.min_supported_version(),
                         self.config.max_supported_version(),
-                        notify_shutdown.clone(),
-                        shutdown_complete_tx.clone(),
+                        self.cancellation_token.clone(),
+                        fallback_coordinator.clone(),
                         status_sender.clone(),
                         task_manager.clone(),
                     )
@@ -283,8 +293,8 @@ impl JobDeclaratorClient {
 
                 job_declarator
                     .start(
-                        notify_shutdown.clone(),
-                        shutdown_complete_tx,
+                        self.cancellation_token.clone(),
+                        fallback_coordinator.clone(),
                         status_sender.clone(),
                         task_manager.clone(),
                     )
@@ -309,7 +319,8 @@ impl JobDeclaratorClient {
                 self.config.cert_validity_sec(),
                 *self.config.listening_address(),
                 task_manager.clone(),
-                notify_shutdown.clone(),
+                self.cancellation_token.clone(),
+                fallback_coordinator.clone(),
                 status_sender.clone(),
                 downstream_to_channel_manager_sender.clone(),
                 channel_manager_to_downstream_sender.clone(),
@@ -319,57 +330,107 @@ impl JobDeclaratorClient {
             .await;
 
         info!("Spawning status listener task...");
-        let notify_shutdown_clone = notify_shutdown.clone();
 
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     info!("Ctrl+C received — initiating graceful shutdown...");
-                    let _ = notify_shutdown_clone.send(ShutdownMessage::ShutdownAll);
+                    self.cancellation_token.cancel();
                     break;
                 }
                 message = status_receiver.recv() => {
                     if let Ok(status) = message {
                         match status.state {
                             State::DownstreamShutdown{downstream_id,..} => {
-                                warn!("Downstream {downstream_id:?} disconnected — Channel manager.");
-                                let _ = notify_shutdown_clone.send(ShutdownMessage::DownstreamShutdown(downstream_id));
+                                warn!("Downstream {downstream_id:?} disconnected — cleaning up channel manager.");
+                                // Clean up channel manager state
+                                if let Err(e) = channel_manager.remove_downstream(downstream_id) {
+                                    error!("Failed to remove downstream {downstream_id:?}: {e:?}... initiating full shutdown.");
+                                    self.cancellation_token.cancel();
+                                    break;
+                                }
                             }
                             State::TemplateReceiverShutdown(_) => {
                                 warn!("Template Receiver shutdown requested — initiating full shutdown.");
-                                let _ = notify_shutdown_clone.send(ShutdownMessage::ShutdownAll);
+                                self.cancellation_token.cancel();
                                 break;
                             }
                             State::ChannelManagerShutdown(_) => {
                                 warn!("Channel Manager shutdown requested — initiating full shutdown.");
-                                let _ = notify_shutdown_clone.send(ShutdownMessage::ShutdownAll);
+                                self.cancellation_token.cancel();
                                 break;
                             }
                             State::UpstreamShutdownFallback(_) | State::JobDeclaratorShutdownFallback(_) => {
                                 warn!("Upstream/Job Declarator connection dropped — attempting reconnection...");
-                                let (tx, mut rx) = mpsc::channel::<()>(1);
-                                let _ = notify_shutdown_clone.send(ShutdownMessage::UpstreamShutdownFallback((encoded_outputs.clone(), tx)));
+
+                                // trigger fallback and wait for all components to finish cleanup
+                                fallback_coordinator.trigger_fallback_and_wait().await;
+                                info!("All components finished fallback cleanup");
+
+                                // Drain any buffered status messages from old components
+                                while let Ok(old_status) = status_receiver.try_recv() {
+                                    debug!("Draining buffered status message: {:?}", old_status.state);
+                                }
+
                                 set_jd_mode(JdMode::SoloMining);
-                                shutdown_complete_rx.recv().await;
-                                tracing::error!("Existing Upstream or JD instance taken out");
-                                rx.recv().await;
-                                tracing::error!("All entities acknowledged Upstream fallback. Preparing fallback.");
+                                info!("Existing Upstream or JD instance taken out. Preparing fallback.");
 
-                                let (shutdown_complete_tx_fallback, shutdown_complete_rx_fallback) = mpsc::channel::<()>(1);
+                                // Create a fresh FallbackCoordinator for the reconnection attempt
+                                fallback_coordinator = FallbackCoordinator::new();
 
-                                shutdown_complete_rx = shutdown_complete_rx_fallback;
+                                // Recreate channels (old ones were closed during fallback)
+                                let (channel_manager_to_upstream_sender_new, channel_manager_to_upstream_receiver_new) =
+                                    unbounded();
+                                let (upstream_to_channel_manager_sender_new, upstream_to_channel_manager_receiver_new) =
+                                    unbounded();
+                                let (channel_manager_to_jd_sender_new, channel_manager_to_jd_receiver_new) = unbounded();
+                                let (jd_to_channel_manager_sender_new, jd_to_channel_manager_receiver_new) = unbounded();
+
+                                let (channel_manager_to_downstream_sender_new, _channel_manager_to_downstream_receiver_new) =
+                                    broadcast::channel(10);
+                                let (downstream_to_channel_manager_sender_new, downstream_to_channel_manager_receiver_new) =
+                                    unbounded();
+
+                                // Create a fresh channel_manager with new channels
+                                channel_manager = ChannelManager::new(
+                                    self.config.clone(),
+                                    channel_manager_to_upstream_sender_new.clone(),
+                                    upstream_to_channel_manager_receiver_new.clone(),
+                                    channel_manager_to_jd_sender_new.clone(),
+                                    jd_to_channel_manager_receiver_new.clone(),
+                                    channel_manager_to_tp_sender.clone(),
+                                    tp_to_channel_manager_receiver.clone(),
+                                    channel_manager_to_downstream_sender_new.clone(),
+                                    downstream_to_channel_manager_receiver_new.clone(),
+                                    encoded_outputs.clone(),
+                                    self.config.supported_extensions().to_vec(),
+                                    self.config.required_extensions().to_vec(),
+                                )
+                                .await
+                                .unwrap();
+
+                                channel_manager
+                                    .clone()
+                                    .start(
+                                        self.cancellation_token.clone(),
+                                        fallback_coordinator.clone(),
+                                        status_sender.clone(),
+                                        task_manager.clone(),
+                                        miner_coinbase_outputs.clone(),
+                                    )
+                                    .await;
 
                                 info!("Attempting to initialize Jd and upstream...");
 
                                 match self
                                     .initialize_jd(
                                         &mut upstream_addresses,
-                                        channel_manager_to_upstream_receiver.clone(),
-                                        upstream_to_channel_manager_sender.clone(),
-                                        channel_manager_to_jd_receiver.clone(),
-                                        jd_to_channel_manager_sender.clone(),
-                                        notify_shutdown.clone(),
-                                        status_sender.clone(),
+                                        channel_manager_to_upstream_receiver_new.clone(),
+                                        upstream_to_channel_manager_sender_new.clone(),
+                                        channel_manager_to_jd_receiver_new.clone(),
+                                        jd_to_channel_manager_sender_new.clone(),
+                                        self.cancellation_token.clone(),
+                                        fallback_coordinator.clone(),
                                         self.config.mode.clone(),
                                         task_manager.clone(),
                                     )
@@ -380,8 +441,8 @@ impl JobDeclaratorClient {
                                             .start(
                                                 self.config.min_supported_version(),
                                                 self.config.max_supported_version(),
-                                                notify_shutdown.clone(),
-                                                shutdown_complete_tx_fallback.clone(),
+                                                self.cancellation_token.clone(),
+                                                fallback_coordinator.clone(),
                                                 status_sender.clone(),
                                                 task_manager.clone(),
                                             )
@@ -389,8 +450,8 @@ impl JobDeclaratorClient {
 
                                         job_declarator
                                             .start(
-                                                notify_shutdown.clone(),
-                                                shutdown_complete_tx_fallback,
+                                                self.cancellation_token.clone(),
+                                                fallback_coordinator.clone(),
                                                 status_sender.clone(),
                                                 task_manager.clone(),
                                             )
@@ -408,6 +469,51 @@ impl JobDeclaratorClient {
                                     }
                                 };
 
+                                // Reinitialize monitoring server if configured
+                                if let Some(monitoring_addr) = self.config.monitoring_address() {
+                                    info!(
+                                        "Reinitializing monitoring server on http://{}",
+                                        monitoring_addr
+                                    );
+
+                                    let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
+                                        monitoring_addr,
+                                        Some(Arc::new(channel_manager_clone.clone())),
+                                        Some(Arc::new(channel_manager_clone.clone())),
+                                        std::time::Duration::from_secs(self.config.monitoring_cache_refresh_secs()),
+                                    )
+                                    .expect("Failed to initialize monitoring server");
+
+                                    let cancellation_token_clone = self.cancellation_token.clone();
+                                    let fallback_coordinator_token = fallback_coordinator.token();
+                                    let shutdown_signal = async move {
+                                        tokio::select! {
+                                            _ = cancellation_token_clone.cancelled() => {
+                                                info!("Monitoring server: received shutdown signal.");
+                                            }
+                                            _ = fallback_coordinator_token.cancelled() => {
+                                                info!("Monitoring server: fallback triggered.");
+                                            }
+                                        }
+                                    };
+
+                                    let fallback_coordinator_clone = fallback_coordinator.clone();
+                                    task_manager.spawn(async move {
+                                        // we just spawned a new task that's relevant to fallback coordination
+                                        // so register it with the fallback coordinator
+                                        let fallback_handler = fallback_coordinator_clone.register();
+
+                                        if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                                            error!("Monitoring server error: {:?}", e);
+                                        }
+
+                                        // signal that this task has completed its cleanup
+                                        // (no-op during normal shutdown, only matters during fallback)
+                                        fallback_handler.done();
+                                        info!("Monitoring server task exited and signaled fallback coordinator");
+                                    });
+                                }
+
                                 _ = channel_manager_clone.clone()
                                     .start_downstream_server(
                                         *self.config.authority_public_key(),
@@ -415,10 +521,11 @@ impl JobDeclaratorClient {
                                         self.config.cert_validity_sec(),
                                         *self.config.listening_address(),
                                         task_manager.clone(),
-                                        notify_shutdown.clone(),
+                                        self.cancellation_token.clone(),
+                                        fallback_coordinator.clone(),
                                         status_sender.clone(),
-                                        downstream_to_channel_manager_sender.clone(),
-                                        channel_manager_to_downstream_sender.clone(),
+                                        downstream_to_channel_manager_sender_new.clone(),
+                                        channel_manager_to_downstream_sender_new.clone(),
                                         self.config.supported_extensions().to_vec(),
                                         self.config.required_extensions().to_vec(),
                                     )
@@ -455,8 +562,8 @@ impl JobDeclaratorClient {
         upstream_to_channel_manager_sender: Sender<Sv2Frame>,
         channel_manager_to_jd_receiver: Receiver<JobDeclaration<'static>>,
         jd_to_channel_manager_sender: Sender<JobDeclaration<'static>>,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
-        status_sender: Sender<Status>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         mode: ConfigJDCMode,
         task_manager: Arc<TaskManager>,
     ) -> Result<(Upstream, JobDeclarator), JDCErrorKind> {
@@ -488,8 +595,8 @@ impl JobDeclaratorClient {
                     channel_manager_to_upstream_receiver.clone(),
                     jd_to_channel_manager_sender.clone(),
                     channel_manager_to_jd_receiver.clone(),
-                    notify_shutdown.clone(),
-                    status_sender.clone(),
+                    cancellation_token.clone(),
+                    fallback_coordinator.clone(),
                     mode.clone(),
                     task_manager.clone(),
                     &self.config,
@@ -501,10 +608,7 @@ impl JobDeclaratorClient {
                         return Ok(pair);
                     }
                     Err(e) => {
-                        let (tx, mut rx) = mpsc::channel::<()>(1);
-                        let _ = notify_shutdown.send(ShutdownMessage::JobDeclaratorShutdown(tx));
-                        rx.recv().await;
-                        tracing::error!("All sparsed upstream and JDS connection is be terminated");
+                        tracing::error!("Upstream and JDS connection terminated");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         warn!(
                             "Attempt {}/{} failed for {:?}: {:?}",
@@ -536,8 +640,8 @@ async fn try_initialize_single(
     channel_manager_to_upstream_receiver: Receiver<Sv2Frame>,
     jd_to_channel_manager_sender: Sender<JobDeclaration<'static>>,
     channel_manager_to_jd_receiver: Receiver<JobDeclaration<'static>>,
-    notify_shutdown: broadcast::Sender<ShutdownMessage>,
-    status_sender: Sender<Status>,
+    cancellation_token: CancellationToken,
+    fallback_coordinator: FallbackCoordinator,
     mode: ConfigJDCMode,
     task_manager: Arc<TaskManager>,
     config: &JobDeclaratorClientConfig,
@@ -547,9 +651,9 @@ async fn try_initialize_single(
         upstream_addr,
         upstream_to_channel_manager_sender,
         channel_manager_to_upstream_receiver,
-        notify_shutdown.clone(),
+        cancellation_token.clone(),
+        fallback_coordinator.clone(),
         task_manager.clone(),
-        status_sender.clone(),
         config.required_extensions().to_vec(),
     )
     .await
@@ -561,10 +665,10 @@ async fn try_initialize_single(
         upstream_addr,
         jd_to_channel_manager_sender,
         channel_manager_to_jd_receiver,
-        notify_shutdown,
+        cancellation_token,
+        fallback_coordinator,
         mode,
         task_manager.clone(),
-        status_sender.clone(),
     )
     .await
     .map_err(|error| error.kind)?;
@@ -575,6 +679,6 @@ async fn try_initialize_single(
 impl Drop for JobDeclaratorClient {
     fn drop(&mut self) {
         info!("JobDeclaratorClient dropped");
-        let _ = self.notify_shutdown.send(ShutdownMessage::ShutdownAll);
+        self.cancellation_token.cancel();
     }
 }

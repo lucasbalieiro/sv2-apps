@@ -1,8 +1,10 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use async_channel::{unbounded, Receiver, Sender};
+use bitcoin_core_sv2::CancellationToken;
 use stratum_apps::{
     custom_mutex::Mutex,
+    fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
@@ -18,10 +20,7 @@ use stratum_apps::{
         types::{Message, Sv2Frame},
     },
 };
-use tokio::{
-    net::TcpStream,
-    sync::{broadcast, mpsc},
-};
+use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -29,7 +28,7 @@ use crate::{
     error::{self, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
-    utils::{get_setup_connection_message_jds, ShutdownMessage},
+    utils::get_setup_connection_message_jds,
 };
 
 mod message_handler;
@@ -71,10 +70,10 @@ impl JobDeclarator {
         upstreams: &(SocketAddr, SocketAddr, Secp256k1PublicKey, bool),
         channel_manager_sender: Sender<JobDeclaration<'static>>,
         channel_manager_receiver: Receiver<JobDeclaration<'static>>,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         mode: ConfigJDCMode,
         task_manager: Arc<TaskManager>,
-        status_sender: Sender<Status>,
     ) -> JDCResult<Self, error::JobDeclarator> {
         let (_, addr, pubkey, _) = upstreams;
         info!("Connecting to JD Server at {addr}");
@@ -93,7 +92,6 @@ impl JobDeclarator {
                 .map_err(JDCError::fallback)?
                 .into_split();
 
-        let status_sender = StatusSender::JobDeclarator(status_sender);
         let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
         let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
 
@@ -103,8 +101,8 @@ impl JobDeclarator {
             noise_stream_writer,
             outbound_rx,
             inbound_tx,
-            notify_shutdown,
-            status_sender,
+            cancellation_token,
+            fallback_coordinator,
         );
         let job_declarator_data = Arc::new(Mutex::new(JobDeclaratorData));
         let job_declarator_channel = JobDeclaratorChannel {
@@ -128,78 +126,61 @@ impl JobDeclarator {
     /// - Cleans up on termination.
     pub async fn start(
         mut self,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
-        shutdown_complete_tx: mpsc::Sender<()>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
         let status_sender = StatusSender::JobDeclarator(status_sender);
-        let mut shutdown_rx = notify_shutdown.subscribe();
 
         if let Err(e) = self.setup_connection().await {
             handle_error(&status_sender, e).await;
             return;
         }
 
-        task_manager.spawn(
-            async move {
-                loop {
-                    let mut self_clone_1 = self.clone();
-                    let self_clone_2 = self.clone();
-                    tokio::select! {
-                        message = shutdown_rx.recv() => {
-                            match message {
-                                Ok(ShutdownMessage::ShutdownAll) => {
-                                    info!("Job Declarator: received shutdown signal.");
-                                    break;
-                                }
-                                Ok(ShutdownMessage::JobDeclaratorShutdownFallback(_)) => {
-                                    info!("Job Declarator: Received Job declarator shutdown.");
-                                    break;
-                                }
-                                Ok(ShutdownMessage::UpstreamShutdownFallback(_)) => {
-                                    info!("Job Declarator: Received Upstream shutdown.");
-                                    break;
-                                }
-                                Ok(ShutdownMessage::UpstreamShutdown(tx)) => {
-                                    info!("Job declarator shutdown requested");
-                                    drop(tx);
-                                    break;
-                                }
-                                Ok(ShutdownMessage::JobDeclaratorShutdown(tx)) => {
-                                    info!("Job declarator shutdown requested");
-                                    drop(tx);
-                                    break;
-                                }
-                                Err(e) => {
-                                    warn!(error = ?e, "Job Declarator: shutdown channel closed unexpectedly");
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        res = self_clone_1.handle_job_declarator_message() => {
-                            if let Err(e) = res {
-                                error!(error = ?e, "Job Declarator message handling failed");
-                                if handle_error(&status_sender, e).await {
-                                    break;
-                                }
-                            }
-                        }
-                        res = self_clone_2.handle_channel_manager_message() => {
-                            if let Err(e) = res {
-                                error!(error = ?e, "Channel Manager message handling failed");
-                                if handle_error(&status_sender, e).await {
-                                    break;
-                                }
-                            }
-                        },
+        task_manager.spawn(async move {
+            // we just spawned a new task that's relevant to fallback coordination
+            // so register it with the fallback coordinator
+            let fallback_handler = fallback_coordinator.register();
+
+            // get the cancellation token that signals fallback
+            let fallback_token = fallback_coordinator.token();
+
+            loop {
+                let mut self_clone_1 = self.clone();
+                let self_clone_2 = self.clone();
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        info!("Job Declarator: received shutdown signal");
+                        break;
                     }
+                    _ = fallback_token.cancelled() => {
+                        info!("Job Declarator: fallback triggered");
+                        break;
+                    }
+                    res = self_clone_1.handle_job_declarator_message() => {
+                        if let Err(e) = res {
+                            error!(error = ?e, "Job Declarator message handling failed");
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
+                        }
+                    }
+                    res = self_clone_2.handle_channel_manager_message() => {
+                        if let Err(e) = res {
+                            error!(error = ?e, "Channel Manager message handling failed");
+                            if handle_error(&status_sender, e).await {
+                                break;
+                            }
+                        }
+                    },
                 }
-                drop(shutdown_complete_tx);
-                warn!("JobDeclarator: unified message loop exited.");
-            },
-        );
+            }
+            warn!("JobDeclarator: unified message loop exited.");
+
+            // signal fallback coordinator that this task has completed its cleanup
+            fallback_handler.done();
+        });
     }
 
     /// Performs SV2 setup connection handshake with Job Declarator server.
