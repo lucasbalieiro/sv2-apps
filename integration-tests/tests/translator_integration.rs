@@ -8,8 +8,12 @@ use integration_tests_sv2::{
     *,
 };
 use stratum_apps::stratum_core::mining_sv2::*;
+use tokio::net::TcpListener;
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 use stratum_apps::stratum_core::{
     binary_sv2::{Seq0255, Sv2Option},
     common_messages_sv2::{
@@ -1472,4 +1476,140 @@ async fn aggregated_translator_triggers_fallback_on_close_channel_message() {
     sniffer_b
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
         .await;
+}
+
+// Verify's that the non-aggregated mode translator does not shut down if an
+// upstream message references a channel ID that is not associated with any
+// downstream in the tproxy.
+// See: https://github.com/stratum-mining/sv2-apps/issues/216
+#[tokio::test]
+async fn translator_does_not_shutdown_on_missing_downstream_channel() {
+    start_tracing();
+
+    // upstream server mock
+    let mock_upstream_addr_a = get_available_address();
+    let mock_upstream_a = MockUpstream::new(mock_upstream_addr_a);
+    let send_to_tproxy_a = mock_upstream_a.start().await;
+    let (sniffer_a, sniffer_addr_a) = start_sniffer("", mock_upstream_addr_a, false, vec![], None);
+
+    let (_tproxy, tproxy_addr) =
+        start_sv2_translator(&[sniffer_addr_a], false, vec![], vec![], None).await;
+
+    sniffer_a
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        )
+        .await;
+
+    let setup_connection_success = AnyMessage::Common(CommonMessages::SetupConnectionSuccess(
+        SetupConnectionSuccess {
+            used_version: 2,
+            flags: 0,
+        },
+    ));
+    send_to_tproxy_a
+        .send(setup_connection_success)
+        .await
+        .unwrap();
+
+    let (_minerd_process, _minerd_addr) =
+        start_minerd(tproxy_addr.clone(), None, None, false).await;
+
+    sniffer_a
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .await;
+    let open_extended_mining_channel: OpenExtendedMiningChannel = loop {
+        match sniffer_a.next_message_from_downstream() {
+            Some((_, AnyMessage::Mining(parsers_sv2::Mining::OpenExtendedMiningChannel(msg)))) => {
+                break msg;
+            }
+            _ => continue,
+        };
+    };
+
+    let open_extended_mining_channel_success = AnyMessage::Mining(
+        parsers_sv2::Mining::OpenExtendedMiningChannelSuccess(OpenExtendedMiningChannelSuccess {
+            request_id: open_extended_mining_channel.request_id,
+            channel_id: 0,
+            target: hex::decode("0000137c578190689425e3ecf8449a1af39db0aed305d9206f45ac32fe8330fc")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            // full extranonce has a total of 12 bytes
+            extranonce_size: 8,
+            extranonce_prefix: vec![0x00, 0x01, 0x00, 0x00].try_into().unwrap(),
+            group_channel_id: 100,
+        }),
+    );
+    send_to_tproxy_a
+        .send(open_extended_mining_channel_success)
+        .await
+        .unwrap();
+
+    sniffer_a
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
+    let new_extended_mining_job = AnyMessage::Mining(parsers_sv2::Mining::NewExtendedMiningJob(NewExtendedMiningJob {
+            channel_id: 0,
+            job_id: 1,
+            min_ntime: Sv2Option::new(None),
+            version: 0x20000000,
+            version_rolling_allowed: true,
+            merkle_path: Seq0255::new(vec![]).unwrap(),
+            // scriptSig for a total of 8 bytes of extranonce
+            coinbase_tx_prefix: hex::decode("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff265200162f5374726174756d2056322053524920506f6f6c2f2f08").unwrap().try_into().unwrap(),
+            coinbase_tx_suffix: hex::decode("feffffff0200f2052a01000000160014ebe1b7dcc293ccaa0ee743a86f89df8258c208fc0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf901000000").unwrap().try_into().unwrap(),
+        }));
+
+    send_to_tproxy_a
+        .send(new_extended_mining_job)
+        .await
+        .unwrap();
+    sniffer_a
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+        )
+        .await;
+
+    let set_new_prev_hash =
+        AnyMessage::Mining(parsers_sv2::Mining::SetNewPrevHash(SetNewPrevHash {
+            channel_id: 0,
+            job_id: 1,
+            prev_hash: hex::decode(
+                "3ab7089cd2cd30f133552cfde82c4cb239cd3c2310306f9d825e088a1772cc39",
+            )
+            .unwrap()
+            .try_into()
+            .unwrap(),
+            min_ntime: 1766782170,
+            nbits: 0x207fffff,
+        }));
+
+    send_to_tproxy_a.send(set_new_prev_hash).await.unwrap();
+    sniffer_a
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+        )
+        .await;
+
+    // SetTarget message with channel id not present in downstream
+    let set_target = AnyMessage::Mining(parsers_sv2::Mining::SetTarget(SetTarget {
+        channel_id: 5,
+        maximum_target: [0; 32].into(),
+    }));
+    send_to_tproxy_a.send(set_target).await.unwrap();
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(TcpListener::bind(tproxy_addr).await.is_err());
 }
