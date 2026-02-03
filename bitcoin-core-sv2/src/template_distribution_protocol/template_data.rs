@@ -1,4 +1,4 @@
-use crate::error::TemplateDataError;
+use crate::template_distribution_protocol::error::TemplateDataError;
 
 use bitcoin_capnp_types::{
     mining_capnp::block_template::Client as BlockTemplateIpcClient,

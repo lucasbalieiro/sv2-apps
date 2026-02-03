@@ -175,8 +175,8 @@ pub enum PoolErrorKind {
     FailedToCreateBitcoinCoreTokioRuntime,
     /// Failed to send CoinbaseOutputConstraints message
     FailedToSendCoinbaseOutputConstraints,
-    /// BitcoinCoreSv2 cancellation token activated
-    BitcoinCoreSv2CancellationTokenActivated,
+    /// BitcoinCoreSv2TDP cancellation token activated
+    BitcoinCoreSv2TDPCancellationTokenActivated,
     /// Unsupported Protocol
     UnsupportedProtocol,
     /// Setup connection error
@@ -269,8 +269,8 @@ impl std::fmt::Display for PoolErrorKind {
             FailedToSendCoinbaseOutputConstraints => {
                 write!(f, "Failed to send CoinbaseOutputConstraints message")
             }
-            BitcoinCoreSv2CancellationTokenActivated => {
-                write!(f, "BitcoinCoreSv2 cancellation token activated")
+            BitcoinCoreSv2TDPCancellationTokenActivated => {
+                write!(f, "BitcoinCoreSv2TDP cancellation token activated")
             },
             UnsupportedProtocol => write!(f, "Protocol not supported"),
             SetupConnectionError => {
