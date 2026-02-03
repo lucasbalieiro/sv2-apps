@@ -1,7 +1,7 @@
 // This file contains integration tests for the `TranslatorSv2` module.
 use integration_tests_sv2::{
     interceptor::{IgnoreMessage, MessageDirection, ReplaceMessage},
-    mock_roles::MockUpstream,
+    mock_roles::{MockUpstream, WithSetup},
     sv1_sniffer::SV1MessageFilter,
     template_provider::DifficultyLevel,
     utils::get_available_address,
@@ -17,7 +17,7 @@ use std::{
 use stratum_apps::stratum_core::{
     binary_sv2::{Seq0255, Sv2Option},
     common_messages_sv2::{
-        SetupConnectionError, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
+        Protocol, SetupConnectionError, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
         MESSAGE_TYPE_SETUP_CONNECTION_ERROR, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
     },
     mining_sv2::{
@@ -862,7 +862,7 @@ async fn non_aggregated_translator_handles_set_group_channel_message() {
     start_tracing();
 
     let mock_upstream_addr = get_available_address();
-    let mock_upstream = MockUpstream::new(mock_upstream_addr);
+    let mock_upstream = MockUpstream::new(mock_upstream_addr, WithSetup::no());
     let send_to_tproxy = mock_upstream.start().await;
 
     let (sniffer, sniffer_addr) = start_sniffer("", mock_upstream_addr, false, vec![], None);
@@ -1091,7 +1091,7 @@ async fn non_aggregated_translator_correctly_deals_with_close_channel_message() 
     start_tracing();
 
     let mock_upstream_addr = get_available_address();
-    let mock_upstream = MockUpstream::new(mock_upstream_addr);
+    let mock_upstream = MockUpstream::new(mock_upstream_addr, WithSetup::no());
     let send_to_tproxy = mock_upstream.start().await;
 
     let (sniffer, sniffer_addr) = start_sniffer("", mock_upstream_addr, false, vec![], None);
@@ -1334,13 +1334,16 @@ async fn aggregated_translator_triggers_fallback_on_close_channel_message() {
 
     // first upstream server mock
     let mock_upstream_addr_a = get_available_address();
-    let mock_upstream_a = MockUpstream::new(mock_upstream_addr_a);
+    let mock_upstream_a = MockUpstream::new(mock_upstream_addr_a, WithSetup::no());
     let send_to_tproxy_a = mock_upstream_a.start().await;
     let (sniffer_a, sniffer_addr_a) = start_sniffer("", mock_upstream_addr_a, false, vec![], None);
 
     // fallback upstream server mock
     let mock_upstream_addr_b = get_available_address();
-    let mock_upstream_b = MockUpstream::new(mock_upstream_addr_b);
+    let mock_upstream_b = MockUpstream::new(
+        mock_upstream_addr_b,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
     let _send_to_tproxy_b = mock_upstream_b.start().await;
     let (sniffer_b, sniffer_addr_b) = start_sniffer("", mock_upstream_addr_b, false, vec![], None);
 
@@ -1488,7 +1491,7 @@ async fn translator_does_not_shutdown_on_missing_downstream_channel() {
 
     // upstream server mock
     let mock_upstream_addr_a = get_available_address();
-    let mock_upstream_a = MockUpstream::new(mock_upstream_addr_a);
+    let mock_upstream_a = MockUpstream::new(mock_upstream_addr_a, WithSetup::no());
     let send_to_tproxy_a = mock_upstream_a.start().await;
     let (sniffer_a, sniffer_addr_a) = start_sniffer("", mock_upstream_addr_a, false, vec![], None);
 
@@ -1627,7 +1630,7 @@ async fn aggregated_translator_handles_downstream_connecting_during_future_job()
     start_tracing();
 
     let mock_upstream_addr = get_available_address();
-    let mock_upstream = MockUpstream::new(mock_upstream_addr);
+    let mock_upstream = MockUpstream::new(mock_upstream_addr, WithSetup::no());
     let send_to_tproxy = mock_upstream.start().await;
 
     // ignore SubmitSharesSuccess messages to simplify the test flow

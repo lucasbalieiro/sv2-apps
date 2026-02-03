@@ -1,29 +1,64 @@
 use crate::utils::{create_downstream, create_upstream, message_from_frame, wait_for_client};
 use async_channel::Sender;
-use std::net::SocketAddr;
-use stratum_apps::{
-    stratum_core::{
-        codec_sv2::StandardEitherFrame,
-        parsers_sv2::{AnyMessage, IsSv2Message},
+use std::{convert::TryInto, net::SocketAddr};
+use stratum_apps::stratum_core::{
+    codec_sv2::StandardEitherFrame,
+    common_messages_sv2::{
+        Protocol, SetupConnection, SetupConnectionError, SetupConnectionSuccess,
+        MESSAGE_TYPE_SETUP_CONNECTION,
     },
-    utils::types::Sv2Frame,
+    parsers_sv2::{AnyMessage, CommonMessages, IsSv2Message},
 };
+use stratum_apps::utils::types::Sv2Frame;
 use tokio::net::TcpStream;
 use tracing::info;
 
+pub enum WithSetup {
+    Yes(SetupConnection<'static>),
+    No,
+}
+
+impl WithSetup {
+    pub fn yes_with_defaults(protocol: Protocol, flags: u32) -> Self {
+        WithSetup::Yes(SetupConnection {
+            protocol,
+            min_version: 2,
+            max_version: 2,
+            flags,
+            endpoint_host: b"0.0.0.0".to_vec().try_into().unwrap(),
+            endpoint_port: 0,
+            vendor: b"integration-test".to_vec().try_into().unwrap(),
+            hardware_version: b"".to_vec().try_into().unwrap(),
+            firmware: b"".to_vec().try_into().unwrap(),
+            device_id: b"".to_vec().try_into().unwrap(),
+        })
+    }
+
+    pub fn yes(setup_connection: SetupConnection<'static>) -> Self {
+        WithSetup::Yes(setup_connection)
+    }
+
+    pub fn no() -> Self {
+        WithSetup::No
+    }
+}
+
 pub struct MockDownstream {
     upstream_address: SocketAddr,
+    setup: WithSetup,
 }
 
 impl MockDownstream {
-    pub fn new(upstream_address: SocketAddr) -> Self {
-        Self { upstream_address }
+    pub fn new(upstream_address: SocketAddr, setup: WithSetup) -> Self {
+        Self {
+            upstream_address,
+            setup,
+        }
     }
 
-    pub async fn start(&self) -> Sender<AnyMessage<'static>> {
+    pub async fn start(self) -> Sender<AnyMessage<'static>> {
         let upstream_address = self.upstream_address;
 
-        // Create proxy channel that accepts AnyMessage
         let (proxy_sender, proxy_receiver) = async_channel::unbounded::<AnyMessage<'static>>();
 
         let (upstream_receiver, upstream_sender) = create_upstream(loop {
@@ -40,7 +75,25 @@ impl MockDownstream {
         .await
         .expect("Failed to create upstream");
 
-        // Spawn task to receive from upstream
+        if let WithSetup::Yes(setup_connection) = self.setup {
+            let protocol = setup_connection.protocol;
+            let flags = setup_connection.flags;
+            let msg = AnyMessage::Common(CommonMessages::SetupConnection(setup_connection));
+            let message_type = msg.message_type();
+            let frame = StandardEitherFrame::<AnyMessage<'_>>::Sv2(
+                Sv2Frame::from_message(msg, message_type, 0, false)
+                    .expect("Failed to create SetupConnection frame"),
+            );
+            upstream_sender
+                .send(frame)
+                .await
+                .expect("Failed to send SetupConnection");
+            info!(
+                "MockDownstream: sent SetupConnection with protocol {:?} and flags {}",
+                protocol, flags
+            );
+        }
+
         tokio::spawn(async move {
             while let Ok(mut frame) = upstream_receiver.recv().await {
                 let (msg_type, msg) = message_from_frame(&mut frame);
@@ -51,7 +104,6 @@ impl MockDownstream {
             }
         });
 
-        // Spawn task to convert AnyMessage to MessageFrame and forward to upstream
         tokio::spawn(async move {
             while let Ok(message) = proxy_receiver.recv().await {
                 let message_type = message.message_type();
@@ -71,27 +123,98 @@ impl MockDownstream {
 
 pub struct MockUpstream {
     listening_address: SocketAddr,
+    setup: WithSetup,
 }
 
 impl MockUpstream {
-    pub fn new(listening_address: SocketAddr) -> Self {
-        Self { listening_address }
+    pub fn new(listening_address: SocketAddr, setup: WithSetup) -> Self {
+        Self {
+            listening_address,
+            setup,
+        }
     }
 
-    pub async fn start(&self) -> Sender<AnyMessage<'static>> {
+    pub async fn start(self) -> Sender<AnyMessage<'static>> {
         let listening_address = self.listening_address;
 
-        // Create proxy channel that accepts AnyMessage
         let (proxy_sender, proxy_receiver) = async_channel::unbounded::<AnyMessage<'static>>();
 
         tokio::spawn(async move {
-            // Wait for client connection in background
             let (downstream_receiver, downstream_sender) =
                 create_downstream(wait_for_client(listening_address).await)
                     .await
                     .expect("Failed to connect to downstream");
 
-            // Spawn task to receive from downstream
+            if let WithSetup::Yes(expected_setup) = self.setup {
+                let expected_protocol = expected_setup.protocol;
+                let flags = expected_setup.flags;
+
+                let mut frame = downstream_receiver
+                    .recv()
+                    .await
+                    .expect("Failed to receive first message from downstream");
+                let (msg_type, msg) = message_from_frame(&mut frame);
+                info!(
+                    "MockUpstream: received message from downstream: {} {}",
+                    msg_type, msg
+                );
+
+                if msg_type == MESSAGE_TYPE_SETUP_CONNECTION {
+                    if let AnyMessage::Common(CommonMessages::SetupConnection(setup_msg)) = &msg {
+                        if setup_msg.protocol == expected_protocol {
+                            let success = AnyMessage::Common(
+                                CommonMessages::SetupConnectionSuccess(SetupConnectionSuccess {
+                                    used_version: 2,
+                                    flags,
+                                }),
+                            );
+                            let success_type = success.message_type();
+                            let response_frame = StandardEitherFrame::<AnyMessage<'_>>::Sv2(
+                                Sv2Frame::from_message(success, success_type, 0, false)
+                                    .expect("Failed to create SetupConnectionSuccess frame"),
+                            );
+                            downstream_sender
+                                .send(response_frame)
+                                .await
+                                .expect("Failed to send SetupConnectionSuccess");
+                            info!(
+                                "MockUpstream: sent SetupConnectionSuccess with flags {}",
+                                flags
+                            );
+                        } else {
+                            let error = AnyMessage::Common(CommonMessages::SetupConnectionError(
+                                SetupConnectionError {
+                                    flags: 0,
+                                    error_code: "unsupported-protocol"
+                                        .to_string()
+                                        .into_bytes()
+                                        .try_into()
+                                        .unwrap(),
+                                },
+                            ));
+                            let error_type = error.message_type();
+                            let response_frame = StandardEitherFrame::<AnyMessage<'_>>::Sv2(
+                                Sv2Frame::from_message(error, error_type, 0, false)
+                                    .expect("Failed to create SetupConnectionError frame"),
+                            );
+                            downstream_sender
+                                .send(response_frame)
+                                .await
+                                .expect("Failed to send SetupConnectionError");
+                            info!(
+                                "MockUpstream: sent SetupConnectionError for wrong protocol {:?}, expected {:?}",
+                                setup_msg.protocol, expected_protocol
+                            );
+                        }
+                    }
+                } else {
+                    panic!(
+                        "MockUpstream: first message must be SetupConnection, got {}",
+                        msg_type
+                    );
+                }
+            }
+
             tokio::spawn(async move {
                 while let Ok(mut frame) = downstream_receiver.recv().await {
                     let (msg_type, msg) = message_from_frame(&mut frame);
@@ -102,7 +225,6 @@ impl MockUpstream {
                 }
             });
 
-            // Convert AnyMessage to MessageFrame and forward to downstream
             while let Ok(message) = proxy_receiver.recv().await {
                 let message_type = message.message_type();
                 let frame = StandardEitherFrame::<AnyMessage<'_>>::Sv2(
@@ -123,17 +245,14 @@ impl MockUpstream {
 mod tests {
     use super::*;
     use crate::{interceptor::MessageDirection, start_sniffer};
-    use std::{convert::TryInto, net::TcpListener};
-    use stratum_apps::stratum_core::{
-        common_messages_sv2::{
-            Protocol, SetupConnection, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
-            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
-        },
-        parsers_sv2::{AnyMessage, CommonMessages},
+    use std::net::TcpListener;
+    use stratum_apps::stratum_core::common_messages_sv2::{
+        MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+        MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
     };
 
     #[tokio::test]
-    async fn test_mock_roles() {
+    async fn test_implicit_setup_connection() {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -141,46 +260,79 @@ mod tests {
             .port();
         let upstream_socket_addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-        let mock_upstream = MockUpstream::new(upstream_socket_addr);
-        let send_to_downstream = mock_upstream.start().await;
+        let _mock_upstream = MockUpstream::new(
+            upstream_socket_addr,
+            WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+        )
+        .start()
+        .await;
 
-        let (sniffer, sniffer_addr) =
-            start_sniffer("mock_roles_test", upstream_socket_addr, false, vec![], None);
-        let mock_downstream = MockDownstream::new(sniffer_addr);
+        let (sniffer, sniffer_addr) = start_sniffer(
+            "implicit_setup_test",
+            upstream_socket_addr,
+            false,
+            vec![],
+            None,
+        );
 
-        let send_to_upstream = mock_downstream.start().await;
-
-        let setup_connection =
-            AnyMessage::Common(CommonMessages::SetupConnection(SetupConnection {
-                protocol: Protocol::TemplateDistributionProtocol,
-                min_version: 2,
-                max_version: 2,
-                flags: 0,
-                endpoint_host: b"0.0.0.0".to_vec().try_into().unwrap(),
-                endpoint_port: 8081,
-                vendor: b"Bitmain".to_vec().try_into().unwrap(),
-                hardware_version: b"901".to_vec().try_into().unwrap(),
-                firmware: b"abcX".to_vec().try_into().unwrap(),
-                device_id: b"89567".to_vec().try_into().unwrap(),
-            }));
-        send_to_upstream.send(setup_connection).await.unwrap();
+        let _send_to_upstream = MockDownstream::new(
+            sniffer_addr,
+            WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+        )
+        .start()
+        .await;
 
         sniffer
             .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
             .await;
 
-        let success_message = AnyMessage::Common(CommonMessages::SetupConnectionSuccess(
-            SetupConnectionSuccess {
-                used_version: 2,
-                flags: 0,
-            },
-        ));
-        send_to_downstream.send(success_message).await.unwrap();
-
         sniffer
             .wait_for_message_type(
                 MessageDirection::ToDownstream,
                 MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_setup_connection_wrong_protocol() {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let upstream_socket_addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+        let _mock_upstream = MockUpstream::new(
+            upstream_socket_addr,
+            WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+        )
+        .start()
+        .await;
+
+        let (sniffer, sniffer_addr) = start_sniffer(
+            "wrong_protocol_test",
+            upstream_socket_addr,
+            false,
+            vec![],
+            None,
+        );
+
+        let _send_to_upstream = MockDownstream::new(
+            sniffer_addr,
+            WithSetup::yes_with_defaults(Protocol::TemplateDistributionProtocol, 0),
+        )
+        .start()
+        .await;
+
+        sniffer
+            .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+            .await;
+
+        sniffer
+            .wait_for_message_type(
+                MessageDirection::ToDownstream,
+                MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
             )
             .await;
     }

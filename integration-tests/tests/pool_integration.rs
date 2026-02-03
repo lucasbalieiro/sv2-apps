@@ -3,7 +3,7 @@
 // `PoolSv2` is a module that implements the Pool role in the Stratum V2 protocol.
 use integration_tests_sv2::{
     interceptor::{MessageDirection, ReplaceMessage},
-    mock_roles::MockDownstream,
+    mock_roles::{MockDownstream, WithSetup},
     template_provider::DifficultyLevel,
     *,
 };
@@ -429,23 +429,11 @@ async fn pool_group_extended_channels() {
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", pool_addr, false, vec![], None);
 
-    let mock_downstream = MockDownstream::new(sniffer_addr);
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
     let send_to_pool = mock_downstream.start().await;
-
-    // send SetupConnection message to the pool
-    let setup_connection = AnyMessage::Common(CommonMessages::SetupConnection(SetupConnection {
-        protocol: Protocol::MiningProtocol,
-        min_version: 2,
-        max_version: 2,
-        flags: 0,
-        endpoint_host: b"0.0.0.0".to_vec().try_into().unwrap(),
-        endpoint_port: 8081,
-        vendor: b"Bitmain".to_vec().try_into().unwrap(),
-        hardware_version: b"901".to_vec().try_into().unwrap(),
-        firmware: b"abcX".to_vec().try_into().unwrap(),
-        device_id: b"89567".to_vec().try_into().unwrap(),
-    }));
-    send_to_pool.send(setup_connection).await.unwrap();
 
     sniffer
         .wait_for_message_type_and_clean_queue(
@@ -606,24 +594,11 @@ async fn pool_group_standard_channels() {
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", pool_addr, false, vec![], None);
 
-    let mock_downstream = MockDownstream::new(sniffer_addr);
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
     let send_to_pool = mock_downstream.start().await;
-
-    // send SetupConnection message to the pool
-    let setup_connection = AnyMessage::Common(CommonMessages::SetupConnection(SetupConnection {
-        protocol: Protocol::MiningProtocol,
-        min_version: 2,
-        max_version: 2,
-        flags: 0, // no REQUIRES_STANDARD_JOBS flag
-        endpoint_host: b"0.0.0.0".to_vec().try_into().unwrap(),
-        endpoint_port: 8081,
-        vendor: b"Bitmain".to_vec().try_into().unwrap(),
-        hardware_version: b"901".to_vec().try_into().unwrap(),
-        firmware: b"abcX".to_vec().try_into().unwrap(),
-        device_id: b"89567".to_vec().try_into().unwrap(),
-    }));
-
-    send_to_pool.send(setup_connection).await.unwrap();
 
     sniffer
         .wait_for_message_type_and_clean_queue(
@@ -796,23 +771,12 @@ async fn pool_require_standard_jobs_set_does_not_group_standard_channels() {
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", pool_addr, false, vec![], None);
 
-    let mock_downstream = MockDownstream::new(sniffer_addr);
+    // Use REQUIRES_STANDARD_JOBS flag (0b0001) to prevent channel grouping
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0b0001),
+    );
     let send_to_pool = mock_downstream.start().await;
-
-    // send SetupConnection message to the pool
-    let setup_connection = AnyMessage::Common(CommonMessages::SetupConnection(SetupConnection {
-        protocol: Protocol::MiningProtocol,
-        min_version: 2,
-        max_version: 2,
-        flags: 0b0001, // REQUIRES_STANDARD_JOBS flag
-        endpoint_host: b"0.0.0.0".to_vec().try_into().unwrap(),
-        endpoint_port: 8081,
-        vendor: b"Bitmain".to_vec().try_into().unwrap(),
-        hardware_version: b"901".to_vec().try_into().unwrap(),
-        firmware: b"abcX".to_vec().try_into().unwrap(),
-        device_id: b"89567".to_vec().try_into().unwrap(),
-    }));
-    send_to_pool.send(setup_connection).await.unwrap();
 
     sniffer
         .wait_for_message_type_and_clean_queue(
