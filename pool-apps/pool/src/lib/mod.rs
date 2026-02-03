@@ -8,7 +8,7 @@ use std::{
 
 use async_channel::unbounded;
 
-use bitcoin_core_sv2::CancellationToken;
+use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
     stratum_core::bitcoin::consensus::Encodable, task_manager::TaskManager,
     tp_type::TemplateProviderType, utils::types::GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
@@ -22,7 +22,7 @@ use crate::{
     error::PoolErrorKind,
     status::State,
     template_receiver::{
-        bitcoin_core::{connect_to_bitcoin_core, BitcoinCoreSv2Config},
+        bitcoin_core::{connect_to_bitcoin_core, BitcoinCoreSv2TDPConfig},
         sv2_tp::Sv2Tp,
     },
 };
@@ -167,11 +167,11 @@ impl PoolSv2 {
                     unix_socket_path.display()
                 );
 
-                // incoming and outgoing TDP channels from the perspective of BitcoinCoreSv2
+                // incoming and outgoing TDP channels from the perspective of BitcoinCoreSv2TDP
                 let incoming_tdp_receiver = channel_manager_to_tp_receiver.clone();
                 let outgoing_tdp_sender = tp_to_channel_manager_sender.clone();
 
-                let bitcoin_core_config = BitcoinCoreSv2Config {
+                let bitcoin_core_config = BitcoinCoreSv2TDPConfig {
                     unix_socket_path,
                     fee_threshold,
                     min_interval,
@@ -255,10 +255,10 @@ impl PoolSv2 {
         }
 
         if let Some(bitcoin_core_sv2_join_handle) = bitcoin_core_sv2_join_handle {
-            info!("Waiting for BitcoinCoreSv2 dedicated thread to shutdown...");
+            info!("Waiting for BitcoinCoreSv2TDP dedicated thread to shutdown...");
             match bitcoin_core_sv2_join_handle.join() {
-                Ok(_) => info!("BitcoinCoreSv2 dedicated thread shutdown complete."),
-                Err(e) => error!("BitcoinCoreSv2 dedicated thread error: {e:?}"),
+                Ok(_) => info!("BitcoinCoreSv2TDP dedicated thread shutdown complete."),
+                Err(e) => error!("BitcoinCoreSv2TDP dedicated thread error: {e:?}"),
             }
         }
 
