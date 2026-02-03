@@ -16,6 +16,13 @@
 //! - Building Sv2 applications that act as a Server under the Job Declaration Protocol (e.g.: Pool
 //!   or JDS) while connecting directly to the Bitcoin Core node.
 //!
+//! ## `LocalSet` Requirement
+//!
+//! Due to limitations in the `capnp-rpc` dependency,
+//! [`template_distribution_protocol::BitcoinCoreSv2TDP`] and
+//! [`job_declaration_protocol::BitcoinCoreSv2JDP`] must be run within a [`tokio::task::LocalSet`].
+//! The crate examples demonstrate the proper setup pattern.
+//!
 //! ## `BitcoinCoreSv2TDP`
 //!
 //! The [`template_distribution_protocol::BitcoinCoreSv2TDP`] struct is designed to be interface for
@@ -54,33 +61,49 @@
 //! the struct, which then distributes them via the outgoing channel, while incoming Sv2 protocol
 //! messages are processed and forwarded to Bitcoin Core as needed.
 //!
-//! ## Important Notes
-//!
-//! ### `LocalSet` Requirement
-//!
-//! Due to limitations in the `capnp-rpc` dependency,
-//! [`template_distribution_protocol::BitcoinCoreSv2TDP`] must be run within a
-//! [`tokio::task::LocalSet`]. The crate examples demonstrate the proper setup pattern.
-//!
 //! ### Fee Threshold
 //!
-//! The `fee_threshold` parameter (in satoshis) determines when a new template is distributed due
+//! When instantiating a [`template_distribution_protocol::BitcoinCoreSv2TDP`] instance,
+//! the `fee_threshold` parameter (in satoshis) determines when a new template is distributed due
 //! to mempool changes. When the mempool fee delta exceeds this threshold, a new `NewTemplate`
 //! message is sent.
 //!
 //! ### Minimum Interval
 //!
-//! The `min_interval` parameter (in seconds) determines the minimum interval between template
+//! When instantiating a [`template_distribution_protocol::BitcoinCoreSv2TDP`] instance,
+//! the `min_interval` parameter (in seconds) determines the minimum interval between template
 //! updates. When the interval between two template updates is less than the minimum interval, the
-//! `BitcoinCoreSv2TDP` instance will sleep for the remaining time to reach the minimum interval.
+//! [`template_distribution_protocol::BitcoinCoreSv2TDP`] instance will sleep for the remaining time
+//! to reach the minimum interval.
 //!
 //! The exception is when the chain tip changes, in which case a new `NewTemplate` message is sent
 //! immediately, followed by a corresponding `SetNewPrevHash` message.
 //!
-//! ## Usage
+//! ## `BitcoinCoreSv2JDP`
 //!
-//! The main entry point is the [`BitcoinCoreSv2TDP`] struct, which provides an async interface for
-//! interacting with Bitcoin Core. See the crate examples for complete usage patterns.
+//! The [`job_declaration_protocol::BitcoinCoreSv2JDP`] struct is designed to be interface for
+//! interacting with Bitcoin Core via Sv2 Job Declaration Protocol. It is instantiated with a
+//! UNIX socket path.
+//!
+//! Differently from [`template_distribution_protocol::BitcoinCoreSv2TDP`], it does not operate with
+//! two main IO paths. Instead, handlers are provided for the following Sv2 messages:
+//! - `DeclareMiningJob`
+//! - `PushSolution`
+//!
+//! Please note that Sv2 JDP token management is not covered here.
+//!
+//! More specifically, it is the caller's responsability to manage the tokens to be
+//! added to:
+//! - `AllocateMiningJobToken.Success.mining_job_token`
+//! - `DeclareMiningJob.Success.new_mining_job_token`
+//!
+//! Similarly, validation of:
+//! - `DeclareMiningJob.mining_job_token` against `AllocateMiningJobToken.Success.mining_job_token`
+//! - `SetCustomMiningJob.mining_job_token` against `DeclareMiningJob.Success.new_mining_job_token`
+//! - `SetCustomMiningJob` Coinbase Tx against `DeclareMiningJob`
+//! - `SetCustomMiningJob.merkle_path` against `DeclareMiningJob`
+//!
+//! are also the caller's responsability.
 //!
 //! ## IPC Communication
 //!
@@ -88,4 +111,8 @@
 //! UNIX socket. The connection is established during [`BitcoinCoreSv2TDP::new`] and maintained
 //! throughout the lifetime of the instance.
 
+pub mod job_declaration_protocol;
 pub mod template_distribution_protocol;
+
+/// The minimum block reserved weight established by Bitcoin Core.
+pub const MIN_BLOCK_RESERVED_WEIGHT: u64 = 2000;
