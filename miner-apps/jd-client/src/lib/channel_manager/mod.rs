@@ -122,7 +122,7 @@ pub struct ChannelManagerData {
     downstream_id_factory: AtomicUsize,
     // Factory that assigns a unique **sequence number** to each share
     // submitted from the JDC to the upstream.
-    sequence_number_factory: AtomicU32,
+    pub sequence_number_factory: AtomicU32,
     // The last **future template** received from the upstream.
     last_future_template: Option<NewTemplate<'static>>,
     // The last **new prevhash** received from the upstream.
@@ -298,7 +298,7 @@ impl ChannelManager {
             extranonce_prefix_factory_standard,
             downstream_id_factory: AtomicUsize::new(0),
             request_id_factory: AtomicU32::new(0),
-            sequence_number_factory: AtomicU32::new(0),
+            sequence_number_factory: AtomicU32::new(1),
             last_future_template: None,
             last_new_prev_hash: None,
             allocate_tokens: None,
