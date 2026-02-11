@@ -699,9 +699,6 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
     if let Some(ref metric) = state.metrics.sv2_client_shares_accepted_total {
         metric.reset();
     }
-    if let Some(ref metric) = state.metrics.sv2_client_channel_shares_per_minute {
-        metric.reset();
-    }
     if let Some(ref metric) = state.metrics.sv2_server_channel_hashrate {
         metric.reset();
     }
@@ -712,14 +709,13 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
     // Collect server metrics
     if let Some(monitoring) = &state.server_monitoring {
         let summary = monitoring.get_server_summary();
-        if let Some(ref metric) = state.metrics.sv2_server_channels_total {
-            metric.set(summary.total_channels as f64);
-        }
-        if let Some(ref metric) = state.metrics.sv2_server_channels_extended {
-            metric.set(summary.extended_channels as f64);
-        }
-        if let Some(ref metric) = state.metrics.sv2_server_channels_standard {
-            metric.set(summary.standard_channels as f64);
+        if let Some(ref metric) = state.metrics.sv2_server_channels {
+            metric
+                .with_label_values(&["extended"])
+                .set(summary.extended_channels as f64);
+            metric
+                .with_label_values(&["standard"])
+                .set(summary.standard_channels as f64);
         }
         if let Some(ref metric) = state.metrics.sv2_server_hashrate_total {
             metric.set(summary.total_hashrate as f64);
@@ -765,14 +761,13 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
         if let Some(ref metric) = state.metrics.sv2_clients_total {
             metric.set(summary.total_clients as f64);
         }
-        if let Some(ref metric) = state.metrics.sv2_client_channels_total {
-            metric.set(summary.total_channels as f64);
-        }
-        if let Some(ref metric) = state.metrics.sv2_client_channels_extended {
-            metric.set(summary.extended_channels as f64);
-        }
-        if let Some(ref metric) = state.metrics.sv2_client_channels_standard {
-            metric.set(summary.standard_channels as f64);
+        if let Some(ref metric) = state.metrics.sv2_client_channels {
+            metric
+                .with_label_values(&["extended"])
+                .set(summary.extended_channels as f64);
+            metric
+                .with_label_values(&["standard"])
+                .set(summary.standard_channels as f64);
         }
         if let Some(ref metric) = state.metrics.sv2_client_hashrate_total {
             metric.set(summary.total_hashrate as f64);
@@ -796,11 +791,6 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
                         .with_label_values(&[&client_id, &channel_id, user])
                         .set(channel.nominal_hashrate as f64);
                 }
-                if let Some(ref metric) = state.metrics.sv2_client_channel_shares_per_minute {
-                    metric
-                        .with_label_values(&[&client_id, &channel_id, user])
-                        .set(channel.shares_per_minute as f64);
-                }
             }
 
             for channel in &client.standard_channels {
@@ -816,11 +806,6 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
                     metric
                         .with_label_values(&[&client_id, &channel_id, user])
                         .set(channel.nominal_hashrate as f64);
-                }
-                if let Some(ref metric) = state.metrics.sv2_client_channel_shares_per_minute {
-                    metric
-                        .with_label_values(&[&client_id, &channel_id, user])
-                        .set(channel.shares_per_minute as f64);
                 }
             }
         }
