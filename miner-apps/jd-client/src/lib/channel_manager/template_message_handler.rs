@@ -139,11 +139,22 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                         messages.push((*downstream_id, Mining::NewExtendedMiningJob(group_channel_job.get_job_message().clone())).into());
                     }
 
+                    // Extract group_job_id once for all channels that will use it
+                    let group_job_id = group_channel_job.get_job_id();
+
                     // loop over every standard channel
                     // if REQUIRES_STANDARD_JOBS is not set, we need to call on_group_channel_job on each standard channel
                     // if REQUIRES_STANDARD_JOBS is set, we need to call on_new_template, and send individual NewMiningJob messages for each standard channel
                     for (channel_id, standard_channel) in data.standard_channels.iter_mut() {
                         if !requires_standard_jobs {
+                            // update job ID to template ID mapping for standard channel
+                            channel_manager_data
+                                .downstream_channel_id_and_job_id_to_template_id
+                                .insert(
+                                    (*downstream_id, *channel_id, group_job_id).into(),
+                                    msg.template_id,
+                                );
+                            // update the standard channel state with the group channel job
                             standard_channel.on_group_channel_job(group_channel_job.clone()).map_err(|e| {
                                 tracing::error!("Error while adding group channel job to standard channel: {channel_id:?} {e:?}");
                                 JDCError::shutdown(e)
@@ -158,10 +169,25 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                                     let standard_job_id = standard_channel.get_future_job_id_from_template_id(msg.template_id).expect("future job id must exist");
                                     let standard_job = standard_channel.get_future_job(standard_job_id).expect("future job must exist");
                                     messages.push((*downstream_id, Mining::NewMiningJob(standard_job.get_job_message().clone())).into());
+                                    // Update job ID to template ID mapping for standard channel
+                                    channel_manager_data
+                                        .downstream_channel_id_and_job_id_to_template_id
+                                        .insert(
+                                            (*downstream_id, *channel_id, standard_job_id).into(),
+                                            msg.template_id,
+                                        );
                                 }
                                 false => {
                                     let standard_job = standard_channel.get_active_job().expect("active job must exist");
+                                    let active_job_id = standard_job.get_job_id();
                                     messages.push((*downstream_id, Mining::NewMiningJob(standard_job.get_job_message().clone())).into());
+                                    // Update job ID to template ID mapping for standard channel
+                                    channel_manager_data
+                                        .downstream_channel_id_and_job_id_to_template_id
+                                        .insert(
+                                            (*downstream_id, *channel_id, active_job_id).into(),
+                                            msg.template_id,
+                                        );
                                 }
                             }
                         }
@@ -169,6 +195,15 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
                     // loop over every extended channel, and call on_group_channel_job on each extended channel
                     for (channel_id, extended_channel) in data.extended_channels.iter_mut() {
+                        // update job ID to template ID mapping for extended channel
+                        channel_manager_data
+                            .downstream_channel_id_and_job_id_to_template_id
+                            .insert(
+                                (*downstream_id, *channel_id, group_job_id).into(),
+                                msg.template_id,
+                            );
+
+                        // update the extended channel state with the group channel job
                         extended_channel.on_group_channel_job(group_channel_job.clone()).map_err(|e| {
                             tracing::error!("Error while adding group channel job to extended channel: {channel_id:?} {e:?}");
                             JDCError::shutdown(e)
@@ -394,9 +429,9 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             }
         }
 
-        let messages = self.channel_manager_data.super_safe_lock(|data| {
-            data.last_new_prev_hash = Some(msg.clone().into_static());
-            data.last_declare_job_store.iter_mut().for_each(|(_k, v)| {
+        let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
+            channel_manager_data.last_new_prev_hash = Some(msg.clone().into_static());
+            channel_manager_data.last_declare_job_store.iter_mut().for_each(|(_k, v)| {
                 if v.template.future_template && v.template.template_id == msg.template_id {
                     v.prev_hash = Some(msg.clone().into_static());
                     v.template.future_template = false;
@@ -405,16 +440,16 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
             let mut messages: Vec<RouteMessageTo> = vec![];
 
-            if let Some(ref mut upstream_channel) = data.upstream_channel {
+            if let Some(ref mut upstream_channel) = channel_manager_data.upstream_channel {
                 _ = upstream_channel.on_chain_tip_update(msg.clone().into());
 
                 if get_jd_mode() == JdMode::CoinbaseOnly {
                     if let (Some(job_factory), Some(token), Some(template)) = (
-                        data.job_factory.as_mut(),
-                        data.allocate_tokens.clone(),
+                        channel_manager_data.job_factory.as_mut(),
+                        channel_manager_data.allocate_tokens.clone(),
                         future_template.clone(),
                     ) {
-                        let request_id = data.request_id_factory.fetch_add(1, Ordering::Relaxed);
+                        let request_id = channel_manager_data.request_id_factory.fetch_add(1, Ordering::Relaxed);
                         let chain_tip = ChainTip::new(
                             msg.prev_hash.clone().into_static(),
                             msg.n_bits,
@@ -437,18 +472,18 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                                 template: template.into_static(),
                                 prev_hash: Some(msg.clone().into_static()),
                                 set_custom_mining_job: Some(custom_job.clone().into_static()),
-                                coinbase_output: data.coinbase_outputs.clone(),
+                                coinbase_output: channel_manager_data.coinbase_outputs.clone(),
                                 tx_list: vec![],
                             };
 
-                            data.last_declare_job_store.insert(request_id, last_declare);
+                            channel_manager_data.last_declare_job_store.insert(request_id, last_declare);
                             messages.push(Mining::SetCustomMiningJob(custom_job).into());
                         }
                     }
                 }
             }
 
-            for (downstream_id, downstream) in data.downstream.iter_mut() {
+            for (downstream_id, downstream) in channel_manager_data.downstream.iter_mut() {
                 let downstream_messages = downstream.downstream_data.super_safe_lock(|data| {
                     let mut messages: Vec<RouteMessageTo> = vec![];
 
@@ -466,6 +501,25 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                         let group_channel_id = data.group_channel.get_group_channel_id();
 
                         let activated_group_job_id = data.group_channel.get_active_job().expect("active job must exist").get_job_id();
+
+                        // Update job ID to template ID mapping for all channels using the group channel
+                        // This is critical when a future template becomes active
+                        for (channel_id, _) in data.standard_channels.iter() {
+                            channel_manager_data
+                                .downstream_channel_id_and_job_id_to_template_id
+                                .insert(
+                                    (*downstream_id, *channel_id, activated_group_job_id).into(),
+                                    msg.template_id,
+                                );
+                        }
+                        for (channel_id, _) in data.extended_channels.iter() {
+                            channel_manager_data
+                                .downstream_channel_id_and_job_id_to_template_id
+                                .insert(
+                                    (*downstream_id, *channel_id, activated_group_job_id).into(),
+                                    msg.template_id,
+                                );
+                        }
 
                         let group_set_new_prev_hash_message = SetNewPrevHashMp {
                             channel_id: group_channel_id,
@@ -488,6 +542,16 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                         // if yes, we need to send the SetNewPrevHashMp to the standard channel
                         if data.require_std_job {
                             let activated_standard_job_id = standard_channel.get_active_job().expect("active job must exist").get_job_id();
+
+                            // Update job ID to template ID mapping for this standard channel
+                            // This is critical when a future template becomes active
+                            channel_manager_data
+                                .downstream_channel_id_and_job_id_to_template_id
+                                .insert(
+                                    (*downstream_id, *channel_id, activated_standard_job_id).into(),
+                                    msg.template_id,
+                                );
+
                             let standard_set_new_prev_hash_message = SetNewPrevHashMp {
                                 channel_id: *channel_id,
                                 job_id: activated_standard_job_id,
