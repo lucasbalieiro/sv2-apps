@@ -55,6 +55,12 @@ pub struct JobDeclaratorClientConfig {
     /// Optional monitoring server bind address
     #[serde(default)]
     monitoring_address: Option<SocketAddr>,
+    #[serde(default = "default_monitoring_cache_refresh_secs")]
+    monitoring_cache_refresh_secs: u64,
+}
+
+fn default_monitoring_cache_refresh_secs() -> u64 {
+    15
 }
 
 impl JobDeclaratorClientConfig {
@@ -95,6 +101,7 @@ impl JobDeclaratorClientConfig {
             supported_extensions,
             required_extensions,
             monitoring_address: None,
+            monitoring_cache_refresh_secs: 15,
         }
     }
 
@@ -103,7 +110,12 @@ impl JobDeclaratorClientConfig {
         self.monitoring_address
     }
 
-    /// Returns the listening address of the Job Declartor Client.
+    /// Returns the monitoring cache refresh interval in seconds.
+    pub fn monitoring_cache_refresh_secs(&self) -> u64 {
+        self.monitoring_cache_refresh_secs
+    }
+
+    /// Returns the listening address of the Job Declarator Client.
     pub fn listening_address(&self) -> &SocketAddr {
         &self.listening_address
     }
