@@ -103,7 +103,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
         }
         let response = SetupConnectionSuccess {
             used_version: 2,
-            flags: msg.flags,
+            flags: 0, // !REQUIRES_FIXED_VERSION, !REQUIRES_EXTENDED_CHANNELS
         };
         let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
             .try_into()
