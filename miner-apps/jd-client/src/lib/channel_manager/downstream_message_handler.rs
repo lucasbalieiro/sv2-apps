@@ -884,13 +884,17 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     });
                 }
 
-                if let Some(ref upstream_channel) = channel_manager_data.upstream_channel {
+                if let Some(ref mut upstream_channel) = channel_manager_data.upstream_channel {
                     debug!(
                         "Checking upstream channel {} with hashrate {} and target {:?}",
                         upstream_channel.get_channel_id(),
                         upstream_channel.get_nominal_hashrate(),
                         upstream_channel.get_target()
                     );
+
+                    // Update the upstream channel's nominal hashrate to reflect
+                    // the aggregated downstream hashrate
+                    upstream_channel.set_nominal_hashrate(downstream_hashrate);
 
                     info!("Sending update channel message upstream");
                     messages.push(
