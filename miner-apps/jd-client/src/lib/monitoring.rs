@@ -37,7 +37,7 @@ impl ServerMonitoring for ChannelManager {
                     extended_channels.push(ServerExtendedChannelInfo {
                         channel_id,
                         user_identity: user_identity.clone(),
-                        nominal_hashrate: upstream_channel.get_nominal_hashrate(),
+                        nominal_hashrate: Some(upstream_channel.get_nominal_hashrate()),
                         target_hex: hex::encode(target.to_be_bytes()),
                         extranonce_prefix_hex: hex::encode(extranonce_prefix),
                         full_extranonce_size: upstream_channel.get_full_extranonce_size(),
