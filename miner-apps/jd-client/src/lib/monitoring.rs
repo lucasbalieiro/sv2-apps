@@ -1,13 +1,13 @@
 //! Monitoring integration for JD Client
 //!
-//! This module implements the ServerMonitoring and ClientsMonitoring traits on `ChannelManager`.
+//! This module implements the ServerMonitoring and Sv2ClientsMonitoring traits on `ChannelManager`.
 //! JDC has:
 //! - Server channels (upstream to pool)
 //! - Client channels (downstream miners connecting to JDC)
 
 use hex;
 use stratum_apps::monitoring::{
-    client::{ClientInfo, ClientsMonitoring, ExtendedChannelInfo, StandardChannelInfo},
+    client::{ExtendedChannelInfo, StandardChannelInfo, Sv2ClientInfo, Sv2ClientsMonitoring},
     server::{ServerExtendedChannelInfo, ServerInfo, ServerMonitoring},
 };
 
@@ -62,9 +62,9 @@ impl ServerMonitoring for ChannelManager {
     }
 }
 
-/// Helper to convert a Downstream to ClientInfo.
+/// Helper to convert a Downstream to Sv2ClientInfo.
 /// Returns None if the lock cannot be acquired (graceful degradation for monitoring).
-fn downstream_to_client_info(client: &Downstream) -> Option<ClientInfo> {
+fn downstream_to_sv2_client_info(client: &Downstream) -> Option<Sv2ClientInfo> {
     client
         .downstream_data
         .safe_lock(|dd| {
@@ -123,7 +123,7 @@ fn downstream_to_client_info(client: &Downstream) -> Option<ClientInfo> {
                 });
             }
 
-            ClientInfo {
+            Sv2ClientInfo {
                 client_id: client.downstream_id,
                 extended_channels,
                 standard_channels,
@@ -132,8 +132,8 @@ fn downstream_to_client_info(client: &Downstream) -> Option<ClientInfo> {
         .ok()
 }
 
-impl ClientsMonitoring for ChannelManager {
-    fn get_clients(&self) -> Vec<ClientInfo> {
+impl Sv2ClientsMonitoring for ChannelManager {
+    fn get_sv2_clients(&self) -> Vec<Sv2ClientInfo> {
         // Clone Downstream references and release lock immediately to avoid contention
         // with template distribution and message handling
         let downstream_refs: Vec<Downstream> = self
@@ -143,16 +143,16 @@ impl ClientsMonitoring for ChannelManager {
 
         downstream_refs
             .iter()
-            .filter_map(downstream_to_client_info)
+            .filter_map(downstream_to_sv2_client_info)
             .collect()
     }
 
-    fn get_client_by_id(&self, client_id: usize) -> Option<ClientInfo> {
+    fn get_sv2_client_by_id(&self, client_id: usize) -> Option<Sv2ClientInfo> {
         self.channel_manager_data
             .safe_lock(|d| {
                 d.downstream
                     .get(&client_id)
-                    .and_then(downstream_to_client_info)
+                    .and_then(downstream_to_sv2_client_info)
             })
             .unwrap_or(None)
     }
