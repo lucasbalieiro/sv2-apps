@@ -10,6 +10,7 @@ use tokio::{
     select,
     sync::Mutex,
 };
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, PartialEq)]
 enum SnifferError {
@@ -72,8 +73,9 @@ impl SnifferSV1 {
                 .await
                 .expect("Failed to accept downstream connection");
             let sniffer_to_upstream_connection =
-                ConnectionSV1::new(sniffer_to_upstream_stream).await;
-            let downstream_to_sniffer_connection = ConnectionSV1::new(downstream_stream).await;
+                ConnectionSV1::new(sniffer_to_upstream_stream, CancellationToken::new()).await;
+            let downstream_to_sniffer_connection =
+                ConnectionSV1::new(downstream_stream, CancellationToken::new()).await;
             select! {
                 _ = tokio::signal::ctrl_c() => { },
                 _ = Self::recv_from_down_send_to_up_sv1(
