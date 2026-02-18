@@ -3,11 +3,12 @@ use crate::{
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
     sv2::upstream::channel::UpstreamChannelState,
-    utils::{ShutdownMessage, UpstreamEntry},
+    utils::UpstreamEntry,
 };
 use async_channel::{unbounded, Receiver, Sender};
 use std::{net::SocketAddr, sync::Arc};
 use stratum_apps::{
+    fallback_coordinator::FallbackCoordinator,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
         binary_sv2::Seq064K,
@@ -24,10 +25,9 @@ use stratum_apps::{
         types::{Message, Sv2Frame},
     },
 };
-use tokio::{
-    net::TcpStream,
-    sync::{broadcast, mpsc},
-};
+
+use tokio::net::TcpStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Manages the upstream SV2 connection to a mining pool or proxy.
@@ -67,8 +67,8 @@ impl Upstream {
     ///   upstream.
     /// * `channel_manager_sender` - Channel to send messages to the channel manager
     /// * `channel_manager_receiver` - Channel to receive messages from the channel manager
-    /// * `notify_shutdown` - Broadcast channel for shutdown coordination
-    /// * `shutdown_complete_tx` - Channel to signal shutdown completion
+    /// * `cancellation_token` - Global application cancellation token
+    /// * `fallback_coordinator` - Coordinator for upstream fallback
     ///
     /// # Returns
     /// * `Ok(Upstream)` - Successfully connected to an upstream server
@@ -78,18 +78,15 @@ impl Upstream {
         upstream: &UpstreamEntry,
         channel_manager_sender: Sender<Sv2Frame>,
         channel_manager_receiver: Receiver<Sv2Frame>,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
-        shutdown_complete_tx: mpsc::Sender<()>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         task_manager: Arc<TaskManager>,
         required_extensions: Vec<u16>,
     ) -> TproxyResult<Self, error::Upstream> {
-        let mut shutdown_rx = notify_shutdown.subscribe();
-
         info!("Trying to connect to upstream at {}", upstream.addr);
 
-        if shutdown_rx.try_recv().is_ok() {
+        if cancellation_token.is_cancelled() {
             info!("Shutdown signal received during upstream connection attempt. Aborting.");
-            drop(shutdown_complete_tx);
             return Err(TproxyError::shutdown(
                 TproxyErrorKind::CouldNotInitiateSystem,
             ));
@@ -114,7 +111,8 @@ impl Upstream {
                             writer,
                             outbound_rx,
                             inbound_tx,
-                            notify_shutdown,
+                            cancellation_token.clone(),
+                            fallback_coordinator.clone(),
                         );
 
                         let upstream_channel_state = UpstreamChannelState::new(
@@ -148,7 +146,6 @@ impl Upstream {
         }
 
         error!("Failed to connect to any configured upstream.");
-        drop(shutdown_complete_tx);
         Err(TproxyError::shutdown(
             TproxyErrorKind::CouldNotInitiateSystem,
         ))
@@ -166,42 +163,28 @@ impl Upstream {
     /// message flow between the channel manager and upstream server.
     pub async fn start(
         mut self,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
-        shutdown_complete_tx: mpsc::Sender<()>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Upstream> {
-        let mut shutdown_rx = notify_shutdown.subscribe();
-        // Wait for connection setup or shutdown signal
+        let fallback_token: CancellationToken = fallback_coordinator.token();
+
+        // wait for connection setup or cancellation signal
         tokio::select! {
             result = self.setup_connection() => {
                 if let Err(e) = result {
                     error!("Upstream: failed to set up SV2 connection: {e:?}");
-                    drop(shutdown_complete_tx);
                     return Err(e);
                 }
             }
-            message = shutdown_rx.recv() => {
-                match message {
-                    Ok(ShutdownMessage::ShutdownAll) => {
-                        info!("Upstream: shutdown signal received during connection setup.");
-                        drop(shutdown_complete_tx);
-                        return Ok(());
-                    }
-                    Ok(ShutdownMessage::UpstreamFallback{tx}) => {
-                        info!("Upstream: shutdown signal received during connection setup.");
-                        drop(shutdown_complete_tx);
-                        drop(tx);
-                        return Ok(());
-                    }
-                    Ok(_) => {}
-
-                    Err(e) => {
-                        error!("Upstream: failed to receive shutdown signal: {e}");
-                        drop(shutdown_complete_tx);
-                        return Ok(());
-                    }
-                }
+            _ = cancellation_token.cancelled() => {
+                info!("Upstream: shutdown signal received during connection setup.");
+                return Ok(());
+            }
+            _ = fallback_token.cancelled() => {
+                info!("Upstream: fallback signal received during connection setup.");
+                return Ok(());
             }
         }
 
@@ -209,8 +192,8 @@ impl Upstream {
         let wrapped_status_sender = StatusSender::Upstream(status_sender);
 
         self.run_upstream_task(
-            notify_shutdown,
-            shutdown_complete_tx,
+            cancellation_token,
+            fallback_coordinator,
             wrapped_status_sender,
             task_manager,
         )?;
@@ -360,37 +343,31 @@ impl Upstream {
     #[allow(clippy::result_large_err)]
     fn run_upstream_task(
         mut self,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
-        shutdown_complete_tx: mpsc::Sender<()>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         status_sender: StatusSender,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Upstream> {
-        let mut shutdown_rx = notify_shutdown.subscribe();
-        let shutdown_complete_tx = shutdown_complete_tx.clone();
-
         task_manager.spawn(async move {
+            // we just spawned a new task that's relevant to fallback coordination
+            // so register it with the fallback coordinator
+            let fallback_handler = fallback_coordinator.register();
+
+            // get the cancellation token that signals fallback
+            let fallback_token = fallback_coordinator.token();
+
             loop {
                 tokio::select! {
-                    // Handle shutdown signals
-                    shutdown = shutdown_rx.recv() => {
-                        match shutdown {
-                            Ok(ShutdownMessage::ShutdownAll) => {
-                                info!("Upstream: received ShutdownAll signal. Exiting loop.");
-                                break;
-                            }
-                            Ok(ShutdownMessage::UpstreamFallback{tx}) => {
-                                info!("Upstream: fallback initiated");
-                                drop(tx);
-                                break;
-                            }
-                            Ok(_) => {
-                                // Ignore other shutdown variants for upstream
-                            }
-                            Err(e) => {
-                                error!("Upstream: failed to receive shutdown signal: {e}");
-                                break;
-                            }
-                        }
+                    // Handle app shutdown signal
+                    _ = cancellation_token.cancelled() => {
+                        info!("Upstream: received shutdown signal. Exiting loop.");
+                        break;
+                    }
+
+                    // Handle fallback trigger
+                    _ = fallback_token.cancelled() => {
+                        info!("Upstream: fallback triggered");
+                        break;
                     }
 
                     // Handle incoming SV2 messages from upstream
@@ -441,7 +418,9 @@ impl Upstream {
 
             self.upstream_channel_state.drop();
             warn!("Upstream: task shutting down cleanly.");
-            drop(shutdown_complete_tx);
+
+            // signal fallback coordinator that this task has completed its cleanup
+            fallback_handler.done();
         });
 
         Ok(())

@@ -29,36 +29,6 @@ pub enum StatusSender {
     JobDeclarator(async_channel::Sender<Status>),
 }
 
-/// High-level identifier of a component type that can send status updates.
-#[derive(Debug, PartialEq, Eq)]
-pub enum StatusType {
-    /// A downstream connection identified by its ID.
-    Downstream(DownstreamId),
-    /// The template receiver component.
-    TemplateReceiver,
-    /// The channel manager component.
-    ChannelManager,
-    /// The upstream component.
-    Upstream,
-    /// The job declarator component.
-    JobDeclarator,
-}
-
-impl From<&StatusSender> for StatusType {
-    fn from(value: &StatusSender) -> Self {
-        match value {
-            StatusSender::ChannelManager(_) => StatusType::ChannelManager,
-            StatusSender::Downstream {
-                downstream_id,
-                tx: _,
-            } => StatusType::Downstream(*downstream_id),
-            StatusSender::JobDeclarator(_) => StatusType::JobDeclarator,
-            StatusSender::Upstream(_) => StatusType::Upstream,
-            StatusSender::TemplateReceiver(_) => StatusType::TemplateReceiver,
-        }
-    }
-}
-
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl StatusSender {
     /// Sends a status update for the associated component.

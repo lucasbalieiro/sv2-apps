@@ -220,7 +220,7 @@ async fn jds_wont_exit_upon_receiving_unexpected_txids_in_provide_missing_transa
         None,
     );
 
-    let (_, jdc_addr_1) = start_jdc(
+    let (_jdc, jdc_addr_1) = start_jdc(
         &[(pool_addr, sniffer_addr)],
         sv2_tp_config(tp_addr_2),
         vec![],

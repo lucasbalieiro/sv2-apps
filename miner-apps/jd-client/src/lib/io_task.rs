@@ -1,19 +1,15 @@
 use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
+use bitcoin_core_sv2::CancellationToken;
 use stratum_apps::{
+    fallback_coordinator::FallbackCoordinator,
     network_helpers::noise_stream::{NoiseTcpReadHalf, NoiseTcpWriteHalf},
     stratum_core::framing_sv2::framing::Frame,
     task_manager::TaskManager,
     utils::types::{Message, Sv2Frame},
 };
-use tokio::sync::broadcast;
 use tracing::{error, trace, warn, Instrument as _};
-
-use crate::{
-    status::{StatusSender, StatusType},
-    utils::ShutdownMessage,
-};
 
 /// Spawns async reader and writer tasks for handling framed I/O with shutdown support.
 #[track_caller]
@@ -25,190 +21,139 @@ pub fn spawn_io_tasks(
     mut writer: NoiseTcpWriteHalf<Message>,
     outbound_rx: Receiver<Sv2Frame>,
     inbound_tx: Sender<Sv2Frame>,
-    notify_shutdown: broadcast::Sender<ShutdownMessage>,
-    status_sender: StatusSender,
+    cancellation_token: CancellationToken,
+    fallback_coordinator: FallbackCoordinator,
 ) {
     let caller = std::panic::Location::caller();
     let inbound_tx_clone = inbound_tx.clone();
     let outbound_rx_clone = outbound_rx.clone();
+
     {
-        let mut shutdown_rx = notify_shutdown.subscribe();
-        let status_sender = status_sender.clone();
-        let status_type: StatusType = StatusType::from(&status_sender);
+        let cancellation_token_clone = cancellation_token.clone();
+        let fallback_coordinator_clone = fallback_coordinator.clone();
 
-        task_manager.spawn(async move {
-            trace!("Reader task started");
-            loop {
-                tokio::select! {
-                    message = shutdown_rx.recv() => {
-                        match message {
-                            Ok(ShutdownMessage::ShutdownAll) => {
-                                trace!("Received global shutdown");
-                                inbound_tx.close();
-                                break;
-                            }
-                            Ok(ShutdownMessage::DownstreamShutdown(down_id))  if matches!(status_type, StatusType::Downstream(id) if id == down_id) => {
-                                trace!(down_id, "Received downstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    inbound_tx.close();
-                                    break;
-                                }
-                            }
-                            Ok(ShutdownMessage::JobDeclaratorShutdownFallback(_)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received job declarator shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    inbound_tx.close();
-                                    break;
-                                }
-                            }
-                            Ok(ShutdownMessage::UpstreamShutdownFallback(_)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received upstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    inbound_tx.close();
-                                    break;
-                                }
-                            }
+        task_manager.spawn(
+            async move {
+                // we just spawned a new task that's relevant to fallback coordination
+                // so register it with the fallback coordinator
+                let fallback_handler = fallback_coordinator_clone.register();
 
-                            Ok(ShutdownMessage::UpstreamShutdown(tx)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received upstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    inbound_tx.close();
-                                    break;
-                                }
-                                drop(tx);
-                            }
-                            Ok(ShutdownMessage::JobDeclaratorShutdown(tx)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received upstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    inbound_tx.close();
-                                    break;
-                                }
-                                drop(tx);
-                            }
-                            _ => {}
+                // get the cancellation token that signals fallback
+                let fallback_token = fallback_coordinator_clone.token();
+
+                trace!("Reader task started");
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token_clone.cancelled() => {
+                            trace!("Received shutdown signal");
+                            inbound_tx.close();
+                            break;
                         }
-                    }
-                    res = reader.read_frame() => {
-                        match res {
-                            Ok(frame) => {
-                                match frame {
-                                    Frame::HandShake(frame) => {
-                                        error!(?frame, "Received handshake frame");
-                                        drop(frame);
-                                        break;
-                                    },
-                                    Frame::Sv2(sv2_frame) => {
-                                        trace!("Received inbound frame");
-                                        if let Err(e) = inbound_tx.send(sv2_frame).await {
-                                            inbound_tx.close();
-                                            error!(error=?e, "Failed to forward inbound frame");
+                        _ = fallback_token.cancelled() => {
+                            trace!("Received fallback signal");
+                            inbound_tx.close();
+                            break;
+                        }
+                        res = reader.read_frame() => {
+                            match res {
+                                Ok(frame) => {
+                                    match frame {
+                                        Frame::HandShake(frame) => {
+                                            error!(?frame, "Received handshake frame");
+                                            drop(frame);
                                             break;
-                                        }
-                                    },
+                                        },
+                                        Frame::Sv2(sv2_frame) => {
+                                            trace!("Received inbound frame");
+                                            if let Err(e) = inbound_tx.send(sv2_frame).await {
+                                                inbound_tx.close();
+                                                error!(error=?e, "Failed to forward inbound frame");
+                                                break;
+                                            }
+                                        },
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                error!(error=?e, "Reader error");
-                                inbound_tx.close();
-                                break;
+                                Err(e) => {
+                                    error!(error=?e, "Reader error");
+                                    inbound_tx.close();
+                                    break;
+                                }
                             }
                         }
                     }
                 }
+                inbound_tx.close();
+                outbound_rx_clone.close();
+                drop(inbound_tx);
+                drop(outbound_rx_clone);
+
+                // signal fallback coordinator that this task has completed its cleanup
+                fallback_handler.done();
+                warn!("Reader task exited.");
             }
-            inbound_tx.close();
-            outbound_rx_clone.close();
-            drop(inbound_tx);
-            drop(outbound_rx_clone);
-            warn!("Reader task exited.");
-        }.instrument(tracing::trace_span!(
-            "reader_task",
-            spawned_at = %format!("{}:{}", caller.file(), caller.line())
-        )));
+            .instrument(tracing::trace_span!(
+                "reader_task",
+                spawned_at = %format!("{}:{}", caller.file(), caller.line())
+            )),
+        );
     }
 
     {
-        let mut shutdown_rx = notify_shutdown.subscribe();
-        let status_type: StatusType = StatusType::from(&status_sender);
+        let fallback_coordinator_clone = fallback_coordinator.clone();
+        task_manager.spawn(
+            async move {
+                // we just spawned a new task that's relevant to fallback coordination
+                // so register it with the fallback coordinator
+                let fallback_handler = fallback_coordinator_clone.register();
 
-        task_manager.spawn(async move {
-            trace!("Writer task started");
-            loop {
-                tokio::select! {
-                    message = shutdown_rx.recv() => {
-                        match message {
-                            Ok(ShutdownMessage::ShutdownAll) => {
-                                trace!("Received global shutdown");
-                                outbound_rx.close();
-                                break;
-                            }
-                            Ok(ShutdownMessage::DownstreamShutdown(down_id))  if matches!(status_type, StatusType::Downstream(id) if id == down_id) => {
-                                trace!(down_id, "Received downstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    outbound_rx.close();
-                                    break;
-                                }
-                            }
-                            Ok(ShutdownMessage::JobDeclaratorShutdownFallback(_)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received job declarator shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    outbound_rx.close();
-                                    break;
-                                }
-                            }
-                            Ok(ShutdownMessage::UpstreamShutdownFallback(_)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received upstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    outbound_rx.close();
-                                    break;
-                                }
-                            }
-                            Ok(ShutdownMessage::UpstreamShutdown(tx)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received upstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    outbound_rx.close();
-                                    break;
-                                }
-                                drop(tx);
-                            }
-                            Ok(ShutdownMessage::JobDeclaratorShutdown(tx)) if !matches!(status_type, StatusType::TemplateReceiver) => {
-                                trace!("Received upstream shutdown");
-                                if status_type != StatusType::TemplateReceiver {
-                                    outbound_rx.close();
-                                    break;
-                                }
-                                drop(tx);
-                            }
-                            _ => {}
+                // get the cancellation token that signals fallback
+                let fallback_token = fallback_coordinator_clone.token();
+
+                trace!("Writer task started");
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => {
+                            trace!("Received shutdown signal");
+                            inbound_tx_clone.close();
+                            break;
                         }
-                    }
-                    res = outbound_rx.recv() => {
-                        match res {
-                            Ok(frame) => {
-                                trace!("Sending outbound frame");
-                                if let Err(e) = writer.write_frame(frame.into()).await {
-                                    error!(error=?e, "Writer error");
+                        _ = fallback_token.cancelled() => {
+                            trace!("Received fallback signal");
+                            inbound_tx_clone.close();
+                            break;
+                        }
+                        res = outbound_rx.recv() => {
+                            match res {
+                                Ok(frame) => {
+                                    trace!("Sending outbound frame");
+                                    if let Err(e) = writer.write_frame(frame.into()).await {
+                                        error!(error=?e, "Writer error");
+                                        outbound_rx.close();
+                                        break;
+                                    }
+                                }
+                                Err(_) => {
                                     outbound_rx.close();
+                                    warn!("Outbound channel closed");
                                     break;
                                 }
-                            }
-                            Err(_) => {
-                                outbound_rx.close();
-                                warn!("Outbound channel closed");
-                                break;
                             }
                         }
                     }
                 }
+                outbound_rx.close();
+                inbound_tx_clone.close();
+                drop(outbound_rx);
+                drop(inbound_tx_clone);
+
+                // signal fallback coordinator that this task has completed its cleanup
+                fallback_handler.done();
+                warn!("Writer task exited.");
             }
-            outbound_rx.close();
-            inbound_tx_clone.close();
-            drop(outbound_rx);
-            drop(inbound_tx_clone);
-            warn!("Writer task exited.");
-        }.instrument(tracing::trace_span!(
-            "writer_task",
-            spawned_at = %format!("{}:{}", caller.file(), caller.line())
-        )));
+            .instrument(tracing::trace_span!(
+                "writer_task",
+                spawned_at = %format!("{}:{}", caller.file(), caller.line())
+            )),
+        );
     }
 }

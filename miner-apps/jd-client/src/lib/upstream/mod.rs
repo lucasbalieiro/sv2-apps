@@ -12,8 +12,10 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use async_channel::{unbounded, Receiver, Sender};
+use bitcoin_core_sv2::CancellationToken;
 use stratum_apps::{
     custom_mutex::Mutex,
+    fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
@@ -27,17 +29,14 @@ use stratum_apps::{
         types::{Message, Sv2Frame},
     },
 };
-use tokio::{
-    net::TcpStream,
-    sync::{broadcast, mpsc},
-};
+use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     error::{self, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
     status::{handle_error, Status, StatusSender},
-    utils::{get_setup_connection_message, ShutdownMessage},
+    utils::get_setup_connection_message,
 };
 
 mod message_handler;
@@ -83,9 +82,9 @@ impl Upstream {
         upstreams: &(SocketAddr, SocketAddr, Secp256k1PublicKey, bool),
         channel_manager_sender: Sender<Sv2Frame>,
         channel_manager_receiver: Receiver<Sv2Frame>,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         task_manager: Arc<TaskManager>,
-        status_sender: Sender<Status>,
         required_extensions: Vec<u16>,
     ) -> JDCResult<Self, error::Upstream> {
         let (addr, _, pubkey, _) = upstreams;
@@ -105,7 +104,6 @@ impl Upstream {
                 .map_err(JDCError::fallback)?
                 .into_split();
 
-        let status_sender = StatusSender::Upstream(status_sender);
         let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
         let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
 
@@ -115,8 +113,8 @@ impl Upstream {
             noise_stream_writer,
             outbound_rx,
             inbound_tx,
-            notify_shutdown,
-            status_sender,
+            cancellation_token.clone(),
+            fallback_coordinator.clone(),
         );
 
         debug!("Noise setup done  in upstream connection");
@@ -241,17 +239,17 @@ impl Upstream {
     /// - React to shutdown signals
     ///
     /// This function spawns an async task and returns immediately.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         mut self,
         min_version: u16,
         max_version: u16,
-        notify_shutdown: broadcast::Sender<ShutdownMessage>,
-        shutdown_complete_tx: mpsc::Sender<()>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
         status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
         let status_sender = StatusSender::Upstream(status_sender);
-        let mut shutdown_rx = notify_shutdown.subscribe();
 
         if let Err(e) = self.setup_connection(min_version, max_version).await {
             error!(error = ?e, "Upstream: connection setup failed.");
@@ -259,40 +257,24 @@ impl Upstream {
         }
 
         task_manager.spawn(async move {
+            // we just spawned a new task that's relevant to fallback coordination
+            // so register it with the fallback coordinator
+            let fallback_handler = fallback_coordinator.register();
+
+            // get the cancellation token that signals fallback
+            let fallback_token = fallback_coordinator.token();
+
             let mut self_clone_1 = self.clone();
             let mut self_clone_2 = self.clone();
             loop {
                 tokio::select! {
-                    message = shutdown_rx.recv() => {
-                        match message {
-                            Ok(ShutdownMessage::ShutdownAll) => {
-                                info!("Upstream: received shutdown signal.");
-                                break;
-                            }
-                            Ok(ShutdownMessage::JobDeclaratorShutdownFallback(_)) => {
-                                info!("Upstream: Received Job declarator shutdown.");
-                                break;
-                            }
-                            Ok(ShutdownMessage::UpstreamShutdownFallback(_)) => {
-                                info!("Upstream: Received Upstream shutdown.");
-                                break;
-                            }
-                            Ok(ShutdownMessage::UpstreamShutdown(tx)) => {
-                                info!("Upstream shutdown requested");
-                                drop(tx);
-                                break;
-                            }
-                            Ok(ShutdownMessage::JobDeclaratorShutdown(tx)) => {
-                                info!("Upstream shutdown requested");
-                                drop(tx);
-                                break;
-                            }
-                            Err(_) => {
-                                warn!("Upstream: shutdown channel closed unexpectedly.");
-                                break;
-                            }
-                            _ => {}
-                        }
+                    _ = cancellation_token.cancelled() => {
+                        info!("Upstream: received shutdown signal");
+                        break;
+                    }
+                    _ = fallback_token.cancelled() => {
+                        info!("Upstream: fallback triggered");
+                        break;
                     }
                     res = self_clone_1.handle_pool_message_frame() => {
                         if let Err(e) = res {
@@ -313,8 +295,10 @@ impl Upstream {
 
                 }
             }
-            drop(shutdown_complete_tx);
             warn!("Upstream: unified message loop exited.");
+
+            // signal fallback coordinator that this task has completed its cleanup
+            fallback_handler.done();
         });
     }
 
