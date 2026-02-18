@@ -11,7 +11,7 @@ use stratum_core::{
 use tokio_util::sync::CancellationToken;
 
 impl BitcoinCoreSv2TDP {
-    pub async fn handle_coinbase_output_constraints(
+    pub(crate) async fn handle_coinbase_output_constraints(
         &mut self,
         coinbase_output_constraints: CoinbaseOutputConstraints,
     ) -> Result<(), BitcoinCoreSv2TDPError> {
@@ -61,7 +61,7 @@ impl BitcoinCoreSv2TDP {
         Ok(())
     }
 
-    pub async fn handle_request_transaction_data(
+    pub(crate) async fn handle_request_transaction_data(
         &self,
         request_transaction_data: RequestTransactionData,
     ) -> Result<(), BitcoinCoreSv2TDPError> {
@@ -167,7 +167,7 @@ impl BitcoinCoreSv2TDP {
         Ok(())
     }
 
-    pub async fn handle_submit_solution(
+    pub(crate) async fn handle_submit_solution(
         &self,
         submit_solution: SubmitSolution<'static>,
     ) -> Result<(), BitcoinCoreSv2TDPError> {
