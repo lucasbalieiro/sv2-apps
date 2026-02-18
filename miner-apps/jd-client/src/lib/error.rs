@@ -208,6 +208,8 @@ pub enum JDCErrorKind {
     DeclaredJobHasBadCoinbaseOutputs,
     /// Extranonce size is too large
     ExtranonceSizeTooLarge,
+    /// Extranonce size is too small
+    ExtranonceSizeTooSmall,
     /// Could not create group channel
     FailedToCreateGroupChannel(GroupChannelError),
     ///Channel Errors
@@ -327,6 +329,9 @@ impl fmt::Display for JDCErrorKind {
             }
             ExtranonceSizeTooLarge => {
                 write!(f, "Extranonce size too large")
+            }
+            ExtranonceSizeTooSmall => {
+                write!(f, "Extranonce size too small")
             }
             FailedToCreateGroupChannel(ref e) => {
                 write!(f, "Failed to create group channel: {e:?}")

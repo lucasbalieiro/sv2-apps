@@ -77,6 +77,13 @@ pub const JDC_SEARCH_SPACE_BYTES: usize = 4;
 // These are only used for solo-mining, very similar to pool
 const CLIENT_SEARCH_SPACE_BYTES: usize = 16;
 pub const FULL_EXTRANONCE_SIZE: usize = JDC_SEARCH_SPACE_BYTES + CLIENT_SEARCH_SPACE_BYTES;
+// some extra bytes guaranteed for standard channels
+// allows for 65,536 standard channels on worst case
+// where worst-case means: OpenExtendedMiningChannel.Success.extranonce_size ==
+// OpenExtendedMiningChannel.min_extranonce_size
+const STANDARD_CHANNEL_ALLOCATION_BYTES: usize = 2;
+// for OpenExtendedMiningChannel.min_extranonce_size
+const MIN_EXTRANONCE_SIZE: usize = JDC_SEARCH_SPACE_BYTES + STANDARD_CHANNEL_ALLOCATION_BYTES;
 
 /// A `DeclaredJob` encapsulates all the relevant data associated with a single
 /// job declaration, including its template, optional messages, coinbase output,
@@ -798,8 +805,7 @@ impl ChannelManager {
                                     .try_into()
                                     .map_err(JDCError::shutdown)?;
                                 upstream_message.request_id = 1;
-                                upstream_message.min_extranonce_size +=
-                                    JDC_SEARCH_SPACE_BYTES as u16;
+                                upstream_message.min_extranonce_size += MIN_EXTRANONCE_SIZE as u16;
                                 let upstream_message =
                                     Mining::OpenExtendedMiningChannel(upstream_message)
                                         .into_static();
@@ -859,7 +865,7 @@ impl ChannelManager {
                                     request_id: 1,
                                     nominal_hash_rate: downstream_channel_request.nominal_hash_rate,
                                     max_target: downstream_channel_request.max_target,
-                                    min_extranonce_size: JDC_SEARCH_SPACE_BYTES as u16,
+                                    min_extranonce_size: MIN_EXTRANONCE_SIZE as u16,
                                 };
 
                                 let message =
