@@ -455,8 +455,6 @@ async fn jdc_group_extended_channels() {
 
 // This test launches a JDC and leverages a MockDownstream to test the correct functionalities of
 // grouping standard channels.
-// temporarily disabled: see https://github.com/stratum-mining/sv2-apps/issues/152
-#[ignore]
 #[tokio::test]
 async fn jdc_group_standard_channels() {
     start_tracing();
@@ -466,7 +464,7 @@ async fn jdc_group_standard_channels() {
     let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
 
-    let (_jdc, jdc_addr) = start_jdc(
+    let (jdc, jdc_addr) = start_jdc(
         &[(pool_addr, jds_addr)],
         sv2_tp_config(tp_addr),
         vec![],
@@ -513,15 +511,15 @@ async fn jdc_group_standard_channels() {
             )
             .await;
 
-        let open_standard_mining_channel_success_msg = sniffer.next_message_from_upstream();
-        let (channel_id, group_channel_id) = match open_standard_mining_channel_success_msg {
-            Some((_, AnyMessage::Mining(Mining::OpenStandardMiningChannelSuccess(msg)))) => {
-                (msg.channel_id, msg.group_channel_id)
-            }
-            msg => panic!(
-                "Expected OpenStandardMiningChannelSuccess message, found: {:?}",
-                msg
-            ),
+        // loop until we get the OpenStandardMiningChannelSuccess message
+        // if we get any other message (e.g.: NewExtendedMiningJob), just continue the loop
+        let (channel_id, group_channel_id) = loop {
+            match sniffer.next_message_from_upstream() {
+                Some((_, AnyMessage::Mining(Mining::OpenStandardMiningChannelSuccess(msg)))) => {
+                    break (msg.channel_id, msg.group_channel_id);
+                }
+                _ => continue,
+            };
         };
 
         assert_ne!(
@@ -638,6 +636,8 @@ async fn jdc_group_standard_channels() {
             .await,
         "There should be no extra SetNewPrevHash messages"
     );
+    drop(jdc);
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 }
 
 // This test launches a JDC and leverages a MockDownstream to test the correct functionalities of
