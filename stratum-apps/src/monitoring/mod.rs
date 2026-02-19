@@ -17,8 +17,8 @@ pub mod snapshot_cache;
 pub mod sv1;
 
 pub use client::{
-    ClientInfo, ClientMetadata, ClientsMonitoring, ClientsSummary, ExtendedChannelInfo,
-    StandardChannelInfo,
+    ExtendedChannelInfo, StandardChannelInfo, Sv2ClientInfo, Sv2ClientMetadata,
+    Sv2ClientsMonitoring, Sv2ClientsSummary,
 };
 pub use http_server::MonitoringServer;
 pub use server::{
@@ -31,9 +31,22 @@ pub use sv1::{Sv1ClientInfo, Sv1ClientsMonitoring, Sv1ClientsSummary};
 use utoipa::ToSchema;
 
 /// Global statistics from `/api/v1/global` endpoint
+///
+/// Fields are `Option` to distinguish "not monitored" (`None`) from "monitored but empty" (`Some`
+/// with zeros).
+///
+/// Typical configurations:
+/// - **Pool/JDC**: `server` and `sv2_clients` are `Some`, `sv1_clients` is `None`
+/// - **tProxy**: `server` and `sv1_clients` are `Some`, `sv2_clients` is `None`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToSchema)]
 pub struct GlobalInfo {
-    pub server: ServerSummary,
-    pub clients: ClientsSummary,
+    /// Server (upstream) summary - `None` if server monitoring is not enabled
+    pub server: Option<ServerSummary>,
+    /// Sv2 clients (downstream) summary - `None` if Sv2 client monitoring is not enabled (e.g.,
+    /// tProxy)
+    pub sv2_clients: Option<Sv2ClientsSummary>,
+    /// Sv1 clients summary - `None` if Sv1 monitoring is not enabled (e.g., Pool/JDC)
+    pub sv1_clients: Option<Sv1ClientsSummary>,
+    /// Uptime in seconds since the application started
     pub uptime_secs: u64,
 }
