@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     channel_manager::{
         downstream_message_handler::RouteMessageTo, ChannelManager, DeclaredJob,
-        JDC_SEARCH_SPACE_BYTES,
+        JDC_SEARCH_SPACE_BYTES, MIN_EXTRANONCE_SIZE, STANDARD_CHANNEL_ALLOCATION_BYTES,
     },
     error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
@@ -94,6 +94,14 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         let outputs = deserialize_outputs(coinbase_outputs)
             .map_err(|_| JDCError::shutdown(JDCErrorKind::DeclaredJobHasBadCoinbaseOutputs))?;
+
+        if (msg.extranonce_size as usize) < MIN_EXTRANONCE_SIZE {
+            warn!(
+                "Pool granted extranonce_size={} but JDC requires at least {} (JDC_SEARCH_SPACE_BYTES={} + STANDARD_CHANNEL_ALLOCATION_BYTES={}), preparing fallback.",
+                msg.extranonce_size, MIN_EXTRANONCE_SIZE, JDC_SEARCH_SPACE_BYTES, STANDARD_CHANNEL_ALLOCATION_BYTES
+            );
+            return Err(JDCError::fallback(JDCErrorKind::ExtranonceSizeTooSmall));
+        }
 
         let (channel_state, template, custom_job, close_channel) =
             self.channel_manager_data.super_safe_lock(|data| {
@@ -369,6 +377,15 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                         let range_0 = 0..new_prefix_len;
                         let range_1 = new_prefix_len..new_prefix_len + JDC_SEARCH_SPACE_BYTES;
                         let range_2 = new_prefix_len + JDC_SEARCH_SPACE_BYTES..full_extranonce_size;
+
+                        if range_2.is_empty() {
+                            warn!(
+                                "SetExtranoncePrefix leaves no space for standard channel allocation \
+                                 (new_prefix_len={}, rollable_extranonce_size={}, JDC_SEARCH_SPACE_BYTES={})",
+                                new_prefix_len, rollable_extranonce_size, JDC_SEARCH_SPACE_BYTES
+                            );
+                            return Err(JDCError::fallback(JDCErrorKind::ExtranonceSizeTooSmall));
+                        }
 
                         debug!(
                             new_prefix_len,
