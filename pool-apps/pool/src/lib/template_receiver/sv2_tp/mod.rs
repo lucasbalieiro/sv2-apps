@@ -4,12 +4,10 @@ use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::CancellationToken;
 use stratum_apps::{
     key_utils::Secp256k1PublicKey,
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::{self, connect},
     stratum_core::{
-        codec_sv2::HandshakeRole,
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
-        noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, TemplateDistribution},
     },
     task_manager::TaskManager,
@@ -63,18 +61,6 @@ impl Sv2Tp {
         for attempt in 1..=MAX_RETRIES {
             info!(attempt, MAX_RETRIES, "Connecting to template provider");
 
-            let initiator = match public_key {
-                Some(pub_key) => {
-                    debug!(attempt, "Using public key for initiator handshake");
-                    Initiator::from_raw_k(pub_key.into_bytes())
-                }
-                None => {
-                    debug!(attempt, "Using anonymous initiator (no public key)");
-                    Initiator::without_pk()
-                }
-            }
-            .map_err(PoolError::shutdown)?;
-
             match TcpStream::connect(tp_address.as_str()).await {
                 Ok(stream) => {
                     info!(
@@ -82,12 +68,7 @@ impl Sv2Tp {
                         "TCP connection established, starting Noise handshake"
                     );
 
-                    match NoiseTcpStream::<Message>::new(
-                        stream,
-                        HandshakeRole::Initiator(initiator),
-                    )
-                    .await
-                    {
+                    match connect(stream, public_key).await {
                         Ok(noise_stream) => {
                             info!(attempt, "Noise handshake completed successfully");
 
@@ -119,6 +100,9 @@ impl Sv2Tp {
                             return Ok(Sv2Tp {
                                 sv2_tp_channel: template_receiver_channel,
                             });
+                        }
+                        Err(network_helpers::Error::InvalidKey) => {
+                            return Err(PoolError::shutdown(PoolErrorKind::InvalidKey))
                         }
                         Err(e) => {
                             error!(attempt, error = ?e, "Noise handshake failed");

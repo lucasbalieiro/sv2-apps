@@ -14,7 +14,7 @@ use stratum_apps::{
     custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::accept,
     stratum_core::{
         bitcoin::{consensus, Amount, Target, TxOut},
         channels_sv2::{
@@ -43,7 +43,6 @@ use stratum_apps::{
             ExtendedExtranonce, OpenExtendedMiningChannel, SetCustomMiningJob, SetTarget,
             UpdateChannel,
         },
-        noise_sv2::Responder,
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
     },
@@ -51,8 +50,8 @@ use stratum_apps::{
     utils::{
         protocol_message_type::{protocol_message_type, MessageType},
         types::{
-            ChannelId, DownstreamId, Message, RequestId, SharesBatchSize, SharesPerMinute,
-            Sv2Frame, TemplateId, UpstreamJobId, VardiffKey,
+            ChannelId, DownstreamId, RequestId, SharesBatchSize, SharesPerMinute, Sv2Frame,
+            TemplateId, UpstreamJobId, VardiffKey,
         },
     },
 };
@@ -477,20 +476,11 @@ impl ChannelManager {
                         match res {
                             Ok((stream, socket_address)) => {
                                 info!(%socket_address, "New downstream connection");
-                                let responder = match Responder::from_authority_kp(
-                                    &authority_public_key.into_bytes(),
-                                    &authority_secret_key.into_bytes(),
-                                    std::time::Duration::from_secs(cert_validity_sec),
-                                ) {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        error!(error = ?e, "Failed to create responder");
-                                        continue;
-                                    }
-                                };
-                                let noise_stream = match NoiseTcpStream::<Message>::new(
+                                let noise_stream = match accept(
                                     stream,
-                                    stratum_apps::stratum_core::codec_sv2::HandshakeRole::Responder(responder),
+                                    authority_public_key,
+                                    authority_secret_key,
+                                    cert_validity_sec
                                 )
                                 .await
                                 {

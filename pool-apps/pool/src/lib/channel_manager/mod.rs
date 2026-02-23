@@ -15,7 +15,7 @@ use stratum_apps::{
     config_helpers::CoinbaseRewardScript,
     custom_mutex::Mutex,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::accept,
     stratum_core::{
         bitcoin::{Amount, TxOut},
         channels_sv2::{
@@ -27,17 +27,15 @@ use stratum_apps::{
             },
             Vardiff, VardiffState,
         },
-        codec_sv2::HandshakeRole,
         handlers_sv2::{
             HandleMiningMessagesFromClientAsync, HandleTemplateDistributionMessagesFromServerAsync,
         },
         mining_sv2::{ExtendedExtranonce, SetTarget},
-        noise_sv2::Responder,
         parsers_sv2::{Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash},
     },
     task_manager::TaskManager,
-    utils::types::{ChannelId, DownstreamId, Message, SharesPerMinute, VardiffKey},
+    utils::types::{ChannelId, DownstreamId, SharesPerMinute, VardiffKey},
 };
 use tokio::{net::TcpListener, select, sync::broadcast};
 use tracing::{debug, error, info, warn};
@@ -271,7 +269,6 @@ impl ChannelManager {
         let task_manager_clone = task_manager.clone();
         let cancellation_token_clone = cancellation_token.clone();
         task_manager.spawn(async move {
-
             loop {
                 select! {
                     _ = cancellation_token_clone.cancelled() => {
@@ -282,24 +279,8 @@ impl ChannelManager {
                         match res {
                             Ok((stream, socket_address)) => {
                                 info!(%socket_address, "New downstream connection");
-                                let responder = match Responder::from_authority_kp(
-                                    &authority_public_key.into_bytes(),
-                                    &authority_secret_key.into_bytes(),
-                                    std::time::Duration::from_secs(cert_validity_sec),
-                                ) {
+                                let noise_stream = match accept(stream, authority_public_key, authority_secret_key, cert_validity_sec).await {
                                     Ok(r) => r,
-                                    Err(e) => {
-                                        error!(error = ?e, "Failed to create responder");
-                                        continue;
-                                    }
-                                };
-                                let noise_stream = match NoiseTcpStream::<Message>::new(
-                                    stream,
-                                    HandshakeRole::Responder(responder),
-                                )
-                                .await
-                                {
-                                    Ok(ns) => ns,
                                     Err(e) => {
                                         error!(error = ?e, "Noise handshake failed");
                                         continue;

@@ -1,15 +1,17 @@
 use crate::utils::{create_downstream, create_upstream, message_from_frame, wait_for_client};
 use async_channel::Sender;
 use std::{convert::TryInto, net::SocketAddr};
-use stratum_apps::stratum_core::{
-    codec_sv2::StandardEitherFrame,
-    common_messages_sv2::{
-        Protocol, SetupConnection, SetupConnectionError, SetupConnectionSuccess,
-        MESSAGE_TYPE_SETUP_CONNECTION,
+use stratum_apps::{
+    stratum_core::{
+        codec_sv2::StandardEitherFrame,
+        common_messages_sv2::{
+            Protocol, SetupConnection, SetupConnectionError, SetupConnectionSuccess,
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        },
+        parsers_sv2::{AnyMessage, CommonMessages, IsSv2Message},
     },
-    parsers_sv2::{AnyMessage, CommonMessages, IsSv2Message},
+    utils::types::Sv2Frame,
 };
-use stratum_apps::utils::types::Sv2Frame;
 use tokio::net::TcpStream;
 use tracing::info;
 

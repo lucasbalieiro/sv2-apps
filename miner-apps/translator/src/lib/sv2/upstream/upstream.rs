@@ -9,14 +9,12 @@ use async_channel::{unbounded, Receiver, Sender};
 use std::{net::SocketAddr, sync::Arc};
 use stratum_apps::{
     fallback_coordinator::FallbackCoordinator,
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::{self, connect},
     stratum_core::{
         binary_sv2::Seq064K,
-        codec_sv2::HandshakeRole,
         common_messages_sv2::{Protocol, SetupConnection},
         extensions_sv2::RequestExtensions,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
-        noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, Mining},
     },
     task_manager::TaskManager,
@@ -96,9 +94,7 @@ impl Upstream {
             Ok(socket) => {
                 info!("Connected to upstream at {}", upstream.addr);
 
-                let initiator = Initiator::from_raw_k(upstream.authority_pubkey.into_bytes())
-                    .map_err(TproxyError::fallback)?;
-                match NoiseTcpStream::new(socket, HandshakeRole::Initiator(initiator)).await {
+                match connect(socket, Some(upstream.authority_pubkey)).await {
                     Ok(stream) => {
                         let (reader, writer) = stream.into_split();
 
@@ -131,6 +127,9 @@ impl Upstream {
                             required_extensions: required_extensions.clone(),
                             address: upstream.addr,
                         });
+                    }
+                    Err(network_helpers::Error::InvalidKey) => {
+                        return Err(TproxyError::fallback(TproxyErrorKind::InvalidKey));
                     }
                     Err(e) => {
                         error!(
