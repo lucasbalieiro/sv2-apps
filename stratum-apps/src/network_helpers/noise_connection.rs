@@ -4,7 +4,7 @@ use crate::network_helpers::{
     Error,
 };
 use async_channel::{unbounded, Receiver, Sender};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use stratum_core::{
     binary_sv2::{Deserialize, GetSize, Serialize},
     codec_sv2::{HandshakeRole, StandardEitherFrame},
@@ -34,6 +34,7 @@ impl Connection {
     pub async fn new<Message>(
         stream: TcpStream,
         role: HandshakeRole,
+        timeout: Duration,
     ) -> Result<
         (
             Receiver<StandardEitherFrame<Message>>,
@@ -54,7 +55,7 @@ impl Connection {
             receiver_outgoing,
         });
 
-        let (read_half, write_half) = NoiseTcpStream::<Message>::new(stream, role)
+        let (read_half, write_half) = NoiseTcpStream::<Message>::new(stream, role, timeout)
             .await?
             .into_split();
 
