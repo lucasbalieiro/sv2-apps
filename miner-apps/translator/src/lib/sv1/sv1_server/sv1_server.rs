@@ -27,7 +27,10 @@ use stratum_apps::{
     stratum_core::{
         binary_sv2::Str0255,
         bitcoin::Target,
-        channels_sv2::{target::hash_rate_to_target, Vardiff, VardiffState},
+        channels_sv2::{
+            target::{hash_rate_from_target, hash_rate_to_target},
+            Vardiff, VardiffState,
+        },
         extensions_sv2::UserIdentity,
         mining_sv2::{CloseChannel, SetNewPrevHash, SetTarget},
         parsers_sv2::{Mining, Tlv, TlvField},
@@ -821,6 +824,10 @@ impl Sv1Server {
     /// This method forwards difficulty changes from upstream directly to downstream miners
     /// without any variable difficulty logic. It respects the aggregated/non-aggregated
     /// channel configuration.
+    ///
+    /// When vardiff is disabled, the upstream (Pool or JDC) controls difficulty via SetTarget
+    /// messages. We derive the hashrate from the received target so that monitoring can report
+    /// meaningful SV1 downstream hashrate values.
     async fn handle_set_target_without_vardiff(
         &self,
         set_target: SetTarget<'_>,
@@ -832,16 +839,41 @@ impl Sv1Server {
             set_target.channel_id, new_target
         );
 
+        // Derive hashrate from the upstream target so monitoring can report it
+        let derived_hashrate = match hash_rate_from_target(
+            set_target.maximum_target.clone().into_static(),
+            self.shares_per_minute as f64,
+        ) {
+            Ok(hr) => {
+                debug!(
+                    "Derived hashrate from SetTarget: {} H/s (channel_id={})",
+                    hr, set_target.channel_id
+                );
+                Some(hr)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to derive hashrate from SetTarget target: {:?} (channel_id={})",
+                    e, set_target.channel_id
+                );
+                None
+            }
+        };
+
         if is_aggregated() {
-            // Aggregated mode: send set_difficulty to ALL downstreams
+            // Aggregated mode: send set_difficulty to ALL downstreams and update hashrate
             return self
-                .send_set_difficulty_to_all_downstreams(new_target)
+                .send_set_difficulty_to_all_downstreams(new_target, derived_hashrate)
                 .await;
         }
 
         // Non-aggregated mode: send set_difficulty to specific downstream for this channel
-        self.send_set_difficulty_to_specific_downstream(set_target.channel_id, new_target)
-            .await
+        self.send_set_difficulty_to_specific_downstream(
+            set_target.channel_id,
+            new_target,
+            derived_hashrate,
+        )
+        .await
     }
 
     /// Sends set_difficulty to all downstreams (aggregated mode).
@@ -849,6 +881,7 @@ impl Sv1Server {
     async fn send_set_difficulty_to_all_downstreams(
         &self,
         target: Target,
+        derived_hashrate: Option<f64>,
     ) -> TproxyResult<(), error::Sv1Server> {
         for downstream in self.downstreams.iter() {
             let downstream_id = downstream.key();
@@ -858,6 +891,11 @@ impl Sv1Server {
 
                 d.set_upstream_target(target, *downstream_id);
                 d.set_pending_target(target, *downstream_id);
+
+                // Update pending hashrate derived from the upstream target
+                if let Some(hr) = derived_hashrate {
+                    d.set_pending_hashrate(Some(hr as f32), *downstream_id);
+                }
 
                 Some(channel_id)
             });
@@ -908,6 +946,7 @@ impl Sv1Server {
         &self,
         channel_id: ChannelId,
         target: Target,
+        derived_hashrate: Option<f64>,
     ) -> TproxyResult<(), error::Sv1Server> {
         let affected = self.downstreams.iter().find(|downstream| {
             downstream
@@ -944,6 +983,11 @@ impl Sv1Server {
         downstream.downstream_data.super_safe_lock(|d| {
             d.set_upstream_target(target, *downstream_id);
             d.set_pending_target(target, *downstream_id);
+
+            // Update pending hashrate derived from the upstream target
+            if let Some(hr) = derived_hashrate {
+                d.set_pending_hashrate(Some(hr as f32), *downstream_id);
+            }
         });
 
         let set_difficulty_msg = match build_sv1_set_difficulty_from_sv2_target(target) {
@@ -1253,7 +1297,9 @@ mod tests {
         let target: Target = hash_rate_to_target(200.0, 5.0).unwrap();
 
         // Test with empty downstreams
-        _ = server.send_set_difficulty_to_all_downstreams(target).await;
+        _ = server
+            .send_set_difficulty_to_all_downstreams(target, None)
+            .await;
 
         // Should not crash with empty downstreams
     }
@@ -1266,7 +1312,7 @@ mod tests {
 
         // Test with no downstreams
         _ = server
-            .send_set_difficulty_to_specific_downstream(channel_id, target)
+            .send_set_difficulty_to_specific_downstream(channel_id, target, None)
             .await;
 
         // Should not crash when no downstreams are found
