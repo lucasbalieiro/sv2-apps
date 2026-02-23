@@ -35,8 +35,11 @@ pub struct PoolConfig {
     share_batch_size: SharesBatchSize,
     #[serde(default, deserialize_with = "opt_path_from_toml")]
     log_file: Option<PathBuf>,
+    #[serde(default)]
     server_id: u16,
+    #[serde(default)]
     supported_extensions: Vec<u16>,
+    #[serde(default)]
     required_extensions: Vec<u16>,
     #[serde(default)]
     monitoring_address: Option<SocketAddr>,

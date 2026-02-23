@@ -49,8 +49,10 @@ pub struct JobDeclaratorClientConfig {
     #[serde(deserialize_with = "deserialize_jdc_mode", default)]
     pub mode: ConfigJDCMode,
     /// Protocol extensions that the JDC supports (will accept if requested by downstream clients).
+    #[serde(default)]
     supported_extensions: Vec<u16>,
     /// Protocol extensions that the JDC requires (downstream clients must support these).
+    #[serde(default)]
     required_extensions: Vec<u16>,
     /// Optional monitoring server bind address
     #[serde(default)]
