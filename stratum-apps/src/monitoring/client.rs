@@ -142,7 +142,7 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────
 
-    fn make_extended(channel_id: u32, hashrate: f32) -> ExtendedChannelInfo {
+    fn create_extended_channel_info(channel_id: u32, hashrate: f32) -> ExtendedChannelInfo {
         ExtendedChannelInfo {
             channel_id,
             user_identity: format!("user-ext-{}", channel_id),
@@ -164,7 +164,7 @@ mod tests {
         }
     }
 
-    fn make_standard(channel_id: u32, hashrate: f32) -> StandardChannelInfo {
+    fn create_standard_channel_info(channel_id: u32, hashrate: f32) -> StandardChannelInfo {
         StandardChannelInfo {
             channel_id,
             user_identity: format!("user-std-{}", channel_id),
@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    fn make_client(
+    fn create_sv2_client_info(
         id: usize,
         ext: Vec<ExtendedChannelInfo>,
         std: Vec<StandardChannelInfo>,
@@ -200,35 +200,41 @@ mod tests {
 
     #[test]
     fn client_info_empty_channels() {
-        let client = make_client(1, vec![], vec![]);
+        let client = create_sv2_client_info(1, vec![], vec![]);
         assert_eq!(client.total_channels(), 0);
         assert_eq!(client.total_hashrate(), 0.0);
     }
 
     #[test]
     fn client_info_aggregates_both_channel_types() {
-        let client = make_client(
+        let client = create_sv2_client_info(
             1,
-            vec![make_extended(1, 100.0), make_extended(2, 200.0)],
-            vec![make_standard(3, 50.0)],
+            vec![
+                create_extended_channel_info(1, 100.0),
+                create_extended_channel_info(2, 200.0),
+            ],
+            vec![create_standard_channel_info(3, 50.0)],
         );
         assert_eq!(client.total_channels(), 3);
-        assert!((client.total_hashrate() - 350.0).abs() < f32::EPSILON);
+        assert_eq!(client.total_hashrate(), 350.0);
     }
 
     #[test]
     fn client_info_to_metadata() {
-        let client = make_client(
+        let client = create_sv2_client_info(
             42,
-            vec![make_extended(1, 100.0)],
-            vec![make_standard(2, 50.0), make_standard(3, 75.0)],
+            vec![create_extended_channel_info(1, 100.0)],
+            vec![
+                create_standard_channel_info(2, 50.0),
+                create_standard_channel_info(3, 75.0),
+            ],
         );
         let meta = client.to_metadata();
 
         assert_eq!(meta.client_id, 42);
         assert_eq!(meta.extended_channels_count, 1);
         assert_eq!(meta.standard_channels_count, 2);
-        assert!((meta.total_hashrate - 225.0).abs() < f32::EPSILON);
+        assert_eq!(meta.total_hashrate, 225.0);
     }
 
     // ── ClientsMonitoring trait default implementations ─────────────
@@ -243,8 +249,8 @@ mod tests {
     #[test]
     fn clients_monitoring_get_client_by_id_found() {
         let monitor = MockClients(vec![
-            make_client(1, vec![make_extended(1, 10.0)], vec![]),
-            make_client(2, vec![], vec![make_standard(1, 20.0)]),
+            create_sv2_client_info(1, vec![create_extended_channel_info(1, 10.0)], vec![]),
+            create_sv2_client_info(2, vec![], vec![create_standard_channel_info(1, 20.0)]),
         ]);
         let found = monitor.get_sv2_client_by_id(2);
         assert!(found.is_some());
@@ -253,7 +259,7 @@ mod tests {
 
     #[test]
     fn clients_monitoring_get_client_by_id_not_found() {
-        let monitor = MockClients(vec![make_client(1, vec![], vec![])]);
+        let monitor = MockClients(vec![create_sv2_client_info(1, vec![], vec![])]);
         assert!(monitor.get_sv2_client_by_id(999).is_none());
     }
 
@@ -272,14 +278,17 @@ mod tests {
     #[test]
     fn clients_monitoring_summary_aggregates_correctly() {
         let monitor = MockClients(vec![
-            make_client(
+            create_sv2_client_info(
                 1,
-                vec![make_extended(1, 100.0)],
-                vec![make_standard(2, 50.0)],
+                vec![create_extended_channel_info(1, 100.0)],
+                vec![create_standard_channel_info(2, 50.0)],
             ),
-            make_client(
+            create_sv2_client_info(
                 2,
-                vec![make_extended(3, 200.0), make_extended(4, 300.0)],
+                vec![
+                    create_extended_channel_info(3, 200.0),
+                    create_extended_channel_info(4, 300.0),
+                ],
                 vec![],
             ),
         ]);
@@ -289,6 +298,6 @@ mod tests {
         assert_eq!(summary.extended_channels, 3);
         assert_eq!(summary.standard_channels, 1);
         assert_eq!(summary.total_channels, 4);
-        assert!((summary.total_hashrate - 650.0).abs() < f32::EPSILON);
+        assert_eq!(summary.total_hashrate, 650.0);
     }
 }

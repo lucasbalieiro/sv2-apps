@@ -58,7 +58,7 @@ pub trait Sv1ClientsMonitoring: Send + Sync {
 mod tests {
     use super::*;
 
-    fn make_sv1_client(id: usize, hashrate: Option<f32>) -> Sv1ClientInfo {
+    fn create_sv1_client_info(id: usize, hashrate: Option<f32>) -> Sv1ClientInfo {
         Sv1ClientInfo {
             client_id: id,
             channel_id: Some(id as u32),
@@ -83,8 +83,8 @@ mod tests {
     #[test]
     fn sv1_get_client_by_id_found() {
         let monitor = MockSv1Clients(vec![
-            make_sv1_client(1, Some(10.0)),
-            make_sv1_client(2, Some(20.0)),
+            create_sv1_client_info(1, Some(10.0)),
+            create_sv1_client_info(2, Some(20.0)),
         ]);
         let found = monitor.get_sv1_client_by_id(2);
         assert!(found.is_some());
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn sv1_get_client_by_id_not_found() {
-        let monitor = MockSv1Clients(vec![make_sv1_client(1, Some(10.0))]);
+        let monitor = MockSv1Clients(vec![create_sv1_client_info(1, Some(10.0))]);
         assert!(monitor.get_sv1_client_by_id(999).is_none());
     }
 
@@ -108,12 +108,12 @@ mod tests {
     #[test]
     fn sv1_summary_skips_none_hashrate() {
         let monitor = MockSv1Clients(vec![
-            make_sv1_client(1, Some(100.0)),
-            make_sv1_client(2, None),
-            make_sv1_client(3, Some(50.0)),
+            create_sv1_client_info(1, Some(100.0)),
+            create_sv1_client_info(2, None),
+            create_sv1_client_info(3, Some(50.0)),
         ]);
         let summary = monitor.get_sv1_clients_summary();
         assert_eq!(summary.total_clients, 3);
-        assert!((summary.total_hashrate - 150.0).abs() < f32::EPSILON);
+        assert_eq!(summary.total_hashrate, 150.0);
     }
 }

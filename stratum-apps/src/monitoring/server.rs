@@ -101,7 +101,10 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────
 
-    fn make_server_extended(channel_id: u32, hashrate: Option<f32>) -> ServerExtendedChannelInfo {
+    fn create_server_extended_channel_info(
+        channel_id: u32,
+        hashrate: Option<f32>,
+    ) -> ServerExtendedChannelInfo {
         ServerExtendedChannelInfo {
             channel_id,
             user_identity: format!("pool-ext-{}", channel_id),
@@ -119,7 +122,10 @@ mod tests {
         }
     }
 
-    fn make_server_standard(channel_id: u32, hashrate: Option<f32>) -> ServerStandardChannelInfo {
+    fn create_server_standard_channel_info(
+        channel_id: u32,
+        hashrate: Option<f32>,
+    ) -> ServerStandardChannelInfo {
         ServerStandardChannelInfo {
             channel_id,
             user_identity: format!("pool-std-{}", channel_id),
@@ -149,30 +155,30 @@ mod tests {
     #[test]
     fn server_info_aggregates_both_channel_types() {
         let server = ServerInfo {
-            extended_channels: vec![make_server_extended(1, Some(100.0))],
+            extended_channels: vec![create_server_extended_channel_info(1, Some(100.0))],
             standard_channels: vec![
-                make_server_standard(2, Some(50.0)),
-                make_server_standard(3, Some(75.0)),
+                create_server_standard_channel_info(2, Some(50.0)),
+                create_server_standard_channel_info(3, Some(75.0)),
             ],
         };
         assert_eq!(server.total_channels(), 3);
-        assert!((server.total_hashrate() - 225.0).abs() < f32::EPSILON);
+        assert_eq!(server.total_hashrate(), 225.0);
     }
 
     #[test]
     fn server_info_hashrate_skips_none_values() {
         let server = ServerInfo {
             extended_channels: vec![
-                make_server_extended(1, Some(100.0)),
-                make_server_extended(2, None),
+                create_server_extended_channel_info(1, Some(100.0)),
+                create_server_extended_channel_info(2, None),
             ],
             standard_channels: vec![
-                make_server_standard(3, Some(50.0)),
-                make_server_standard(4, None),
+                create_server_standard_channel_info(3, Some(50.0)),
+                create_server_standard_channel_info(4, None),
             ],
         };
         assert_eq!(server.total_channels(), 4);
-        assert!((server.total_hashrate() - 150.0).abs() < f32::EPSILON);
+        assert_eq!(server.total_hashrate(), 150.0);
     }
 
     // ── ServerMonitoring trait default implementations ───────────────
@@ -202,16 +208,16 @@ mod tests {
     fn server_monitoring_summary_aggregates_correctly() {
         let monitor = MockServer(ServerInfo {
             extended_channels: vec![
-                make_server_extended(1, Some(100.0)),
-                make_server_extended(2, Some(200.0)),
+                create_server_extended_channel_info(1, Some(100.0)),
+                create_server_extended_channel_info(2, Some(200.0)),
             ],
-            standard_channels: vec![make_server_standard(3, Some(50.0))],
+            standard_channels: vec![create_server_standard_channel_info(3, Some(50.0))],
         });
         let summary = monitor.get_server_summary();
 
         assert_eq!(summary.total_channels, 3);
         assert_eq!(summary.extended_channels, 2);
         assert_eq!(summary.standard_channels, 1);
-        assert!((summary.total_hashrate - 350.0).abs() < f32::EPSILON);
+        assert_eq!(summary.total_hashrate, 350.0);
     }
 }

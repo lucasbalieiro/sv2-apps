@@ -935,7 +935,7 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────
 
-    fn make_extended_channel(
+    fn create_extended_channel_info(
         channel_id: u32,
         hashrate: f32,
     ) -> super::super::client::ExtendedChannelInfo {
@@ -960,7 +960,7 @@ mod tests {
         }
     }
 
-    fn make_standard_channel(
+    fn create_standard_channel_info(
         channel_id: u32,
         hashrate: f32,
     ) -> super::super::client::StandardChannelInfo {
@@ -983,7 +983,10 @@ mod tests {
         }
     }
 
-    fn make_server_extended(channel_id: u32, hashrate: Option<f32>) -> ServerExtendedChannelInfo {
+    fn create_server_extended_channel_info(
+        channel_id: u32,
+        hashrate: Option<f32>,
+    ) -> ServerExtendedChannelInfo {
         ServerExtendedChannelInfo {
             channel_id,
             user_identity: format!("pool-ext-{}", channel_id),
@@ -1001,7 +1004,10 @@ mod tests {
         }
     }
 
-    fn make_server_standard(channel_id: u32, hashrate: Option<f32>) -> ServerStandardChannelInfo {
+    fn create_server_standard_channel_info(
+        channel_id: u32,
+        hashrate: Option<f32>,
+    ) -> ServerStandardChannelInfo {
         ServerStandardChannelInfo {
             channel_id,
             user_identity: format!("pool-std-{}", channel_id),
@@ -1016,7 +1022,7 @@ mod tests {
         }
     }
 
-    fn make_sv1_client(id: usize, hashrate: Option<f32>) -> Sv1ClientInfo {
+    fn create_sv1_client_info(id: usize, hashrate: Option<f32>) -> Sv1ClientInfo {
         Sv1ClientInfo {
             client_id: id,
             channel_id: Some(id as u32),
@@ -1239,12 +1245,12 @@ mod tests {
     #[tokio::test]
     async fn global_endpoint_with_data() {
         let server = Arc::new(MockServer(super::super::server::ServerInfo {
-            extended_channels: vec![make_server_extended(1, Some(100.0))],
+            extended_channels: vec![create_server_extended_channel_info(1, Some(100.0))],
             standard_channels: vec![],
         }));
         let clients = Arc::new(MockClients(vec![Sv2ClientInfo {
             client_id: 1,
-            extended_channels: vec![make_extended_channel(1, 50.0)],
+            extended_channels: vec![create_extended_channel_info(1, 50.0)],
             standard_channels: vec![],
         }]));
 
@@ -1272,8 +1278,8 @@ mod tests {
     #[tokio::test]
     async fn server_endpoint_with_data() {
         let server = Arc::new(MockServer(super::super::server::ServerInfo {
-            extended_channels: vec![make_server_extended(1, Some(100.0))],
-            standard_channels: vec![make_server_standard(2, Some(50.0))],
+            extended_channels: vec![create_server_extended_channel_info(1, Some(100.0))],
+            standard_channels: vec![create_server_standard_channel_info(2, Some(50.0))],
         }));
 
         let app = build_test_app(
@@ -1294,9 +1300,9 @@ mod tests {
     async fn server_channels_endpoint_with_pagination() {
         let server = Arc::new(MockServer(super::super::server::ServerInfo {
             extended_channels: vec![
-                make_server_extended(1, Some(100.0)),
-                make_server_extended(2, Some(200.0)),
-                make_server_extended(3, Some(300.0)),
+                create_server_extended_channel_info(1, Some(100.0)),
+                create_server_extended_channel_info(2, Some(200.0)),
+                create_server_extended_channel_info(3, Some(300.0)),
             ],
             standard_channels: vec![],
         }));
@@ -1332,13 +1338,13 @@ mod tests {
         let clients = Arc::new(MockClients(vec![
             Sv2ClientInfo {
                 client_id: 1,
-                extended_channels: vec![make_extended_channel(1, 100.0)],
+                extended_channels: vec![create_extended_channel_info(1, 100.0)],
                 standard_channels: vec![],
             },
             Sv2ClientInfo {
                 client_id: 2,
                 extended_channels: vec![],
-                standard_channels: vec![make_standard_channel(1, 50.0)],
+                standard_channels: vec![create_standard_channel_info(1, 50.0)],
             },
         ]));
 
@@ -1361,8 +1367,8 @@ mod tests {
     async fn client_by_id_found() {
         let clients = Arc::new(MockClients(vec![Sv2ClientInfo {
             client_id: 42,
-            extended_channels: vec![make_extended_channel(1, 100.0)],
-            standard_channels: vec![make_standard_channel(2, 50.0)],
+            extended_channels: vec![create_extended_channel_info(1, 100.0)],
+            standard_channels: vec![create_standard_channel_info(2, 50.0)],
         }]));
 
         let app = build_test_app(
@@ -1408,11 +1414,11 @@ mod tests {
         let clients = Arc::new(MockClients(vec![Sv2ClientInfo {
             client_id: 1,
             extended_channels: vec![
-                make_extended_channel(10, 100.0),
-                make_extended_channel(11, 200.0),
-                make_extended_channel(12, 300.0),
+                create_extended_channel_info(10, 100.0),
+                create_extended_channel_info(11, 200.0),
+                create_extended_channel_info(12, 300.0),
             ],
-            standard_channels: vec![make_standard_channel(20, 50.0)],
+            standard_channels: vec![create_standard_channel_info(20, 50.0)],
         }]));
 
         let app = build_test_app(
@@ -1446,8 +1452,8 @@ mod tests {
     #[tokio::test]
     async fn sv1_clients_with_data() {
         let sv1 = Arc::new(MockSv1Clients(vec![
-            make_sv1_client(1, Some(100.0)),
-            make_sv1_client(2, Some(200.0)),
+            create_sv1_client_info(1, Some(100.0)),
+            create_sv1_client_info(2, Some(200.0)),
         ]));
 
         let app = build_test_app(
@@ -1469,7 +1475,7 @@ mod tests {
 
     #[tokio::test]
     async fn sv1_client_by_id_found() {
-        let sv1 = Arc::new(MockSv1Clients(vec![make_sv1_client(7, Some(500.0))]));
+        let sv1 = Arc::new(MockSv1Clients(vec![create_sv1_client_info(7, Some(500.0))]));
 
         let app = build_test_app(
             None,
@@ -1489,7 +1495,7 @@ mod tests {
 
     #[tokio::test]
     async fn sv1_client_by_id_not_found() {
-        let sv1 = Arc::new(MockSv1Clients(vec![make_sv1_client(1, Some(100.0))]));
+        let sv1 = Arc::new(MockSv1Clients(vec![create_sv1_client_info(1, Some(100.0))]));
 
         let app = build_test_app(
             None,
@@ -1506,12 +1512,12 @@ mod tests {
     #[tokio::test]
     async fn metrics_endpoint_returns_prometheus_format() {
         let server = Arc::new(MockServer(super::super::server::ServerInfo {
-            extended_channels: vec![make_server_extended(1, Some(100.0))],
+            extended_channels: vec![create_server_extended_channel_info(1, Some(100.0))],
             standard_channels: vec![],
         }));
         let clients = Arc::new(MockClients(vec![Sv2ClientInfo {
             client_id: 1,
-            extended_channels: vec![make_extended_channel(1, 50.0)],
+            extended_channels: vec![create_extended_channel_info(1, 50.0)],
             standard_channels: vec![],
         }]));
 
