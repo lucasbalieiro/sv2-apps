@@ -514,6 +514,8 @@ impl ChannelManager {
                                         Some(group_channel) => group_channel,
                                         None => {
                                             error!("Failed to bootstrap group channel - disconnecting downstream {downstream_id}");
+                                            let error = JDCError::<error::ChannelManager>::shutdown(JDCErrorKind::CouldNotInitiateSystem);
+                                            handle_error(&StatusSender::ChannelManager(status_sender_inner), error).await;
                                             return;
                                         }
                                     };
