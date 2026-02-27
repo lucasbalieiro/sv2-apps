@@ -280,7 +280,7 @@ impl std::fmt::Display for PoolErrorKind {
             CouldNotInitiateSystem => write!(f, "Could not initiate subsystem"),
             Configuration(e) => write!(f, "Configuration error: {e}"),
             JobNotFound => write!(f, "Job not found"),
-            InvalidKey => write!(f, "Invalid key")
+            InvalidKey => write!(f, "Invalid key used during noise handshake")
         }
     }
 }

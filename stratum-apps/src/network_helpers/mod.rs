@@ -87,15 +87,18 @@ impl<T> From<SendError<T>> for Error {
     }
 }
 
-/// Default handshake timeout used by [`connect`] and [`accept`].
+/// Default handshake timeout used by [`connect_with_noise`] and [`accept_noise_connection`].
 /// Use [`noise_stream::NoiseTcpStream::new`] directly to override.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const NOISE_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Connects to an upstream server as a Noise initiator, returning the split read/write halves.
 ///
+/// The handshake timeout is opinionated and fixed at [`NOISE_HANDSHAKE_TIMEOUT`]. If you need a
+/// custom timeout, use [`noise_stream::NoiseTcpStream::new`] directly.
+///
 /// Pass `Some(key)` to verify the server's authority public key, or `None` to skip
 /// verification (encrypted but unauthenticated — use only on trusted networks).
-pub async fn connect<Message>(
+pub async fn connect_with_noise<Message>(
     stream: TcpStream,
     authority_pub_key: Option<Secp256k1PublicKey>,
 ) -> Result<NoiseTcpStream<Message>, Error>
@@ -109,7 +112,7 @@ where
     let stream = noise_stream::NoiseTcpStream::new(
         stream,
         HandshakeRole::Initiator(initiator),
-        HANDSHAKE_TIMEOUT,
+        NOISE_HANDSHAKE_TIMEOUT,
     )
     .await?;
     Ok(stream)
@@ -117,9 +120,12 @@ where
 
 /// Accepts a downstream connection as a Noise responder, returning the split read/write halves.
 ///
+/// The handshake timeout is opinionated and fixed at [`NOISE_HANDSHAKE_TIMEOUT`]. If you need a
+/// custom timeout, use [`noise_stream::NoiseTcpStream::new`] directly.
+///
 /// `cert_validity` controls how long the generated Noise certificate is valid,
 /// which is independent of the handshake timeout.
-pub async fn accept<Message>(
+pub async fn accept_noise_connection<Message>(
     stream: TcpStream,
     pub_key: Secp256k1PublicKey,
     prv_key: Secp256k1SecretKey,
@@ -137,7 +143,7 @@ where
     let stream = noise_stream::NoiseTcpStream::new(
         stream,
         HandshakeRole::Responder(responder),
-        HANDSHAKE_TIMEOUT,
+        NOISE_HANDSHAKE_TIMEOUT,
     )
     .await?;
     Ok(stream)

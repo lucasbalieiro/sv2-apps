@@ -395,7 +395,7 @@ impl fmt::Display for JDCErrorKind {
             CloseChannel => write!(f, "channel closed by upstream"),
             CustomJobError => write!(f, "Custom job not acknowledged"),
             CouldNotInitiateSystem => write!(f, "Could not initiate subsystem"),
-            InvalidKey => write!(f, "Invalid key"),
+            InvalidKey => write!(f, "Invalid key used during noise handshake"),
         }
     }
 }

@@ -11,7 +11,6 @@ use std::{
     convert::TryInto,
     net::{SocketAddr, TcpListener},
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use stratum_apps::{
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
@@ -86,10 +85,8 @@ pub async fn create_downstream(
         Responder::from_authority_kp(&pub_key, &prv_key, std::time::Duration::from_secs(10000))
             .unwrap();
 
-    let timeout = Duration::from_secs(30);
     if let Ok((receiver_from_client, sender_to_client)) =
-        Connection::new::<AnyMessage<'static>>(stream, HandshakeRole::Responder(responder), timeout)
-            .await
+        Connection::new::<AnyMessage<'static>>(stream, HandshakeRole::Responder(responder)).await
     {
         Some((receiver_from_client, sender_to_client))
     } else {
@@ -101,10 +98,8 @@ pub async fn create_upstream(
     stream: tokio::net::TcpStream,
 ) -> Option<(Receiver<MessageFrame>, Sender<MessageFrame>)> {
     let initiator = Initiator::without_pk().expect("This fn call can not fail");
-    let timeout = Duration::from_secs(30);
     if let Ok((receiver_from_server, sender_to_server)) =
-        Connection::new::<AnyMessage<'static>>(stream, HandshakeRole::Initiator(initiator), timeout)
-            .await
+        Connection::new::<AnyMessage<'static>>(stream, HandshakeRole::Initiator(initiator)).await
     {
         Some((receiver_from_server, sender_to_server))
     } else {

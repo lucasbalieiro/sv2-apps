@@ -6,7 +6,7 @@ use stratum_apps::{
     custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
-    network_helpers::connect,
+    network_helpers::connect_with_noise,
     stratum_core::{
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
@@ -84,10 +84,15 @@ impl JobDeclarator {
         .map_err(JDCError::fallback)?;
         info!("Connection established with JD Server at {addr} in mode: {mode:?}");
 
-        let (noise_stream_reader, noise_stream_writer) = connect(stream, Some(*pubkey))
-            .await
-            .map_err(JDCError::fallback)?
-            .into_split();
+        let (noise_stream_reader, noise_stream_writer) = tokio::select! {
+            result = connect_with_noise(stream, Some(*pubkey)) => {
+                result.map_err(JDCError::fallback)?.into_split()
+            }
+            _ = cancellation_token.cancelled() => {
+                info!("Shutdown received during handshake, dropping connection");
+                return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
+            }
+        };
 
         let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
         let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();

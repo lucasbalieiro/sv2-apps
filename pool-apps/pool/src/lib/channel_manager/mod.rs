@@ -15,7 +15,7 @@ use stratum_apps::{
     config_helpers::CoinbaseRewardScript,
     custom_mutex::Mutex,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
-    network_helpers::accept,
+    network_helpers::accept_noise_connection,
     stratum_core::{
         bitcoin::{Amount, TxOut},
         channels_sv2::{
@@ -291,10 +291,18 @@ impl ChannelManager {
                                 let task_manager_inner = task_manager_clone.clone();
 
                                 task_manager_clone.spawn(async move {
-                                    let noise_stream = match accept(stream, authority_public_key, authority_secret_key, cert_validity_sec).await {
-                                        Ok(r) => r,
-                                        Err(e) => {
-                                            error!(error = ?e, "Noise handshake failed");
+                                    let noise_stream = tokio::select! {
+                                        result = accept_noise_connection(stream, authority_public_key, authority_secret_key, cert_validity_sec) => {
+                                            match result {
+                                                Ok(r) => r,
+                                                Err(e) => {
+                                                    error!(error = ?e, "Noise handshake failed");
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        _ = cancellation_token_inner.cancelled() => {
+                                            info!("Shutdown received during handshake, dropping connection");
                                             return;
                                         }
                                     };

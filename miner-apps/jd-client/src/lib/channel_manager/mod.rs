@@ -14,7 +14,7 @@ use stratum_apps::{
     custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
-    network_helpers::accept,
+    network_helpers::accept_noise_connection,
     stratum_core::{
         bitcoin::{consensus, Amount, Target, TxOut},
         channels_sv2::{
@@ -491,15 +491,18 @@ impl ChannelManager {
                                 let required_extensions_inner = required_extensions.clone();
 
                                 task_manager_clone.spawn(async move {
-                                    let noise_stream = match accept(
-                                        stream,
-                                        authority_public_key,
-                                        authority_secret_key,
-                                        cert_validity_sec,
-                                    ).await {
-                                        Ok(ns) => ns,
-                                        Err(e) => {
-                                            error!(error = ?e, "Noise handshake failed");
+                                    let noise_stream = tokio::select! {
+                                    result = accept_noise_connection(stream, authority_public_key, authority_secret_key, cert_validity_sec) => {
+                                            match result {
+                                                Ok(r) => r,
+                                                Err(e) => {
+                                                    error!(error = ?e, "Noise handshake failed");
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        _ = cancellation_token_inner.cancelled() => {
+                                            info!("Shutdown received during handshake, dropping connection");
                                             return;
                                         }
                                     };
