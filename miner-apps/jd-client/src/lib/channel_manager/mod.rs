@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BinaryHeap, HashMap, VecDeque},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU32, AtomicUsize, Ordering},
@@ -41,7 +41,7 @@ use stratum_apps::{
         },
         mining_sv2::{
             ExtendedExtranonce, OpenExtendedMiningChannel, SetCustomMiningJob, SetTarget,
-            SubmitSharesExtended, UpdateChannel,
+            UpdateChannel,
         },
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
@@ -64,7 +64,10 @@ use crate::{
     downstream::Downstream,
     error::{self, JDCError, JDCErrorKind, JDCResult},
     status::{handle_error, Status, StatusSender},
-    utils::{AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, UpstreamState},
+    utils::{
+        AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, SharesOrderedByDiff,
+        UpstreamState,
+    },
 };
 pub mod downstream_message_handler;
 mod extensions_message_handler;
@@ -165,7 +168,7 @@ pub struct ChannelManagerData {
     /// Extensions that the JDC requires
     required_extensions: Vec<u16>,
     /// Cached shares waiting for `SetCustomMiningJob.Success` to be propagated upstream
-    cached_shares: HashMap<TemplateId, Vec<SubmitSharesExtended<'static>>>,
+    cached_shares: HashMap<TemplateId, BinaryHeap<SharesOrderedByDiff>>,
 }
 
 impl ChannelManagerData {
@@ -181,6 +184,7 @@ impl ChannelManagerData {
         self.template_id_to_upstream_job_id.clear();
         self.downstream_channel_id_and_job_id_to_template_id.clear();
         self.pending_downstream_requests.clear();
+        self.cached_shares.clear();
 
         self.downstream_id_factory = AtomicUsize::new(0);
         self.request_id_factory = AtomicU32::new(0);

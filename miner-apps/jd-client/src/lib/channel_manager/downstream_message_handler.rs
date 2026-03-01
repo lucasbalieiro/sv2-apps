@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use stratum_apps::{
     stratum_core::{
         binary_sv2::Str0255,
-        bitcoin::{Amount, Target},
+        bitcoin::{hashes::sha256d, Amount, Target},
         channels_sv2::{
             client,
             outputs::deserialize_outputs,
@@ -30,10 +30,12 @@ use stratum_apps::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    channel_manager::{ChannelManager, ChannelManagerChannel, FULL_EXTRANONCE_SIZE},
+    channel_manager::{
+        ChannelManager, ChannelManagerChannel, SharesOrderedByDiff, FULL_EXTRANONCE_SIZE,
+    },
     error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
-    utils::create_close_channel_msg,
+    utils::{add_share_to_cache, create_close_channel_msg},
 };
 
 /// `RouteMessageTo` is an abstraction used to route protocol messages
@@ -972,6 +974,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 vardiff.increment_shares_since_last_update();
                 let res = standard_channel.validate_share(msg.clone());
                 let mut is_downstream_share_valid = false;
+                let mut downstream_share_hash: Option<sha256d::Hash> = None;
                 match res {
                     Ok(ShareValidationResult::Valid(share_hash)) => {
                         let share_accounting = standard_channel.get_share_accounting();
@@ -990,10 +993,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 channel_id, msg.sequence_number, share_hash
                             );
                         }
+                        downstream_share_hash = Some(share_hash);
                         is_downstream_share_valid = true;
                     }
                     Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
                         info!("SubmitSharesStandard on downstream channel: 💰 Block Found!!! 💰{share_hash}");
+                        downstream_share_hash = Some(share_hash);
                         is_downstream_share_valid = true;
                         if let Some(template_id) = template_id {
                             info!("SubmitSharesStandard: Propagating solution to the Template Provider.");
@@ -1067,10 +1072,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                     match upstream_job_id {
                         // The presence of an `upstream_job_id` indicates that the upstream
-                        // has acknowledged the template and is ready to accept shares for it.
+                        // has acknowledged the custom job (`SetCustomMiningJob.Success` was received by JDC) 
+                        // and is ready to accept shares for it.
                         //
                         // We use optimistic mining: downstream miners are instructed to start
-                        // mining before the upstream acknowledgement arrives. Once the template
+                        // mining before the upstream acknowledgement arrives. Once the custom job
                         // is acknowledged, shares can be safely submitted.
                         //
                         // See the Job Declaration Modes section for details:
@@ -1119,14 +1125,19 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 channel_id, downstream_job_id
                             );
                             if let Some(template_id) = template_id {
-                                // If entry is not present the creates a new
-                                // vector with `or_default` and pushes the
-                                // element.
-                                channel_manager_data
+                                let hash = downstream_share_hash
+                                    .expect("downstream_share_hash must be set when downstream share is valid");
+                                let entry = SharesOrderedByDiff::new(upstream_message.into_static(), hash);
+                                let heap = channel_manager_data
                                     .cached_shares
                                     .entry(template_id)
-                                    .or_default()
-                                    .push(upstream_message);
+                                    .or_default();
+                                add_share_to_cache(heap, entry);
+                            } else {
+                                warn!(
+                                        "SubmitSharesStandard: could not cache share, no template_id found for key (downstream_id={}, channel_id={}, downstream_job_id={})",
+                                        downstream_id, channel_id, downstream_job_id
+                                    );
                             }
                         }
                     }
@@ -1162,7 +1173,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     ) -> Result<(), Self::Error> {
         info!("Received SubmitSharesExtended");
         let channel_id = msg.channel_id;
-        let job_id = msg.job_id;
+        let downstream_job_id = msg.job_id;
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
         let negotiated_extensions = self.get_negotiated_extensions_with_client(client_id);
@@ -1214,6 +1225,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 vardiff.increment_shares_since_last_update();
                 let res = extended_channel.validate_share(msg.clone());
                 let mut is_downstream_share_valid = false;
+                let mut downstream_share_hash: Option<sha256d::Hash> = None;
                 match res {
                     Ok(ShareValidationResult::Valid(share_hash)) => {
                         let share_accounting = extended_channel.get_share_accounting();
@@ -1232,10 +1244,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 channel_id, msg.sequence_number, share_hash
                             );
                         }
+                        downstream_share_hash = Some(share_hash);
                         is_downstream_share_valid = true;
                     }
                     Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
                         info!("SubmitSharesExtended on downstream channel: 💰 Block Found!!! 💰{share_hash}");
+                        downstream_share_hash = Some(share_hash);
                         if let Some(template_id) = template_id {
                             info!("SubmitSharesExtended: Propagating solution to the Template Provider.");
                             let solution = SubmitSolution {
@@ -1280,7 +1294,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 }
 
                 if let Some(upstream_channel) = channel_manager_data.upstream_channel.as_mut() {
-                    let key = (downstream_id, channel_id, job_id).into();
+                    let key = (downstream_id, channel_id, downstream_job_id).into();
 
                     let template_id = channel_manager_data
                         .downstream_channel_id_and_job_id_to_template_id
@@ -1308,10 +1322,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                     match upstream_job_id {
                     // The presence of an `upstream_job_id` indicates that the upstream
-                    // has acknowledged the template and is ready to accept shares for it.
+                    // has acknowledged the custom job (`SetCustomMiningJob.Success` was received by JDC) 
+                    // and is ready to accept shares for it.
                     //
                     // We use optimistic mining: downstream miners are instructed to start
-                    // mining before the upstream acknowledgement arrives. Once the template
+                    // mining before the upstream acknowledgement arrives. Once the custom job
                     // is acknowledged, shares can be safely submitted.
                     //
                     // See the Job Declaration Modes section for details:
@@ -1343,7 +1358,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                         prev_hash: prev_hash.prev_hash.clone(),
                                     };
                                     messages.push(JobDeclaration::PushSolution(push_solution.clone()).into());
-                                    // TODO here we should add the user_identity TLV to the SubmitSharesExtended frame
+                                    // TODO here we should add the user_identity TLV to the SubmitSharesExtended
+                                    // frame in case the extension n.2 has been negotiated between JDC and Pool.
                                     messages.push(
                                         Mining::SubmitSharesExtended(upstream_message.into_static()).into(),
                                     );
@@ -1366,14 +1382,19 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             debug!("Upstream job_id not yet known (still waiting for the SetCustomMiningJob.Success message), caching share");
 
                             if let Some(template_id) = template_id {
-                                // If entry is not present the creates a new
-                                // vector with `or_default` and pushes the
-                                // element.
-                                channel_manager_data
+                                let hash = downstream_share_hash
+                                    .expect("downstream_share_hash must be set when downstream share is valid");
+                                let entry = SharesOrderedByDiff::new(upstream_message.into_static(), hash);
+                                let heap = channel_manager_data
                                     .cached_shares
                                     .entry(template_id)
-                                    .or_default()
-                                    .push(upstream_message.into_static());
+                                    .or_default();
+                                add_share_to_cache(heap, entry);
+                            } else {
+                                warn!(
+                                  "SubmitSharesExtended: could not cache share, no template_id found for key (downstream_id={}, channel_id={}, downstream_job_id={})",
+                                  downstream_id, channel_id, downstream_job_id
+                              );
                             }
 
                         }

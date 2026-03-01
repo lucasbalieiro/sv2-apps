@@ -612,9 +612,9 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
             );
 
             for mut share in cached_shares {
-                share.job_id = job_id;
+                share.share.job_id = job_id;
 
-                validate_cached_share(share, data, &mut shares_to_submit_upstream);
+                validate_cached_share(share.share, data, &mut shares_to_submit_upstream);
             }
         });
 

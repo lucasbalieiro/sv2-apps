@@ -12,6 +12,7 @@
 //!   job declarator components.
 //! - An atomic wrapper for managing the upstream connection state safely across threads.
 use std::{
+    collections::BinaryHeap,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -22,6 +23,7 @@ use std::{
 use stratum_apps::{
     stratum_core::{
         binary_sv2::Str0255,
+        bitcoin::hashes::sha256d,
         channels_sv2::client,
         common_messages_sv2::{Protocol, SetupConnection},
         job_declaration_sv2::PushSolution,
@@ -296,7 +298,7 @@ impl From<(DownstreamId, ChannelId, JobId)> for DownstreamChannelJobId {
     }
 }
 
-/// This method validates cached share when a `SetCustomMiningJob.Success`
+/// This method validates cached shares when a `SetCustomMiningJob.Success`
 /// arrives. This method also appends response to route queue to be sent
 /// to upstream.
 pub fn validate_cached_share(
@@ -356,10 +358,93 @@ pub fn validate_cached_share(
                     "difficulty-too-low"
                 }
                 client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                client::share_accounting::ShareValidationError::BadExtranonceSize => {
+                    "bad-extranonce-size"
+                }
                 _ => unreachable!(),
             };
 
-            debug!("❌ Cached SubmitSharesExtended: SubmitSharesError, not forwarding it to upstream | channel_id={}, sequence_numbere={}, error={code}", upstream_message.channel_id, upstream_message.sequence_number);
+            debug!("❌ Cached SubmitSharesExtended: SubmitSharesError, not forwarding it to upstream | channel_id={}, sequence_number={}, error={code}", upstream_message.channel_id, upstream_message.sequence_number);
+        }
+    }
+}
+
+/// Maximum number of shares cached per template
+const CACHED_SHARES_CAPACITY: usize = 100;
+
+/// A wrapper around [`SubmitSharesExtended`] that adds ordering by share difficulty.
+#[derive(Clone, Debug)]
+pub struct SharesOrderedByDiff {
+    pub share: SubmitSharesExtended<'static>,
+    share_hash: sha256d::Hash,
+}
+
+impl SharesOrderedByDiff {
+    pub fn new(share: SubmitSharesExtended<'static>, share_hash: sha256d::Hash) -> Self {
+        Self { share, share_hash }
+    }
+}
+
+impl Ord for SharesOrderedByDiff {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.share_hash.cmp(&other.share_hash)
+    }
+}
+
+impl PartialOrd for SharesOrderedByDiff {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for SharesOrderedByDiff {
+    fn eq(&self, other: &Self) -> bool {
+        self.share_hash == other.share_hash
+    }
+}
+
+impl Eq for SharesOrderedByDiff {}
+
+/// Inserts a share into the cache, evicting the worst entry when
+/// [`CACHED_SHARES_CAPACITY`] is reached.
+///
+/// The cache retains the best shares (lowest `share_hash`), since lower
+/// hashes indicate higher-quality shares that are more likely to remain
+/// valid if relayed later.
+///
+/// Internally implemented with a `BinaryHeap`, where the root represents
+/// the current worst share (highest hash) and is replaced when a better
+/// share arrives.
+pub(crate) fn add_share_to_cache(
+    heap: &mut BinaryHeap<SharesOrderedByDiff>,
+    entry: SharesOrderedByDiff,
+) {
+    let len = heap.len();
+
+    if len < CACHED_SHARES_CAPACITY {
+        debug!(
+            "Caching share (hash={:?}); cache size {}/{}",
+            entry.share_hash,
+            len + 1,
+            CACHED_SHARES_CAPACITY
+        );
+        heap.push(entry);
+        return;
+    }
+
+    if let Some(worst) = heap.peek() {
+        if entry.share_hash < worst.share_hash {
+            debug!(
+                "Replacing worst cached share: old_hash={:?}, new_hash={:?}",
+                worst.share_hash, entry.share_hash
+            );
+            heap.pop();
+            heap.push(entry);
+        } else {
+            debug!(
+                "Discarding share (hash={:?}); worse than cached worst={:?}",
+                entry.share_hash, worst.share_hash
+            );
         }
     }
 }

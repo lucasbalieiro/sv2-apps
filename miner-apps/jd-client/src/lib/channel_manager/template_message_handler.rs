@@ -393,6 +393,9 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             .channel_manager_data
             .super_safe_lock(|data| data.coinbase_outputs.clone());
 
+        self.channel_manager_data
+            .super_safe_lock(|data| data.cached_shares.clear());
+
         let outputs = deserialize_outputs(coinbase_outputs)
             .map_err(|_| JDCError::shutdown(JDCErrorKind::ChannelManagerHasBadCoinbaseOutputs))?;
 
