@@ -1920,6 +1920,7 @@ dependencies = [
  "config",
  "hex",
  "hotpath",
+ "jd_server_sv2",
  "serde",
  "stratum-apps",
  "tokio",

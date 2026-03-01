@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use jd_server_sv2::config::{JDSConfig, JDSPartialConfig};
 use stratum_apps::{
     config_helpers::{opt_path_from_toml, CoinbaseRewardScript},
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
@@ -20,6 +21,8 @@ use stratum_apps::{
     tp_type::TemplateProviderType,
     utils::types::{SharesBatchSize, SharesPerMinute},
 };
+
+use crate::error::PoolErrorKind;
 
 /// Configuration for the Pool, including connection, authority, and coinbase settings.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -44,6 +47,8 @@ pub struct PoolConfig {
     #[serde(default)]
     monitoring_address: Option<SocketAddr>,
     #[serde(default)]
+    jds: Option<JDSPartialConfig>,
+    #[serde(default)]
     monitoring_cache_refresh_secs: Option<u64>,
 }
 
@@ -66,6 +71,7 @@ impl PoolConfig {
         required_extensions: Vec<u16>,
         monitoring_address: Option<SocketAddr>,
         monitoring_cache_refresh_secs: Option<u64>,
+        jds: Option<JDSPartialConfig>,
     ) -> Self {
         Self {
             listen_address: pool_connection.listen_address,
@@ -83,6 +89,7 @@ impl PoolConfig {
             required_extensions,
             monitoring_address,
             monitoring_cache_refresh_secs,
+            jds,
         }
     }
 
@@ -177,6 +184,27 @@ impl PoolConfig {
     /// Returns the monitoring cache refresh interval in seconds.
     pub fn monitoring_cache_refresh_secs(&self) -> Option<u64> {
         self.monitoring_cache_refresh_secs
+    }
+
+    /// Builds a complete [`JDSConfig`] from the partial `[jds]` TOML section
+    /// plus shared fields inherited from Pool config.
+    ///
+    /// Returns `Ok(None)` when the `[jds]` TOML section is absent.
+    #[allow(clippy::result_large_err)]
+    pub fn build_jds_config(&self) -> Result<Option<JDSConfig>, PoolErrorKind> {
+        let Some(jds_partial) = self.jds.clone() else {
+            return Ok(None);
+        };
+
+        let jds_config = JDSConfig::from_partial(
+            jds_partial,
+            self.authority_public_key,
+            self.authority_secret_key,
+            self.cert_validity_sec,
+            self.coinbase_reward_script.clone(),
+        );
+
+        Ok(Some(jds_config))
     }
 }
 

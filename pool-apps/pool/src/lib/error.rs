@@ -193,6 +193,8 @@ pub enum PoolErrorKind {
     InvalidKey,
     ///Error when parsing the PayoutMode for Solo Mining Mode
     PayoutModeError(String),
+    /// JDS error (from embedded Job Declaration Server)
+    Jds(jd_server_sv2::error::JDSErrorKind),
 }
 
 impl std::fmt::Display for PoolErrorKind {
@@ -283,7 +285,8 @@ impl std::fmt::Display for PoolErrorKind {
             Configuration(e) => write!(f, "Configuration error: {e}"),
             JobNotFound => write!(f, "Job not found"),
             InvalidKey => write!(f, "Invalid key used during noise handshake"),
-            PayoutModeError(e) => write!(f, "Unable to parse the PayoutMode: {e}")
+            PayoutModeError(e) => write!(f, "Unable to parse the PayoutMode: {e}"),
+            Jds(e) => write!(f, "JDS error: {e:?}"),
         }
     }
 }
@@ -398,6 +401,12 @@ impl From<ParserError> for PoolErrorKind {
 impl From<ShareValidationError> for PoolErrorKind {
     fn from(value: ShareValidationError) -> Self {
         PoolErrorKind::ChannelSv2(ChannelSv2Error::ShareValidationError(value))
+    }
+}
+
+impl From<jd_server_sv2::error::JDSErrorKind> for PoolErrorKind {
+    fn from(value: jd_server_sv2::error::JDSErrorKind) -> Self {
+        PoolErrorKind::Jds(value)
     }
 }
 
