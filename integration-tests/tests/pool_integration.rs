@@ -241,10 +241,9 @@ async fn pool_does_not_send_jobs_to_jdc() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr, jds_addr) = start_pool_with_jds(tp.bitcoin_core(), vec![], vec![]).await;
     let (pool_jdc_sniffer, pool_jdc_sniffer_addr) =
         start_sniffer("pool_jdc", pool_addr, false, vec![], None);
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (jdc, jdc_addr) = start_jdc(
         &[(pool_jdc_sniffer_addr, jds_addr)],
         sv2_tp_config(tp_addr),
