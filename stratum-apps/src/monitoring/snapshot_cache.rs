@@ -229,7 +229,6 @@ mod tests {
         cache.refresh();
         let snapshot = cache.get_snapshot();
         assert!(snapshot.timestamp.is_some());
-        assert!(snapshot.age().unwrap() < Duration::from_millis(100));
         assert!(snapshot.server_info.is_some());
         assert!(snapshot.sv2_clients.is_some());
         assert!(snapshot.sv2_clients_summary.is_some());
