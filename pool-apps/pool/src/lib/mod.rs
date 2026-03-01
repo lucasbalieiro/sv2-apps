@@ -16,6 +16,14 @@ use stratum_apps::{
 use tokio::sync::{broadcast, Notify};
 use tracing::{debug, error, info, warn};
 
+use jd_server_sv2::{
+    config::JobValidationEngineConfig,
+    job_declarator::{
+        job_validation::{bitcoin_core_ipc::BitcoinCoreIPCEngine, JobValidationEngine},
+        JobDeclarator,
+    },
+};
+
 use crate::{
     channel_manager::ChannelManager,
     config::PoolConfig,
@@ -82,6 +90,65 @@ impl PoolSv2 {
 
         debug!("Channels initialized.");
 
+        // Build and launch embedded JDS if configured.
+        let jds_config = self.config.build_jds_config()?;
+        let mut job_declarator_for_shutdown = None;
+
+        let job_declarator = if let Some(jds_config) = jds_config {
+            info!("JDS config present — initializing embedded Job Declaration Server");
+
+            let jd = match jds_config.engine_config() {
+                JobValidationEngineConfig::BitcoinCoreIPC { network, data_dir } => {
+                    let ipc_engine: Arc<dyn JobValidationEngine> = Arc::new(
+                        BitcoinCoreIPCEngine::new(
+                            network.clone(),
+                            data_dir.clone(),
+                            cancellation_token.clone(),
+                        )
+                        .await?,
+                    );
+                    JobDeclarator::new(
+                        ipc_engine,
+                        cancellation_token.clone(),
+                        jds_config.coinbase_reward_script().clone(),
+                        task_manager.clone(),
+                    )
+                    .await
+                    .map_err(PoolErrorKind::Jds)?
+                } // todo e.g.: RPC, ZMQ
+            };
+
+            jd.clone()
+                .start(cancellation_token.clone(), task_manager.clone())
+                .await
+                .map_err(|e| PoolErrorKind::Jds(e.into()))?;
+
+            jd.clone()
+                .start_downstream_server(
+                    *jds_config.authority_public_key(),
+                    *jds_config.authority_secret_key(),
+                    jds_config.cert_validity_sec(),
+                    *jds_config.listen_address(),
+                    task_manager.clone(),
+                    cancellation_token.clone(),
+                    jds_config.supported_extensions().to_vec(),
+                    jds_config.required_extensions().to_vec(),
+                )
+                .await
+                .map_err(|e| PoolErrorKind::Jds(e.into()))?;
+
+            info!(
+                "JDS listening for JDP connections on {}",
+                jds_config.listen_address()
+            );
+
+            job_declarator_for_shutdown = Some(jd.clone());
+            Some(jd)
+        } else {
+            info!("No [jds] config — Job Declaration not available");
+            None
+        };
+
         let channel_manager = ChannelManager::new(
             self.config.clone(),
             channel_manager_to_tp_sender.clone(),
@@ -89,6 +156,7 @@ impl PoolSv2 {
             channel_manager_to_downstream_sender.clone(),
             downstream_to_channel_manager_receiver,
             encoded_outputs.clone(),
+            job_declarator,
         )
         .await?;
 
@@ -252,6 +320,11 @@ impl PoolSv2 {
                     }
                 }
             }
+        }
+
+        if let Some(ref jd) = job_declarator_for_shutdown {
+            info!("Shutting down embedded JDS...");
+            jd.shutdown();
         }
 
         if let Some(bitcoin_core_sv2_join_handle) = bitcoin_core_sv2_join_handle {

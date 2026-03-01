@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use jd_server_sv2::config::{JDSConfig, JDSPartialConfig, JobValidationEngineConfig};
 use stratum_apps::{
     config_helpers::{opt_path_from_toml, CoinbaseRewardScript},
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
@@ -20,6 +21,8 @@ use stratum_apps::{
     tp_type::TemplateProviderType,
     utils::types::{SharesBatchSize, SharesPerMinute},
 };
+
+use crate::error::PoolErrorKind;
 
 /// Configuration for the Pool, including connection, authority, and coinbase settings.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -45,6 +48,8 @@ pub struct PoolConfig {
     monitoring_address: Option<SocketAddr>,
     #[serde(default = "default_monitoring_cache_refresh_secs")]
     monitoring_cache_refresh_secs: u64,
+    #[serde(default)]
+    jds: Option<JDSPartialConfig>,
 }
 
 fn default_monitoring_cache_refresh_secs() -> u64 {
@@ -68,6 +73,7 @@ impl PoolConfig {
         server_id: u16,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
+        jds: Option<JDSPartialConfig>,
     ) -> Self {
         Self {
             listen_address: pool_connection.listen_address,
@@ -85,6 +91,7 @@ impl PoolConfig {
             required_extensions,
             monitoring_address: None,
             monitoring_cache_refresh_secs: 15,
+            jds,
         }
     }
 
@@ -179,6 +186,48 @@ impl PoolConfig {
     /// Returns the monitoring cache refresh interval in seconds.
     pub fn monitoring_cache_refresh_secs(&self) -> u64 {
         self.monitoring_cache_refresh_secs
+    }
+
+    /// Builds a fully resolved [`JDSConfig`] by filling in shared fields from Pool config
+    /// and deriving `engine_config` from `template_provider_type`.
+    ///
+    /// Builds a complete [`JDSConfig`] from the partial `[jds]` TOML section.
+    ///
+    /// Returns `Ok(None)` when the `[jds]` TOML section is absent.
+    /// Returns an error if `[jds]` is present but `template_provider_type` is not
+    /// `BitcoinCoreIpc` (JDS requires direct IPC access to Bitcoin Core).
+    #[allow(clippy::result_large_err)]
+    pub fn build_jds_config(&self) -> Result<Option<JDSConfig>, PoolErrorKind> {
+        let Some(jds_partial) = self.jds.clone() else {
+            return Ok(None);
+        };
+
+        let engine_config = match &self.template_provider_type {
+            TemplateProviderType::BitcoinCoreIpc {
+                network, data_dir, ..
+            } => JobValidationEngineConfig::BitcoinCoreIPC {
+                network: network.clone(),
+                data_dir: data_dir.clone(),
+            },
+            TemplateProviderType::Sv2Tp { .. } => {
+                return Err(PoolErrorKind::Configuration(
+                    "[jds] requires template_provider_type = BitcoinCoreIpc \
+                     (JDS needs direct IPC access to Bitcoin Core)"
+                        .to_string(),
+                ));
+            }
+        };
+
+        let jds_config = JDSConfig::from_partial(
+            jds_partial,
+            engine_config,
+            self.authority_public_key,
+            self.authority_secret_key,
+            self.cert_validity_sec,
+            self.coinbase_reward_script.clone(),
+        );
+
+        Ok(Some(jds_config))
     }
 }
 

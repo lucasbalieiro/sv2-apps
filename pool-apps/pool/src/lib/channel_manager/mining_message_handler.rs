@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use stratum_apps::stratum_core::{
     binary_sv2::Str0255,
-    bitcoin::{consensus::Decodable, Amount, Target, TxOut},
+    bitcoin::{Amount, Target, TxOut},
     channels_sv2::{
         server::{
             error::{ExtendedChannelError, StandardChannelError},
@@ -22,6 +22,8 @@ use stratum_apps::stratum_core::{
     template_distribution_sv2::SubmitSolution,
 };
 use tracing::{error, info};
+
+use jd_server_sv2::job_declarator::SetCustomMiningJobResponse;
 
 use crate::{
     channel_manager::{ChannelManager, RouteMessageTo, CLIENT_SEARCH_SPACE_BYTES},
@@ -1011,39 +1013,43 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
 
-        // this is a naive implementation, but ideally we should check the SetCustomMiningJob
-        // message parameters, especially:
-        // - the mining_job_token
-        // - the amount of the pool payout output
-        let custom_job_coinbase_outputs = Vec::<TxOut>::consensus_decode(
-            &mut msg.coinbase_tx_outputs.inner_as_ref().to_vec().as_slice(),
-        )
-        .map_err(PoolError::shutdown)?;
+        let Some(ref mut job_declarator) = self.job_declarator else {
+            let error = SetCustomMiningJobError {
+                request_id: msg.request_id,
+                channel_id: msg.channel_id,
+                error_code: "jd-not-supported"
+                    .to_string()
+                    .try_into()
+                    .expect("error code must be valid string"),
+            };
+            let message: RouteMessageTo =
+                (downstream_id, Mining::SetCustomMiningJobError(error)).into();
+            message.forward(&self.channel_manager_channel).await;
+            return Ok(());
+        };
 
+        let msg_static = msg.clone().into_static();
+
+        // Step 1: Validate the custom job via JDS (token + job validation).
+        let jds_response = job_declarator
+            .handle_set_custom_mining_job(msg_static.clone(), _tlv_fields)
+            .await
+            .map_err(|e| PoolError::shutdown(PoolErrorKind::Jds(e.into())))?;
+
+        if let SetCustomMiningJobResponse::Error(jds_err) = jds_response {
+            let message: RouteMessageTo = (
+                downstream_id,
+                Mining::SetCustomMiningJobError(jds_err.into_static()),
+            )
+                .into();
+            message.forward(&self.channel_manager_channel).await;
+            return Ok(());
+        }
+
+        // Step 2: JDS validated successfully — commit the job to the extended channel.
         let message: RouteMessageTo =
             self.channel_manager_data
                 .super_safe_lock(|channel_manager_data| {
-                    // check that the script_pubkey from self.coinbase_reward_script
-                    // is present in the custom job coinbase outputs
-                    let missing_script = !custom_job_coinbase_outputs.iter().any(|pool_output| {
-                        *pool_output.script_pubkey == *self.coinbase_reward_script.script_pubkey()
-                    });
-
-                    if missing_script {
-                        error!("SetCustomMiningJobError: pool-payout-script-missing");
-
-                        let error = SetCustomMiningJobError {
-                            request_id: msg.request_id,
-                            channel_id: msg.channel_id,
-                            error_code: "pool-payout-script-missing"
-                                .to_string()
-                                .try_into()
-                                .expect("error code must be valid string"),
-                        };
-
-                        return Ok((downstream_id, Mining::SetCustomMiningJobError(error)).into());
-                    }
-
                     let Some(downstream) = channel_manager_data.downstream.get_mut(&downstream_id)
                     else {
                         return Err(PoolError::disconnect(
@@ -1055,13 +1061,14 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     downstream
                         .downstream_data
                         .super_safe_lock(|downstream_data| {
-                            let Some(extended_channel) =
-                                downstream_data.extended_channels.get_mut(&msg.channel_id)
+                            let Some(extended_channel) = downstream_data
+                                .extended_channels
+                                .get_mut(&msg_static.channel_id)
                             else {
                                 error!("SetCustomMiningJobError: invalid-channel-id");
                                 let error = SetCustomMiningJobError {
-                                    request_id: msg.request_id,
-                                    channel_id: msg.channel_id,
+                                    request_id: msg_static.request_id,
+                                    channel_id: msg_static.channel_id,
                                     error_code: "invalid-channel-id"
                                         .to_string()
                                         .try_into()
@@ -1072,14 +1079,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 );
                             };
 
-                            // TOOD: Send a CustomMiningJobError and not disconnect.
                             let job_id = extended_channel
-                                .on_set_custom_mining_job(msg.clone().into_static())
+                                .on_set_custom_mining_job(msg_static.clone())
                                 .map_err(|error| PoolError::disconnect(error, downstream_id))?;
 
                             let success = SetCustomMiningJobSuccess {
-                                channel_id: msg.channel_id,
-                                request_id: msg.request_id,
+                                channel_id: msg_static.channel_id,
+                                request_id: msg_static.request_id,
                                 job_id,
                             };
                             Ok((downstream_id, Mining::SetCustomMiningJobSuccess(success)).into())
