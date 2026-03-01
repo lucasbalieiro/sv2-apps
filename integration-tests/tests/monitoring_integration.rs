@@ -129,11 +129,10 @@ async fn pool_and_tproxy_monitoring_with_sv1_miner() {
 async fn jd_aggregated_topology_monitoring() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool, pool_addr, pool_monitoring) =
-        start_pool(sv2_tp_config(tp_addr), vec![], vec![], true).await;
+    let (_pool, pool_addr, jds_addr, pool_monitoring) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], true).await;
     let (jdc_pool_sniffer, jdc_pool_sniffer_addr) =
         start_sniffer("0", pool_addr, false, vec![], None);
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (_jdc, jdc_addr, _jdc_monitoring) = start_jdc(
         &[(jdc_pool_sniffer_addr, jds_addr)],
         sv2_tp_config(tp_addr),
@@ -202,9 +201,8 @@ async fn block_found_detected_in_pool_metrics() {
 
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (_pool, pool_addr, pool_monitoring) =
-        start_pool(sv2_tp_config(tp_addr), vec![], vec![], true).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (_pool, pool_addr, jds_addr, pool_monitoring) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], true).await;
 
     let (_jdc_jds_sniffer, jdc_jds_sniffer_addr) =
         start_sniffer("0", jds_addr, false, vec![], None);

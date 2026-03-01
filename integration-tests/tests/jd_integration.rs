@@ -22,8 +22,8 @@ use stratum_apps::stratum_core::{
 async fn jds_should_not_panic_if_jdc_shutsdown() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
     let (sniffer_a, sniffer_addr_a) = start_sniffer("0", jds_addr, false, vec![], None);
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_addr, sniffer_addr_a)],
@@ -65,8 +65,8 @@ async fn jds_should_not_panic_if_jdc_shutsdown() {
 async fn jdc_tp_success_setup() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
     let (tp_jdc_sniffer, tp_jdc_sniffer_addr) = start_sniffer("0", tp_addr, false, vec![], None);
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_addr, jds_addr)],
@@ -99,10 +99,10 @@ async fn jdc_tp_success_setup() {
 #[tokio::test]
 async fn jds_receive_solution_while_processing_declared_job_test() {
     start_tracing();
-    let (tp_1, tp_addr_1) = start_template_provider(None, DifficultyLevel::Low);
+    let (tp_1, _tp_addr_1) = start_template_provider(None, DifficultyLevel::Low);
     let (tp_2, tp_addr_2) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr_1), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp_1.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp_1.bitcoin_core(), vec![], vec![], false).await;
 
     let prev_hash = U256::Owned(vec![
         184, 103, 138, 88, 153, 105, 236, 29, 123, 246, 107, 203, 1, 33, 10, 122, 188, 139, 218,
@@ -195,14 +195,14 @@ async fn jds_receive_solution_while_processing_declared_job_test() {
 #[tokio::test]
 async fn jds_wont_exit_upon_receiving_unexpected_txids_in_provide_missing_transaction_success() {
     start_tracing();
-    let (tp_1, tp_addr_1) = start_template_provider(None, DifficultyLevel::Low);
+    let (tp_1, _tp_addr_1) = start_template_provider(None, DifficultyLevel::Low);
     let (tp_2, tp_addr_2) = start_template_provider(None, DifficultyLevel::Low);
 
     assert!(tp_2.fund_wallet().is_ok());
     assert!(tp_2.create_mempool_transaction().is_ok());
 
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr_1), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp_1.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp_1.bitcoin_core(), vec![], vec![], false).await;
 
     let provide_missing_transaction_success_replace = ReplaceMessage::new(
         MessageDirection::ToUpstream,
@@ -290,8 +290,8 @@ async fn jdc_group_extended_channels() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
 
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_addr, jds_addr)],
@@ -474,8 +474,8 @@ async fn jdc_group_standard_channels() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
 
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_addr, jds_addr)],
@@ -667,8 +667,8 @@ async fn jdc_require_standard_jobs_set_does_not_group_standard_channels() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], true).await;
 
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_addr, jds_addr)],

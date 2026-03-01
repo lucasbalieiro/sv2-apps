@@ -26,7 +26,8 @@ async fn jdc_cached_shares_relayed_on_set_custom_job_success() {
     // Otherwise, a discovered block would trigger a chain tip change,
     // causing `SetCustomMiningJob.Success` to fail.
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::High);
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (_pool, _pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
 
     let mock_pool_addr = get_available_address();
     let mock_pool = MockUpstream::new(
