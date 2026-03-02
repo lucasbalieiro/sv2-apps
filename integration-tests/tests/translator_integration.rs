@@ -1832,8 +1832,20 @@ async fn pool_does_not_hang_on_no_handshake() {
     // Sleep for time just more than `NOISE_HANDSHAKE_TIMEOUT`
     tokio::time::sleep(Duration::from_secs(10)).await;
     let buf = vec![1];
-    // First write may succeed as the OS buffer absorbs it before detecting the closed connection
-    let _ = ephemeral_stream.try_write(&buf);
-    let value = ephemeral_stream.try_write(&buf);
+
+    // the OS may not immediately detect that the connection was closed after the handshake
+    // timeout. On some systems (macOS triggered this), try_write can still succeed for a short time
+    // after the remote end has closed the socket. We retry until the write fails or we hit
+    // the max retries to avoid flaky test failures.
+    let mut retries = 0;
+    let mut value;
+    loop {
+        value = ephemeral_stream.try_write(&buf);
+        if value.is_err() || retries >= 100 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        retries += 1;
+    }
     assert!(value.is_err());
 }
