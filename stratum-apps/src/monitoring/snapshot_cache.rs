@@ -62,21 +62,6 @@ pub struct MonitoringSnapshot {
     pub sv1_clients_summary: Option<Sv1ClientsSummary>,
 }
 
-impl MonitoringSnapshot {
-    /// Check if this snapshot is stale (older than the given duration)
-    pub fn is_stale(&self, max_age: Duration) -> bool {
-        match self.timestamp {
-            None => true,
-            Some(ts) => ts.elapsed() > max_age,
-        }
-    }
-
-    /// Get the age of this snapshot
-    pub fn age(&self) -> Option<Duration> {
-        self.timestamp.map(|ts| ts.elapsed())
-    }
-}
-
 /// A cache that holds monitoring snapshots and refreshes them periodically.
 pub struct SnapshotCache {
     snapshot: RwLock<MonitoringSnapshot>,
