@@ -91,6 +91,12 @@ impl<'a> From<(usize, Mining<'a>)> for RouteMessageTo<'a> {
 impl RouteMessageTo<'_> {
     /// Forwards the message to its corresponding destination channel.
     ///
+    /// The result of this method can generally be ignored. A send failure
+    /// typically indicates that one end of the channel is no longer present,
+    /// which can occur during disconnections or lifecycle transitions.
+    /// Such conditions are handled elsewhere by the system’s lifecycle
+    /// and error management logic.
+    ///
     /// The routing is handled as follows:
     /// - [`RouteMessageTo::Downstream`] → Sends the mining message to the specified downstream
     ///   client.
