@@ -29,5 +29,7 @@ hex = "0.4.3"
 hotpath = "0.9"
 
 [features]
+default = ["monitoring"]
+monitoring = ["stratum-apps/monitoring"]
 hotpath = ["hotpath/hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]

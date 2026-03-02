@@ -22,7 +22,6 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::types::{Sv2Frame, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS},
 };
-use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -41,9 +40,11 @@ use crate::{
 pub mod config;
 pub mod error;
 mod io_task;
+#[cfg(feature = "monitoring")]
 mod monitoring;
 pub mod status;
 pub mod sv1;
+#[cfg(feature = "monitoring")]
 mod sv1_monitoring;
 pub mod sv2;
 pub mod utils;
@@ -159,6 +160,7 @@ impl TranslatorSv2 {
         .await;
 
         // Start monitoring server if configured
+        #[cfg(feature = "monitoring")]
         if let Some(monitoring_addr) = self.config.monitoring_address() {
             info!(
                 "Initializing monitoring server on http://{}",
@@ -180,7 +182,7 @@ impl TranslatorSv2 {
             let cancellation_token_clone = cancellation_token.clone();
             let fallback_coordinator_token = fallback_coordinator.token();
             let shutdown_signal = async move {
-                select! {
+                tokio::select! {
                     _ = cancellation_token_clone.cancelled() => {
                         info!("Monitoring server: received shutdown signal.");
                     }
@@ -300,6 +302,7 @@ impl TranslatorSv2 {
                                 .await;
 
                                 // Recreate monitoring server with new components
+                                #[cfg(feature = "monitoring")]
                                 if let Some(monitoring_addr) = self.config.monitoring_address() {
                                     info!(
                                         "Reinitializing monitoring server on http://{}",
@@ -319,7 +322,7 @@ impl TranslatorSv2 {
                                     let cancellation_token_clone = cancellation_token.clone();
                                     let fallback_coordinator_token = fallback_coordinator.token();
                                     let shutdown_signal = async move {
-                                        select! {
+                                        tokio::select! {
                                             _ = cancellation_token_clone.cancelled() => {
                                                 info!("Monitoring server: received shutdown signal.");
                                             }

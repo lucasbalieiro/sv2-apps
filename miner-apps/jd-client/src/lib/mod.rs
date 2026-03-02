@@ -35,6 +35,7 @@ pub mod error;
 mod io_task;
 pub mod jd_mode;
 mod job_declarator;
+#[cfg(feature = "monitoring")]
 pub mod monitoring;
 mod status;
 mod template_receiver;
@@ -113,6 +114,7 @@ impl JobDeclaratorClient {
         .unwrap();
 
         // Start monitoring server if configured
+        #[cfg(feature = "monitoring")]
         if let Some(monitoring_addr) = self.config.monitoring_address() {
             info!(
                 "Initializing monitoring server on http://{}",
@@ -470,6 +472,7 @@ impl JobDeclaratorClient {
                                 };
 
                                 // Reinitialize monitoring server if configured
+                                #[cfg(feature = "monitoring")]
                                 if let Some(monitoring_addr) = self.config.monitoring_address() {
                                     info!(
                                         "Reinitializing monitoring server on http://{}",
