@@ -26,6 +26,7 @@ pub mod config;
 pub mod downstream;
 pub mod error;
 mod io_task;
+#[cfg(feature = "monitoring")]
 mod monitoring;
 pub mod status;
 pub mod template_receiver;
@@ -82,6 +83,7 @@ impl PoolSv2 {
         .await?;
 
         // Start monitoring server if configured
+        #[cfg(feature = "monitoring")]
         if let Some(monitoring_addr) = self.config.monitoring_address() {
             info!(
                 "Initializing monitoring server on http://{}",
