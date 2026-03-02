@@ -189,6 +189,8 @@ pub enum PoolErrorKind {
     Configuration(String),
     /// Job not found
     JobNotFound,
+    /// Invalid Key
+    InvalidKey,
 }
 
 impl std::fmt::Display for PoolErrorKind {
@@ -278,6 +280,7 @@ impl std::fmt::Display for PoolErrorKind {
             CouldNotInitiateSystem => write!(f, "Could not initiate subsystem"),
             Configuration(e) => write!(f, "Configuration error: {e}"),
             JobNotFound => write!(f, "Job not found"),
+            InvalidKey => write!(f, "Invalid key used during noise handshake")
         }
     }
 }

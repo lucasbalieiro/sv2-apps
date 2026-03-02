@@ -18,12 +18,11 @@ use stratum_apps::{
     custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::{self, connect_with_noise},
     stratum_core::{
-        codec_sv2::HandshakeRole,
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
-        noise_sv2::{self, Initiator},
+        noise_sv2,
         parsers_sv2::{AnyMessage, TemplateDistribution},
     },
     task_manager::TaskManager,
@@ -104,18 +103,6 @@ impl Sv2Tp {
         for attempt in 1..=MAX_RETRIES {
             info!(attempt, MAX_RETRIES, "Connecting to template provider");
 
-            let initiator = match public_key {
-                Some(pub_key) => {
-                    debug!(attempt, "Using public key for initiator handshake");
-                    Initiator::from_raw_k(pub_key.into_bytes())
-                }
-                None => {
-                    debug!(attempt, "Using anonymous initiator (no public key)");
-                    Initiator::without_pk()
-                }
-            }
-            .map_err(JDCError::shutdown)?;
-
             match TcpStream::connect(tp_address.as_str()).await {
                 Ok(stream) => {
                     info!(
@@ -123,49 +110,55 @@ impl Sv2Tp {
                         "TCP connection established, starting Noise handshake"
                     );
 
-                    match NoiseTcpStream::<Message>::new(
-                        stream,
-                        HandshakeRole::Initiator(initiator),
-                    )
-                    .await
-                    {
-                        Ok(noise_stream) => {
-                            info!(attempt, "Noise handshake completed successfully");
+                    tokio::select! {
+                        result = connect_with_noise(stream, public_key) => {
+                            match result {
+                                Ok(noise_stream) => {
+                                    info!(attempt, "Noise handshake completed successfully");
 
-                            let (noise_stream_reader, noise_stream_writer) =
-                                noise_stream.into_split();
+                                    let (noise_stream_reader, noise_stream_writer) =
+                                        noise_stream.into_split();
 
-                            let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
-                            let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
+                                    let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
+                                    let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();
 
-                            info!(attempt, "Spawning IO tasks for template receiver");
-                            spawn_io_tasks(
-                                task_manager.clone(),
-                                noise_stream_reader,
-                                noise_stream_writer,
-                                outbound_rx,
-                                inbound_tx,
-                                cancellation_token.clone(),
-                                fallback_coordinator.clone(),
-                            );
+                                    info!(attempt, "Spawning IO tasks for template receiver");
+                                    spawn_io_tasks(
+                                        task_manager.clone(),
+                                        noise_stream_reader,
+                                        noise_stream_writer,
+                                        outbound_rx,
+                                        inbound_tx,
+                                        cancellation_token.clone(),
+                                        fallback_coordinator.clone(),
+                                    );
 
-                            let template_receiver_data = Arc::new(Mutex::new(Sv2TpData));
-                            let template_receiver_channel = Sv2TpChannel {
-                                channel_manager_receiver,
-                                channel_manager_sender,
-                                tp_receiver: inbound_rx,
-                                tp_sender: outbound_tx,
-                            };
+                                    let template_receiver_data = Arc::new(Mutex::new(Sv2TpData));
+                                    let template_receiver_channel = Sv2TpChannel {
+                                        channel_manager_receiver,
+                                        channel_manager_sender,
+                                        tp_receiver: inbound_rx,
+                                        tp_sender: outbound_tx,
+                                    };
 
-                            info!(attempt, "TemplateReceiver initialized successfully");
-                            return Ok(Sv2Tp {
-                                sv2_tp_channel: template_receiver_channel,
-                                sv2_tp_data: template_receiver_data,
-                                tp_address,
-                            });
+                                    info!(attempt, "TemplateReceiver initialized successfully");
+                                    return Ok(Sv2Tp {
+                                        sv2_tp_channel: template_receiver_channel,
+                                        sv2_tp_data: template_receiver_data,
+                                        tp_address,
+                                    });
+                                }
+                                Err(network_helpers::Error::InvalidKey) => {
+                                    return Err(JDCError::shutdown(JDCErrorKind::InvalidKey));
+                                }
+                                Err(e) => {
+                                    error!(attempt, error = ?e, "Noise handshake failed");
+                                }
+                            }
                         }
-                        Err(e) => {
-                            error!(attempt, error = ?e, "Noise handshake failed");
+                         _ = cancellation_token.cancelled() => {
+                            info!("Shutdown received during handshake, dropping connection");
+                            return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
                         }
                     }
                 }

@@ -8,7 +8,7 @@ use integration_tests_sv2::{
     *,
 };
 use stratum_apps::stratum_core::mining_sv2::*;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -1796,4 +1796,44 @@ async fn aggregated_translator_handles_downstream_connecting_during_future_job()
     sv1_sniffer_2
         .wait_for_message(&["mining.submit"], MessageDirection::ToUpstream)
         .await;
+}
+
+// This test verifies that the pool server continues accepting new connection
+// requests while performing handshakes with other clients. It also checks the
+// scenario where a downstream client connects but never completes the handshake.
+//
+// The goal is to ensure such incomplete handshakes do not block the server or
+// render it unresponsive.
+//
+// For more context see:
+// https://github.com/stratum-mining/sv2-apps/issues/241
+#[tokio::test]
+async fn pool_does_not_hang_on_no_handshake() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (_pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let ephemeral_stream = TcpStream::connect(pool_addr).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let (pool_translator_sniffer, pool_translator_sniffer_addr) =
+        start_sniffer("0", pool_addr, false, vec![], None);
+    let (_tproxy, _) =
+        start_sv2_translator(&[pool_translator_sniffer_addr], false, vec![], vec![], None).await;
+
+    pool_translator_sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    pool_translator_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+    // Sleep for time just more than `NOISE_HANDSHAKE_TIMEOUT`
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let buf = vec![1];
+    // First write may succeed as the OS buffer absorbs it before detecting the closed connection
+    let _ = ephemeral_stream.try_write(&buf);
+    let value = ephemeral_stream.try_write(&buf);
+    assert!(value.is_err());
 }

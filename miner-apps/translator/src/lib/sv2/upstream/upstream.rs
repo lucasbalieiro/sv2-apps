@@ -9,14 +9,12 @@ use async_channel::{unbounded, Receiver, Sender};
 use std::{net::SocketAddr, sync::Arc};
 use stratum_apps::{
     fallback_coordinator::FallbackCoordinator,
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::{self, connect_with_noise},
     stratum_core::{
         binary_sv2::Seq064K,
-        codec_sv2::HandshakeRole,
         common_messages_sv2::{Protocol, SetupConnection},
         extensions_sv2::RequestExtensions,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
-        noise_sv2::Initiator,
         parsers_sv2::{AnyMessage, Mining},
     },
     task_manager::TaskManager,
@@ -96,47 +94,56 @@ impl Upstream {
             Ok(socket) => {
                 info!("Connected to upstream at {}", upstream.addr);
 
-                let initiator = Initiator::from_raw_k(upstream.authority_pubkey.into_bytes())
-                    .map_err(TproxyError::fallback)?;
-                match NoiseTcpStream::new(socket, HandshakeRole::Initiator(initiator)).await {
-                    Ok(stream) => {
-                        let (reader, writer) = stream.into_split();
+                tokio::select! {
+                    result = connect_with_noise(socket, Some(upstream.authority_pubkey)) => {
+                        match result {
+                            Ok(stream) => {
+                                let (reader, writer) = stream.into_split();
 
-                        let (outbound_tx, outbound_rx) = unbounded();
-                        let (inbound_tx, inbound_rx) = unbounded();
+                                let (outbound_tx, outbound_rx) = unbounded();
+                                let (inbound_tx, inbound_rx) = unbounded();
 
-                        spawn_io_tasks(
-                            task_manager,
-                            reader,
-                            writer,
-                            outbound_rx,
-                            inbound_tx,
-                            cancellation_token.clone(),
-                            fallback_coordinator.clone(),
-                        );
+                                spawn_io_tasks(
+                                    task_manager,
+                                    reader,
+                                    writer,
+                                    outbound_rx,
+                                    inbound_tx,
+                                    cancellation_token.clone(),
+                                    fallback_coordinator.clone(),
+                                );
 
-                        let upstream_channel_state = UpstreamChannelState::new(
-                            inbound_rx,
-                            outbound_tx,
-                            channel_manager_sender,
-                            channel_manager_receiver,
-                        );
-                        debug!(
-                            "Successfully initialized upstream channel with {}",
-                            upstream.addr
-                        );
+                                let upstream_channel_state = UpstreamChannelState::new(
+                                    inbound_rx,
+                                    outbound_tx,
+                                    channel_manager_sender,
+                                    channel_manager_receiver,
+                                );
+                                debug!(
+                                    "Successfully initialized upstream channel with {}",
+                                    upstream.addr
+                                );
 
-                        return Ok(Self {
-                            upstream_channel_state,
-                            required_extensions: required_extensions.clone(),
-                            address: upstream.addr,
-                        });
+                                return Ok(Self {
+                                    upstream_channel_state,
+                                    required_extensions: required_extensions.clone(),
+                                    address: upstream.addr,
+                                });
+                            }
+                            Err(network_helpers::Error::InvalidKey) => {
+                                return Err(TproxyError::fallback(TproxyErrorKind::InvalidKey));
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed Noise handshake with {}: {e}. Retrying...",
+                                    upstream.addr
+                                );
+                            }
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            "Failed Noise handshake with {}: {e}. Retrying...",
-                            upstream.addr
-                        );
+                    _ = cancellation_token.cancelled() => {
+                        info!("Shutdown received during handshake, dropping connection");
+                        return Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem));
                     }
                 }
             }

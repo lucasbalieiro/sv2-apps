@@ -15,7 +15,7 @@ use stratum_apps::{
     config_helpers::CoinbaseRewardScript,
     custom_mutex::Mutex,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::accept_noise_connection,
     stratum_core::{
         bitcoin::{Amount, TxOut},
         channels_sv2::{
@@ -27,17 +27,15 @@ use stratum_apps::{
             },
             Vardiff, VardiffState,
         },
-        codec_sv2::HandshakeRole,
         handlers_sv2::{
             HandleMiningMessagesFromClientAsync, HandleTemplateDistributionMessagesFromServerAsync,
         },
         mining_sv2::{ExtendedExtranonce, SetTarget},
-        noise_sv2::Responder,
         parsers_sv2::{Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash},
     },
     task_manager::TaskManager,
-    utils::types::{ChannelId, DownstreamId, Message, SharesPerMinute, VardiffKey},
+    utils::types::{ChannelId, DownstreamId, SharesPerMinute, VardiffKey},
 };
 use tokio::{net::TcpListener, select, sync::broadcast};
 use tracing::{debug, error, info, warn};
@@ -238,9 +236,12 @@ impl ChannelManager {
             Option<Vec<Tlv>>,
         )>,
     ) -> PoolResult<(), error::ChannelManager> {
+        // todo: let start_downstream_server accept Arc, instead of clone.
+        let this = Arc::new(self);
+
         // Wait for initial template and prevhash before accepting connections
         loop {
-            let has_required_data = self.channel_manager_data.super_safe_lock(|data| {
+            let has_required_data = this.channel_manager_data.super_safe_lock(|data| {
                 data.last_future_template.is_some() && data.last_new_prev_hash.is_some()
             });
 
@@ -271,7 +272,6 @@ impl ChannelManager {
         let task_manager_clone = task_manager.clone();
         let cancellation_token_clone = cancellation_token.clone();
         task_manager.spawn(async move {
-
             loop {
                 select! {
                     _ = cancellation_token_clone.cancelled() => {
@@ -282,70 +282,72 @@ impl ChannelManager {
                         match res {
                             Ok((stream, socket_address)) => {
                                 info!(%socket_address, "New downstream connection");
-                                let responder = match Responder::from_authority_kp(
-                                    &authority_public_key.into_bytes(),
-                                    &authority_secret_key.into_bytes(),
-                                    std::time::Duration::from_secs(cert_validity_sec),
-                                ) {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        error!(error = ?e, "Failed to create responder");
-                                        continue;
-                                    }
-                                };
-                                let noise_stream = match NoiseTcpStream::<Message>::new(
-                                    stream,
-                                    HandshakeRole::Responder(responder),
-                                )
-                                .await
-                                {
-                                    Ok(ns) => ns,
-                                    Err(e) => {
-                                        error!(error = ?e, "Noise handshake failed");
-                                        continue;
-                                    }
-                                };
 
-                                let downstream_id = self
-                                    .channel_manager_data
-                                    .super_safe_lock(|data| data.downstream_id_factory.fetch_add(1, Ordering::SeqCst));
+                                let this = Arc::clone(&this);
+                                let cancellation_token_inner = cancellation_token_clone.clone();
+                                let status_sender_inner = status_sender.clone();
+                                let channel_manager_sender_inner = channel_manager_sender.clone();
+                                let channel_manager_receiver_inner = channel_manager_receiver.clone();
+                                let task_manager_inner = task_manager_clone.clone();
 
-                                let channel_id_factory = AtomicU32::new(1);
-                                let group_channel_id = channel_id_factory.fetch_add(1, Ordering::SeqCst);
-                                let group_channel = match self.bootstrap_group_channel(group_channel_id) {
-                                    Some(group_channel) => group_channel,
-                                    None => {
-                                        error!("Failed to bootstrap group channel");
-                                        let error = PoolError::<error::ChannelManager>::shutdown(PoolErrorKind::CouldNotInitiateSystem);
-                                        handle_error(&StatusSender::ChannelManager(status_sender.clone()), error).await;
-                                        break;
-                                    }
-                                };
+                                task_manager_clone.spawn(async move {
+                                    let noise_stream = tokio::select! {
+                                        result = accept_noise_connection(stream, authority_public_key, authority_secret_key, cert_validity_sec) => {
+                                            match result {
+                                                Ok(r) => r,
+                                                Err(e) => {
+                                                    error!(error = ?e, "Noise handshake failed");
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        _ = cancellation_token_inner.cancelled() => {
+                                            info!("Shutdown received during handshake, dropping connection");
+                                            return;
+                                        }
+                                    };
 
-                                let downstream = Downstream::new(
-                                    downstream_id,
-                                    channel_id_factory,
-                                    group_channel,
-                                    channel_manager_sender.clone(),
-                                    channel_manager_receiver.clone(),
-                                    noise_stream,
-                                    cancellation_token.clone(),
-                                    task_manager_clone.clone(),
-                                    self.supported_extensions.clone(),
-                                    self.required_extensions.clone(),
-                                );
+                                    let downstream_id = this.channel_manager_data
+                                        .super_safe_lock(|data| data.downstream_id_factory.fetch_add(1, Ordering::SeqCst));
 
-                                self.channel_manager_data.super_safe_lock(|data| {
-                                    data.downstream.insert(downstream_id, downstream.clone());
+                                    let channel_id_factory = AtomicU32::new(1);
+                                    let group_channel_id = channel_id_factory.fetch_add(1, Ordering::SeqCst);
+
+                                    let group_channel = match this.bootstrap_group_channel(group_channel_id) {
+                                        Some(group_channel) => group_channel,
+                                        None => {
+                                            error!("Failed to bootstrap group channel - disconnecting downstream {downstream_id}");
+                                            let error = PoolError::<error::ChannelManager>::shutdown(PoolErrorKind::CouldNotInitiateSystem);
+                                            handle_error(&StatusSender::ChannelManager(status_sender_inner), error).await;
+                                            return;
+                                        }
+                                    };
+
+                                    let downstream = Downstream::new(
+                                        downstream_id,
+                                        channel_id_factory,
+                                        group_channel,
+                                        channel_manager_sender_inner,
+                                        channel_manager_receiver_inner,
+                                        noise_stream,
+                                        cancellation_token_inner.clone(),
+                                        task_manager_inner.clone(),
+                                        this.supported_extensions.clone(),
+                                        this.required_extensions.clone(),
+                                    );
+
+                                    this.channel_manager_data.super_safe_lock(|data| {
+                                        data.downstream.insert(downstream_id, downstream.clone());
+                                    });
+
+                                    downstream
+                                        .start(
+                                            cancellation_token_inner,
+                                            status_sender_inner,
+                                            task_manager_inner,
+                                        )
+                                        .await;
                                 });
-
-                                downstream
-                                    .start(
-                                        cancellation_token.clone(),
-                                        status_sender.clone(),
-                                        task_manager_clone.clone(),
-                                    )
-                                    .await;
                                 }
 
                                 Err(e) => {

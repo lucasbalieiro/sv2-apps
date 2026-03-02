@@ -8,6 +8,8 @@
 //! `NoiseTcpWriteHalf`, which support frame-based encoding/decoding of SV2 messages with optional
 //! non-blocking behavior.
 
+use std::time::Duration;
+
 use crate::network_helpers::Error;
 use stratum_core::{
     binary_sv2::{Deserialize, GetSize, Serialize},
@@ -71,7 +73,14 @@ where
     /// performing the Noise handshake in the given `role`.
     ///
     /// On success, returns a stream with encrypted communication channels.
-    pub async fn new(stream: TcpStream, role: HandshakeRole) -> Result<Self, Error> {
+    ///
+    /// `timeout` applies to each individual handshake read. Prefer [`super::connect`] or
+    /// [`super::accept`]. For typical use. They apply a sensible default timeout automatically.
+    pub async fn new(
+        stream: TcpStream,
+        role: HandshakeRole,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
         let (mut reader, mut writer) = stream.into_split();
 
         let mut decoder = StandardNoiseDecoder::<Message>::new();
@@ -86,7 +95,9 @@ where
                 debug!("First handshake message sent");
 
                 loop {
-                    match receive_message(&mut reader, &mut responder_state, &mut decoder).await {
+                    match receive_message(&mut reader, &mut responder_state, &mut decoder, timeout)
+                        .await
+                    {
                         Ok(second_msg) => {
                             debug!("Second handshake message received");
                             let handshake_frame: HandShakeFrame = second_msg
@@ -115,7 +126,9 @@ where
                 let mut initiator_state = State::not_initialized(&role);
 
                 loop {
-                    match receive_message(&mut reader, &mut initiator_state, &mut decoder).await {
+                    match receive_message(&mut reader, &mut initiator_state, &mut decoder, timeout)
+                        .await
+                    {
                         Ok(first_msg) => {
                             debug!("First handshake message received");
                             let handshake_frame: HandShakeFrame = first_msg
@@ -321,11 +334,12 @@ async fn receive_message<Message: Serialize + Deserialize<'static> + GetSize + S
     reader: &mut OwnedReadHalf,
     state: &mut State,
     decoder: &mut StandardNoiseDecoder<Message>,
+    timeout: Duration,
 ) -> Result<StandardEitherFrame<Message>, Error> {
     let mut buffer = vec![0u8; decoder.writable_len()];
-    reader
-        .read_exact(&mut buffer)
+    tokio::time::timeout(timeout, reader.read_exact(&mut buffer))
         .await
+        .map_err(|_| Error::HandshakeTimeout)?
         .map_err(|_| Error::SocketClosed)?;
     decoder.writable().copy_from_slice(&buffer);
     decoder.next_frame(state).map_err(Error::CodecError)

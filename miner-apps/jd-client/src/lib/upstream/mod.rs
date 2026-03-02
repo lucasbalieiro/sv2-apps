@@ -17,11 +17,10 @@ use stratum_apps::{
     custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
-    network_helpers::noise_stream::NoiseTcpStream,
+    network_helpers::connect_with_noise,
     stratum_core::{
-        binary_sv2::Seq064K, codec_sv2::HandshakeRole, extensions_sv2::RequestExtensions,
-        framing_sv2, handlers_sv2::HandleCommonMessagesFromServerAsync, noise_sv2::Initiator,
-        parsers_sv2::AnyMessage,
+        binary_sv2::Seq064K, extensions_sv2::RequestExtensions, framing_sv2,
+        handlers_sv2::HandleCommonMessagesFromServerAsync, parsers_sv2::AnyMessage,
     },
     task_manager::TaskManager,
     utils::{
@@ -96,13 +95,20 @@ impl Upstream {
         .map_err(JDCError::fallback)?
         .map_err(JDCError::fallback)?;
         info!("Connected to upstream at {}", addr);
-        let initiator = Initiator::from_raw_k(pubkey.into_bytes()).map_err(JDCError::fallback)?;
         debug!("Begin with noise setup in upstream connection");
-        let (noise_stream_reader, noise_stream_writer) =
-            NoiseTcpStream::<Message>::new(stream, HandshakeRole::Initiator(initiator))
-                .await
-                .map_err(JDCError::fallback)?
-                .into_split();
+
+        let (noise_stream_reader, noise_stream_writer) = tokio::select! {
+            result = connect_with_noise(stream, Some(*pubkey)) => {
+                match result {
+                    Ok(noise_stream) => Ok(noise_stream.into_split()),
+                    Err(e) => Err(JDCError::fallback(e))
+                }
+            }
+            _ = cancellation_token.cancelled() => {
+                info!("Shutdown received during handshake, dropping connection");
+                Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem))
+            }
+        }?;
 
         let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
         let (outbound_tx, outbound_rx) = unbounded::<Sv2Frame>();

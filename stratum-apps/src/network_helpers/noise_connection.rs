@@ -1,7 +1,7 @@
 #![allow(clippy::new_ret_no_self)]
 use crate::network_helpers::{
     noise_stream::{NoiseTcpReadHalf, NoiseTcpStream, NoiseTcpWriteHalf},
-    Error,
+    Error, NOISE_HANDSHAKE_TIMEOUT,
 };
 use async_channel::{unbounded, Receiver, Sender};
 use std::sync::Arc;
@@ -54,9 +54,10 @@ impl Connection {
             receiver_outgoing,
         });
 
-        let (read_half, write_half) = NoiseTcpStream::<Message>::new(stream, role)
-            .await?
-            .into_split();
+        let (read_half, write_half) =
+            NoiseTcpStream::<Message>::new(stream, role, NOISE_HANDSHAKE_TIMEOUT)
+                .await?
+                .into_split();
 
         Self::spawn_reader(read_half, Arc::clone(&conn_state));
         Self::spawn_writer(write_half, conn_state);
