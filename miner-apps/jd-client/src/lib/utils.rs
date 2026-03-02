@@ -44,7 +44,7 @@ use crate::{
     error::JDCErrorKind,
 };
 
-/// Represents a single upstream entry (pool + JDS pair) with raw address strings
+/// Represents a single upstream entry (Pool + JDS pair) with raw address strings
 /// that are resolved via DNS at connection time.
 #[derive(Debug, Clone)]
 pub struct UpstreamEntry {
