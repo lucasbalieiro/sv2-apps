@@ -1,6 +1,13 @@
 use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
 use tracing::{debug, info};
+
+/// Maximum time to wait for a DNS lookup before giving up.
+/// DNS resolution should complete in milliseconds on a healthy network;
+/// 5 seconds is generous enough for slow links while still failing fast
+/// when DNS is broken.
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Errors that can occur during address resolution.
 #[derive(Debug)]
@@ -9,6 +16,8 @@ pub enum ResolveError {
     NoResults(String),
     /// DNS lookup failed with an IO error.
     LookupFailed(std::io::Error),
+    /// DNS lookup did not complete within the timeout.
+    Timeout(String),
 }
 
 impl std::fmt::Display for ResolveError {
@@ -18,6 +27,13 @@ impl std::fmt::Display for ResolveError {
                 write!(f, "DNS resolution returned no results for '{host}'")
             }
             ResolveError::LookupFailed(e) => write!(f, "DNS resolution failed: {e}"),
+            ResolveError::Timeout(host) => {
+                write!(
+                    f,
+                    "DNS resolution for '{host}' timed out after {}s",
+                    DNS_TIMEOUT.as_secs()
+                )
+            }
         }
     }
 }
@@ -50,8 +66,9 @@ pub async fn resolve_host(host: &str, port: u16) -> Result<SocketAddr, ResolveEr
     // Slow path: perform async DNS resolution
     info!("Resolving hostname '{host}' via DNS...");
     let lookup = format!("{host}:{port}");
-    let addr = tokio::net::lookup_host(&lookup)
+    let addr = tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host(&lookup))
         .await
+        .map_err(|_| ResolveError::Timeout(host.to_string()))?
         .map_err(ResolveError::LookupFailed)?
         // DNS can return multiple addresses; take the first one
         .next()
@@ -83,8 +100,9 @@ pub async fn resolve_host_port(addr: &str) -> Result<SocketAddr, ResolveError> {
 
     // Slow path: perform async DNS resolution
     info!("Resolving address '{addr}' via DNS...");
-    let resolved = tokio::net::lookup_host(addr)
+    let resolved = tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host(addr))
         .await
+        .map_err(|_| ResolveError::Timeout(addr.to_string()))?
         .map_err(ResolveError::LookupFailed)?
         // DNS can return multiple addresses; take the first one
         .next()
