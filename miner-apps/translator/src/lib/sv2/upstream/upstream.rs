@@ -9,7 +9,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use std::{net::SocketAddr, sync::Arc};
 use stratum_apps::{
     fallback_coordinator::FallbackCoordinator,
-    network_helpers::{self, connect_with_noise},
+    network_helpers::{self, connect_with_noise, resolve_host},
     stratum_core::{
         binary_sv2::Seq064K,
         common_messages_sv2::{Protocol, SetupConnection},
@@ -81,7 +81,10 @@ impl Upstream {
         task_manager: Arc<TaskManager>,
         required_extensions: Vec<u16>,
     ) -> TproxyResult<Self, error::Upstream> {
-        info!("Trying to connect to upstream at {}", upstream.addr);
+        info!(
+            "Trying to connect to upstream at {}:{}",
+            upstream.host, upstream.port
+        );
 
         if cancellation_token.is_cancelled() {
             info!("Shutdown signal received during upstream connection attempt. Aborting.");
@@ -90,9 +93,19 @@ impl Upstream {
             ));
         }
 
-        match TcpStream::connect(upstream.addr).await {
+        let resolved_addr = resolve_host(&upstream.host, upstream.port)
+            .await
+            .map_err(|e| {
+                error!(
+                    "Failed to resolve upstream address {}:{}: {e}",
+                    upstream.host, upstream.port
+                );
+                TproxyError::fallback(TproxyErrorKind::NetworkHelpersError(e.into()))
+            })?;
+
+        match TcpStream::connect(resolved_addr).await {
             Ok(socket) => {
-                info!("Connected to upstream at {}", upstream.addr);
+                info!("Connected to upstream at {}", resolved_addr);
 
                 tokio::select! {
                     result = connect_with_noise(socket, Some(upstream.authority_pubkey)) => {
@@ -121,13 +134,13 @@ impl Upstream {
                                 );
                                 debug!(
                                     "Successfully initialized upstream channel with {}",
-                                    upstream.addr
+                                    resolved_addr
                                 );
 
                                 return Ok(Self {
                                     upstream_channel_state,
                                     required_extensions: required_extensions.clone(),
-                                    address: upstream.addr,
+                                    address: resolved_addr,
                                 });
                             }
                             Err(network_helpers::Error::InvalidKey) => {
@@ -136,7 +149,7 @@ impl Upstream {
                             Err(e) => {
                                 error!(
                                     "Failed Noise handshake with {}: {e}. Retrying...",
-                                    upstream.addr
+                                    resolved_addr
                                 );
                             }
                         }
@@ -148,7 +161,7 @@ impl Upstream {
                 }
             }
             Err(e) => {
-                error!("Failed to connect to {}: {e}.", upstream.addr);
+                error!("Failed to connect to {}: {e}.", resolved_addr);
             }
         }
 

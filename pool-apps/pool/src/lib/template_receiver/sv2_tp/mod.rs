@@ -1,10 +1,10 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 mod common_message_handler;
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::CancellationToken;
 use stratum_apps::{
     key_utils::Secp256k1PublicKey,
-    network_helpers::{self, connect_with_noise},
+    network_helpers::{self, connect_with_noise, resolve_host_port},
     stratum_core::{
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
@@ -271,8 +271,8 @@ impl Sv2Tp {
         &mut self,
         addr: String,
     ) -> PoolResult<(), error::TemplateProvider> {
-        let socket: SocketAddr = addr.parse().map_err(|_| {
-            error!(%addr, "Invalid socket address");
+        let socket = resolve_host_port(&addr).await.map_err(|e| {
+            error!(%addr, "Failed to resolve template provider address: {e}");
             PoolError::shutdown(PoolErrorKind::InvalidSocketAddress(addr.clone()))
         })?;
 
