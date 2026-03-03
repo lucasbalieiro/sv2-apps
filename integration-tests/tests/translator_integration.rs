@@ -1865,3 +1865,61 @@ async fn pool_does_not_hang_on_no_handshake() {
     assert!(value.is_err());
     shutdown_all!(translator, pool);
 }
+
+// This test verifies that when multiple downstream miners connect very quickly
+// to the tproxy (in aggregated mode), it does NOT forward multiple
+// `OpenExtendedMiningChannel` messages upstream.
+//
+// In aggregated mode, all downstream miners should share a single upstream
+// extended channel. Therefore, even under rapid concurrent connections,
+// only one `OpenExtendedMiningChannel` must be sent upstream.
+//
+// More info can be found here: https://github.com/stratum-mining/sv2-apps/issues/157
+#[tokio::test]
+async fn tproxy_sends_single_open_extended_mining_channel_in_aggregated_mode() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::High);
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+
+    let (pool_translator_sniffer, pool_translator_sniffer_addr) =
+        start_sniffer("0", pool_addr, false, vec![], None);
+    let (tproxy, tproxy_addr) =
+        start_sv2_translator(&[pool_translator_sniffer_addr], true, vec![], vec![], None).await;
+
+    pool_translator_sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    pool_translator_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    let mut minerd_vec = Vec::new();
+    // connect several Sv1 miners to tProxy
+    const N_MINERDS: u32 = 10;
+    for _i in 0..N_MINERDS {
+        let (minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
+        minerd_vec.push(minerd_process);
+    }
+
+    pool_translator_sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .await;
+
+    assert!(
+        pool_translator_sniffer
+            .assert_message_not_present(
+                MessageDirection::ToUpstream,
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                Duration::from_secs(10)
+            )
+            .await
+    );
+
+    shutdown_all!(pool, tproxy);
+}
