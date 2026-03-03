@@ -395,6 +395,7 @@ impl TemplateData {
         let tx_data: Vec<B016M<'static>> = block
             .txdata
             .iter()
+            .skip(1) // skip coinbase tx
             .map(|tx| {
                 serialize(tx)
                     .try_into()
