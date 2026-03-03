@@ -2,7 +2,7 @@ use crate::{
     error::{self, TproxyError, TproxyErrorKind},
     is_aggregated,
     sv2::ChannelManager,
-    utils::{proxy_extranonce_prefix_len, AGGREGATED_CHANNEL_ID},
+    utils::{proxy_extranonce_prefix_len, AggregatedState, AGGREGATED_CHANNEL_ID},
 };
 use stratum_apps::{
     stratum_core::{
@@ -20,7 +20,7 @@ use stratum_apps::{
         },
         parsers_sv2::{Mining, Tlv},
     },
-    utils::types::DownstreamId,
+    utils::types::{DownstreamId, Hashrate},
 };
 use tracing::{debug, error, info, warn};
 
@@ -64,9 +64,11 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         m: OpenExtendedMiningChannelSuccess<'_>,
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
-        // Check if we have the pending channel data, return error if not
+        // Retrieve the pending channel request data.
+        // Both aggregated and non-aggregated modes store data in pending_downstream_channels, keyed
+        // by request_id, so the lookup is identical for both.
         let (user_identity, nominal_hashrate, downstream_extranonce_len) = self
-            .pending_channels
+            .pending_downstream_channels
             .remove(&(m.request_id as DownstreamId))
             .ok_or_else(|| {
                 error!("No pending channel found for request_id: {}", m.request_id);
@@ -175,6 +177,8 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 );
                 self.extended_channels
                     .insert(m.channel_id, new_downstream_extended_channel);
+                self.aggregated_channel_state
+                    .set(AggregatedState::Connected);
                 let new_open_extended_mining_channel_success = OpenExtendedMiningChannelSuccess {
                     request_id: m.request_id,
                     channel_id: m.channel_id,
@@ -267,6 +271,34 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 error!("Failed to send OpenExtendedMiningChannelSuccess: {:?}", e);
                 TproxyError::shutdown(TproxyErrorKind::ChannelErrorSender)
             })?;
+
+        // In aggregated mode, serve any downstream requests that were buffered in
+        // pending_channels while the upstream channel was being established (Pending state).
+        if is_aggregated() {
+            let pending_requests: Vec<(u32, String, Hashrate, usize)> = self
+                .pending_downstream_channels
+                .iter()
+                .map(|r| {
+                    (
+                        *r.key() as u32,
+                        r.value().0.clone(),
+                        r.value().1,
+                        r.value().2,
+                    )
+                })
+                .collect();
+            self.pending_downstream_channels.clear();
+
+            for (req_id, user_identity, hashrate, min_extranonce_size) in pending_requests {
+                self.handle_downstream_channel_request_in_aggregated_mode(
+                    req_id,
+                    user_identity,
+                    hashrate,
+                    min_extranonce_size,
+                )
+                .await?;
+            }
+        }
 
         Ok(())
     }
