@@ -4,7 +4,8 @@ use stratum_apps::{
     stratum_core::{
         bitcoin::Target,
         channels_sv2::{
-            client::extended::ExtendedChannel, outputs::deserialize_outputs,
+            client::{error::ExtendedChannelError, extended::ExtendedChannel},
+            outputs::deserialize_outputs,
             server::jobs::factory::JobFactory,
         },
         handlers_sv2::{HandleMiningMessagesFromServerAsync, SupportedChannelTypes},
@@ -23,7 +24,7 @@ use crate::{
     },
     error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
-    utils::{create_close_channel_msg, UpstreamState},
+    utils::{create_close_channel_msg, validate_cached_share, UpstreamState},
 };
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -562,32 +563,80 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
         info!("Received: {} ✅", msg);
-        self.channel_manager_data.super_safe_lock(|data| {
-            if let Some(last_declare_job) = data.last_declare_job_store.remove(&msg.request_id) {
-                let template_id = last_declare_job.template.template_id;
-                data.last_declare_job_store
-                    .retain(|_, job| job.template.template_id != template_id);
 
-                data.template_id_to_upstream_job_id
-                    .insert(last_declare_job.template.template_id, msg.job_id);
-                debug!(job_id = msg.job_id, "Mapped custom job into template store");
-                if let (Some(upstream_channel), Some(set_custom_job)) = (
-                    data.upstream_channel.as_mut(),
-                    last_declare_job.set_custom_mining_job,
-                ) {
-                    if let Err(e) =
-                        upstream_channel.on_set_custom_mining_job_success(set_custom_job, msg)
-                    {
-                        error!("Custom mining job success validation failed: {e:#?}");
-                    }
-                }
-            } else {
+        let mut shares_to_submit_upstream = Vec::new();
+
+        self.channel_manager_data.super_safe_lock(|data| {
+            let Some(last_declare_job) = data.last_declare_job_store.remove(&msg.request_id) else {
                 warn!(
                     request_id = msg.request_id,
                     "No matching declare job found for custom job success"
                 );
+                return Err(JDCError::fallback(JDCErrorKind::LastDeclareJobNotFound(
+                    msg.request_id,
+                )));
+            };
+
+            let template_id = last_declare_job.template.template_id;
+
+            data.last_declare_job_store
+                .retain(|_, job| job.template.template_id != template_id);
+
+            data.template_id_to_upstream_job_id
+                .insert(template_id, msg.job_id);
+
+            let job_id = msg.job_id;
+
+            let cached_shares = data.cached_shares.remove(&template_id);
+
+            let Some(upstream_channel) = data.upstream_channel.as_mut() else {
+                // This may occur during a fallback transition.
+                // A `SetCustomMiningJob.Success` task can be buffered while the
+                // cleanup task executes first, clearing the upstream channel
+                // before this handler runs.
+                debug!("No upstream channel available");
+                return Err(JDCError::log(JDCErrorKind::UpstreamNotFound));
+            };
+
+            let Some(set_custom_job) = last_declare_job.set_custom_mining_job else {
+                error!("DeclareMiningJob present but SetCustomMiningJob missing");
+                return Err(JDCError::shutdown(JDCErrorKind::CustomJobError));
+            };
+
+            if let Err(e) = upstream_channel.on_set_custom_mining_job_success(set_custom_job, msg) {
+                error!("SetCustomMiningJob.Success validation failed: {e:#?}");
+                match e {
+                    ExtendedChannelError::ChainTipMismatch => return Err(JDCError::log(e)),
+                    // Other variants of this error may occur due to mismatched message fields
+                    // or issues with the coinbase data provided by the upstream. So, triggering
+                    // fallback make sense.
+                    _ => return Err(JDCError::fallback(e)),
+                };
             }
-        });
+
+            let cached_shares = cached_shares.unwrap_or_default();
+
+            debug!(
+                "Handling {} cached shares for template_id={}",
+                cached_shares.len(),
+                template_id
+            );
+
+            for mut share in cached_shares {
+                share.share.job_id = job_id;
+
+                validate_cached_share(share.share, data, &mut shares_to_submit_upstream);
+            }
+            Ok(())
+        })?;
+
+        // The result can be safely ignored. A send failure usually means the channel
+        // endpoint has been dropped (e.g., during disconnect or shutdown).
+        // Lifecycle and error handling are managed elsewhere.
+        for msg in shares_to_submit_upstream {
+            _ = msg.forward(&self.channel_manager_channel).await;
+        }
+
         Ok(())
     }
 

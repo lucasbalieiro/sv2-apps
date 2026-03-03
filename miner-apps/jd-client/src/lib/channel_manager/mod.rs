@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BinaryHeap, HashMap, VecDeque},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU32, AtomicUsize, Ordering},
@@ -64,9 +64,12 @@ use crate::{
     downstream::Downstream,
     error::{self, JDCError, JDCErrorKind, JDCResult},
     status::{handle_error, Status, StatusSender},
-    utils::{AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, UpstreamState},
+    utils::{
+        AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, SharesOrderedByDiff,
+        UpstreamState,
+    },
 };
-mod downstream_message_handler;
+pub mod downstream_message_handler;
 mod extensions_message_handler;
 mod jd_message_handler;
 mod template_message_handler;
@@ -131,7 +134,7 @@ pub struct ChannelManagerData {
     // The last **future template** received from the upstream.
     last_future_template: Option<NewTemplate<'static>>,
     // The last **new prevhash** received from the upstream.
-    last_new_prev_hash: Option<SetNewPrevHashTdp<'static>>,
+    pub last_new_prev_hash: Option<SetNewPrevHashTdp<'static>>,
     // The most recent set of **allocation tokens** received from the JDS.
     allocate_tokens: Option<AllocateMiningJobTokenSuccess<'static>>,
     // Stores new templates as they arrive, mapped by their **template ID**.
@@ -164,6 +167,8 @@ pub struct ChannelManagerData {
     supported_extensions: Vec<u16>,
     /// Extensions that the JDC requires
     required_extensions: Vec<u16>,
+    /// Cached shares waiting for `SetCustomMiningJob.Success` to be propagated upstream
+    cached_shares: HashMap<TemplateId, BinaryHeap<SharesOrderedByDiff>>,
 }
 
 impl ChannelManagerData {
@@ -179,6 +184,7 @@ impl ChannelManagerData {
         self.template_id_to_upstream_job_id.clear();
         self.downstream_channel_id_and_job_id_to_template_id.clear();
         self.pending_downstream_requests.clear();
+        self.cached_shares.clear();
 
         self.downstream_id_factory = AtomicUsize::new(0);
         self.request_id_factory = AtomicU32::new(0);
@@ -320,6 +326,7 @@ impl ChannelManager {
             negotiated_extensions: vec![],
             supported_extensions,
             required_extensions,
+            cached_shares: HashMap::new(),
         }));
 
         let channel_manager_channel = ChannelManagerChannel {

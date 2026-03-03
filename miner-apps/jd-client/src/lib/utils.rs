@@ -12,6 +12,7 @@
 //!   job declarator components.
 //! - An atomic wrapper for managing the upstream connection state safely across threads.
 use std::{
+    collections::BinaryHeap,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -22,14 +23,25 @@ use std::{
 use stratum_apps::{
     stratum_core::{
         binary_sv2::Str0255,
+        bitcoin::hashes::sha256d,
+        channels_sv2::client,
         common_messages_sv2::{Protocol, SetupConnection},
-        mining_sv2::{CloseChannel, OpenExtendedMiningChannel, OpenStandardMiningChannel},
-        parsers_sv2::Mining,
+        job_declaration_sv2::PushSolution,
+        mining_sv2::{
+            CloseChannel, OpenExtendedMiningChannel, OpenStandardMiningChannel,
+            SubmitSharesExtended,
+        },
+        parsers_sv2::{JobDeclaration, Mining},
     },
     utils::types::{ChannelId, DownstreamId, Hashrate, JobId},
 };
+use tracing::{debug, info};
 
-use crate::{config::ConfigJDCMode, error::JDCErrorKind};
+use crate::{
+    channel_manager::{downstream_message_handler::RouteMessageTo, ChannelManagerData},
+    config::ConfigJDCMode,
+    error::JDCErrorKind,
+};
 
 /// Constructs a `SetupConnection` message for the mining protocol.
 pub fn get_setup_connection_message(
@@ -282,6 +294,157 @@ impl From<(DownstreamId, ChannelId, JobId)> for DownstreamChannelJobId {
             downstream_id: value.0,
             channel_id: value.1,
             job_id: value.2,
+        }
+    }
+}
+
+/// This method validates cached shares when a `SetCustomMiningJob.Success`
+/// arrives. This method also appends response to route queue to be sent
+/// to upstream.
+pub fn validate_cached_share(
+    mut upstream_message: SubmitSharesExtended<'static>,
+    channel_manager_data: &mut ChannelManagerData,
+    messages: &mut Vec<RouteMessageTo>,
+) {
+    let Some(upstream_channel) = channel_manager_data.upstream_channel.as_mut() else {
+        return;
+    };
+    let Some(prev_hash) = channel_manager_data.last_new_prev_hash.as_ref() else {
+        return;
+    };
+
+    match upstream_channel.validate_share(upstream_message.clone()) {
+        Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
+            upstream_message.sequence_number = channel_manager_data
+                .sequence_number_factory
+                .fetch_add(1, Ordering::Relaxed);
+
+            info!(
+                "Cached SubmitSharesExtended: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",  upstream_message.channel_id, upstream_message.sequence_number, share_hash
+            );
+
+            messages.push(Mining::SubmitSharesExtended(upstream_message.into_static()).into());
+        }
+
+        Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
+            upstream_message.sequence_number = channel_manager_data
+                .sequence_number_factory
+                .fetch_add(1, Ordering::Relaxed);
+
+            info!("💰 Block Found (cached extended)!!! 💰 {share_hash}");
+
+            let mut channel_extranonce = upstream_channel.get_extranonce_prefix().to_vec();
+            channel_extranonce.extend_from_slice(&upstream_message.extranonce.to_vec());
+
+            let push_solution = PushSolution {
+                extranonce: channel_extranonce.try_into().expect("extranonce"),
+                ntime: upstream_message.ntime,
+                nonce: upstream_message.nonce,
+                version: upstream_message.version,
+                nbits: prev_hash.n_bits,
+                prev_hash: prev_hash.prev_hash.clone(),
+            };
+
+            messages.push(JobDeclaration::PushSolution(push_solution).into());
+            messages.push(Mining::SubmitSharesExtended(upstream_message.into_static()).into());
+        }
+
+        Err(err) => {
+            let code = match err {
+                client::share_accounting::ShareValidationError::Invalid => "invalid-share",
+                client::share_accounting::ShareValidationError::Stale => "stale-share",
+                client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
+                client::share_accounting::ShareValidationError::DoesNotMeetTarget => {
+                    "difficulty-too-low"
+                }
+                client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                client::share_accounting::ShareValidationError::BadExtranonceSize => {
+                    "bad-extranonce-size"
+                }
+                _ => unreachable!(),
+            };
+
+            debug!("❌ Cached SubmitSharesExtended: SubmitSharesError, not forwarding it to upstream | channel_id={}, sequence_number={}, error={code}", upstream_message.channel_id, upstream_message.sequence_number);
+        }
+    }
+}
+
+/// Maximum number of shares cached per template
+const CACHED_SHARES_CAPACITY: usize = 100;
+
+/// A wrapper around [`SubmitSharesExtended`] that adds ordering by share difficulty.
+#[derive(Clone, Debug)]
+pub struct SharesOrderedByDiff {
+    pub share: SubmitSharesExtended<'static>,
+    share_hash: sha256d::Hash,
+}
+
+impl SharesOrderedByDiff {
+    pub fn new(share: SubmitSharesExtended<'static>, share_hash: sha256d::Hash) -> Self {
+        Self { share, share_hash }
+    }
+}
+
+impl Ord for SharesOrderedByDiff {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.share_hash.cmp(&other.share_hash)
+    }
+}
+
+impl PartialOrd for SharesOrderedByDiff {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for SharesOrderedByDiff {
+    fn eq(&self, other: &Self) -> bool {
+        self.share_hash == other.share_hash
+    }
+}
+
+impl Eq for SharesOrderedByDiff {}
+
+/// Inserts a share into the cache, evicting the worst entry when
+/// [`CACHED_SHARES_CAPACITY`] is reached.
+///
+/// The cache retains the best shares (lowest `share_hash`), since lower
+/// hashes indicate higher-quality shares that are more likely to remain
+/// valid if relayed later.
+///
+/// Internally implemented with a `BinaryHeap`, where the root represents
+/// the current worst share (highest hash) and is replaced when a better
+/// share arrives.
+pub(crate) fn add_share_to_cache(
+    heap: &mut BinaryHeap<SharesOrderedByDiff>,
+    entry: SharesOrderedByDiff,
+) {
+    let len = heap.len();
+
+    if len < CACHED_SHARES_CAPACITY {
+        debug!(
+            "Caching share (hash={:?}); cache size {}/{}",
+            entry.share_hash,
+            len + 1,
+            CACHED_SHARES_CAPACITY
+        );
+        heap.push(entry);
+        return;
+    }
+
+    if let Some(worst) = heap.peek() {
+        if entry.share_hash < worst.share_hash {
+            debug!(
+                "Replacing worst cached share: old_hash={:?}, new_hash={:?}",
+                worst.share_hash, entry.share_hash
+            );
+            heap.pop();
+            heap.push(entry);
+        } else {
+            debug!(
+                "Discarding share (hash={:?}); worse than cached worst={:?}",
+                entry.share_hash, worst.share_hash
+            );
         }
     }
 }
