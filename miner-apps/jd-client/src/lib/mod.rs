@@ -1,4 +1,11 @@
-use std::{sync::Arc, thread::JoinHandle, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
+    time::Duration,
+};
 
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::CancellationToken;
@@ -9,7 +16,7 @@ use stratum_apps::{
     tp_type::TemplateProviderType,
     utils::types::{Sv2Frame, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -46,6 +53,8 @@ pub mod utils;
 pub struct JobDeclaratorClient {
     config: JobDeclaratorClientConfig,
     cancellation_token: CancellationToken,
+    shutdown_notify: Arc<Notify>,
+    is_alive: Arc<AtomicBool>,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -55,6 +64,8 @@ impl JobDeclaratorClient {
         Self {
             config,
             cancellation_token: CancellationToken::new(),
+            shutdown_notify: Arc::new(Notify::new()),
+            is_alive: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -336,6 +347,9 @@ impl JobDeclaratorClient {
                     self.cancellation_token.cancel();
                     break;
                 }
+                _ = self.cancellation_token.cancelled() => {
+                    break;
+                }
                 message = status_receiver.recv() => {
                     if let Ok(status) = message {
                         match status.state {
@@ -568,7 +582,20 @@ impl JobDeclaratorClient {
                 warn!("Forced shutdown complete");
             }
         }
+        self.shutdown_notify.notify_waiters();
+        self.is_alive.store(false, Ordering::Relaxed);
         info!("JD Client shutdown complete.");
+    }
+
+    pub async fn shutdown(&self) {
+        if !self.is_alive.load(Ordering::Relaxed) {
+            return;
+        }
+        // The Notified future is guaranteed to receive wakeups from notify_waiters()
+        // as soon as it has been created, even if it has not yet been polled.
+        let notified = self.shutdown_notify.notified();
+        self.cancellation_token.cancel();
+        notified.await;
     }
 
     /// Initializes an upstream pool + JD connection pair.
