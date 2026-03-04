@@ -39,6 +39,17 @@ pub mod template_provider;
 pub mod types;
 pub mod utils;
 
+/// Concurrently shuts down multiple services.
+///
+/// Expands to `tokio::join!` over each handle's `.shutdown()` future,
+/// so all shutdowns run in parallel rather than sequentially.
+#[macro_export]
+macro_rules! shutdown_all {
+    ($($handle:expr),+ $(,)?) => {
+        tokio::join!($($handle.shutdown()),+)
+    };
+}
+
 const SHARES_PER_MINUTE: f32 = 120.0;
 
 const POOL_COINBASE_REWARD_DESCRIPTOR: &str = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)";
