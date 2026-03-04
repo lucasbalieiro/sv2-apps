@@ -1,4 +1,10 @@
-use std::{sync::Arc, thread::JoinHandle};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
+};
 
 use async_channel::unbounded;
 
@@ -7,7 +13,7 @@ use stratum_apps::{
     stratum_core::bitcoin::consensus::Encodable, task_manager::TaskManager,
     tp_type::TemplateProviderType, utils::types::GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -36,6 +42,8 @@ pub mod utils;
 pub struct PoolSv2 {
     config: PoolConfig,
     cancellation_token: CancellationToken,
+    shutdown_notify: Arc<Notify>,
+    is_alive: Arc<AtomicBool>,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -44,6 +52,8 @@ impl PoolSv2 {
         Self {
             config,
             cancellation_token: CancellationToken::new(),
+            shutdown_notify: Arc::new(Notify::new()),
+            is_alive: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -213,6 +223,9 @@ impl PoolSv2 {
                     cancellation_token.cancel();
                     break;
                 }
+                _ = cancellation_token.cancelled() => {
+                    break;
+                }
                 message = status_receiver.recv() => {
                     if let Ok(status) = message {
                         match status.state {
@@ -274,8 +287,21 @@ impl PoolSv2 {
                 warn!("Forced shutdown complete");
             }
         }
+        self.shutdown_notify.notify_waiters();
+        self.is_alive.store(false, Ordering::Relaxed);
         info!("Pool shutdown complete.");
         Ok(())
+    }
+
+    pub async fn shutdown(&self) {
+        if !self.is_alive.load(Ordering::Relaxed) {
+            return;
+        }
+        // The Notified future is guaranteed to receive wakeups from notify_waiters()
+        // as soon as it has been created, even if it has not yet been polled.
+        let notified = self.shutdown_notify.notified();
+        self.cancellation_token.cancel();
+        notified.await;
     }
 }
 
