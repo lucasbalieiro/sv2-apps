@@ -312,7 +312,7 @@ impl JobDeclaratorClient {
                 channel_manager_clone
                     .upstream_state
                     .set(UpstreamState::NoChannel);
-                _ = channel_manager_clone.allocate_tokens(1).await;
+                _ = channel_manager_clone.allocate_tokens(2).await;
             }
             Err(e) => {
                 tracing::error!("Failed to initialize upstream: {:?}", e);
@@ -471,7 +471,7 @@ impl JobDeclaratorClient {
 
                                         channel_manager_clone.upstream_state.set(UpstreamState::NoChannel);
 
-                                        _ = channel_manager_clone.allocate_tokens(1).await;
+                                        _ = channel_manager_clone.allocate_tokens(2).await;
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to initialize upstream: {:?}", e);
