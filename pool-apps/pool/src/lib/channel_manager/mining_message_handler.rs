@@ -1,32 +1,35 @@
 use std::sync::atomic::Ordering;
 
-use stratum_apps::stratum_core::{
-    binary_sv2::Str0255,
-    bitcoin::{consensus::Decodable, Amount, Target, TxOut},
-    channels_sv2::{
-        server::{
-            error::{ExtendedChannelError, StandardChannelError},
-            extended::ExtendedChannel,
-            jobs::job_store::DefaultJobStore,
-            share_accounting::{ShareValidationError, ShareValidationResult},
-            standard::StandardChannel,
+use stratum_apps::{
+    config_helpers::CoinbaseRewardScript,
+    stratum_core::{
+        binary_sv2::Str0255,
+        bitcoin::{consensus::Decodable, Amount, Target, TxOut},
+        channels_sv2::{
+            server::{
+                error::{ExtendedChannelError, StandardChannelError},
+                extended::ExtendedChannel,
+                jobs::job_store::DefaultJobStore,
+                share_accounting::{ShareValidationError, ShareValidationResult},
+                standard::StandardChannel,
+            },
+            Vardiff, VardiffState,
         },
-        Vardiff, VardiffState,
+        extensions_sv2::{
+            UserIdentity, EXTENSION_TYPE_WORKER_HASHRATE_TRACKING, TLV_FIELD_TYPE_USER_IDENTITY,
+        },
+        handlers_sv2::{HandleMiningMessagesFromClientAsync, SupportedChannelTypes},
+        mining_sv2::*,
+        parsers_sv2::{Mining, TemplateDistribution, Tlv, TlvField},
+        template_distribution_sv2::SubmitSolution,
     },
-    extensions_sv2::{
-        UserIdentity, EXTENSION_TYPE_WORKER_HASHRATE_TRACKING, TLV_FIELD_TYPE_USER_IDENTITY,
-    },
-    handlers_sv2::{HandleMiningMessagesFromClientAsync, SupportedChannelTypes},
-    mining_sv2::*,
-    parsers_sv2::{Mining, TemplateDistribution, Tlv, TlvField},
-    template_distribution_sv2::SubmitSolution,
 };
 use tracing::{error, info};
 
 use crate::{
     channel_manager::{ChannelManager, RouteMessageTo, CLIENT_SEARCH_SPACE_BYTES},
     error::{self, PoolError, PoolErrorKind},
-    utils::create_close_channel_msg,
+    utils::{create_close_channel_msg, validate_user_identity, PayoutMode},
 };
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -141,10 +144,56 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 return Err(PoolError::disconnect(PoolErrorKind::LastNewPrevhashNotFound, downstream_id));
             };
 
+            let payout_mode = match validate_user_identity(&user_identity, self.solo_mining_mode) {
+                Ok(mode) => mode,
+                Err(_) => {
+                    error!("Invalid user_identity '{}': must be 'sri/donate/<worker_name>' or 'sri/solo/<payout_address>/<worker_name>'", user_identity);
+                    let open_standard_mining_channel_error = OpenMiningChannelError {
+                        request_id,
+                        error_code: "invalid-user-identity"
+                            .to_string()
+                            .try_into()
+                            .expect("error code must be valid string"),
+                    };
+                    return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_standard_mining_channel_error)).into()]);
+                }
+            };
+
+            let coinbase_script = match payout_mode {
+                PayoutMode::Solo(payout_address) => {
+                    let descriptor = format!("addr({})", payout_address);
+                    match CoinbaseRewardScript::from_descriptor(&descriptor) {
+                        Ok(script) => script,
+                        Err(e) => {
+                            error!("Invalid solo payout address '{}': {:?}", payout_address, e);
+                            let open_standard_mining_channel_error = OpenMiningChannelError {
+                                request_id,
+                                error_code: "invalid-payout-address"
+                                    .to_string()
+                                    .try_into()
+                                    .expect("error code must be valid string"),
+                            };
+                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_standard_mining_channel_error)).into()]);
+                        }
+                    }
+                }
+                PayoutMode::Donate(_percentage, _payout_address) => {
+                    let open_standard_mining_channel_error = OpenMiningChannelError {
+                                request_id,
+                                error_code: "partial-donation-mode-not-implemented-yet"
+                                    .to_string()
+                                    .try_into()
+                                    .expect("error code must be valid string"),
+                            };
+                            error!("Partial donation mode is not available yet. Sending {open_standard_mining_channel_error}");
+                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_standard_mining_channel_error)).into()]);
+                }
+                PayoutMode::Pool => self.coinbase_reward_script.clone(),
+            };
 
             let pool_coinbase_output = TxOut {
                 value: Amount::from_sat(last_future_template.coinbase_tx_value_remaining),
-                script_pubkey: self.coinbase_reward_script.script_pubkey(),
+                script_pubkey: coinbase_script.script_pubkey(),
             };
 
             downstream.downstream_data.super_safe_lock(|downstream_data| {
@@ -306,6 +355,27 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             }
                         };
 
+                        let payout_mode = match validate_user_identity(&user_identity, self.solo_mining_mode) {
+                            Ok(mode) => mode,
+                            Err(_) => {
+                                error!("Invalid user_identity '{}': must be 'sri/donate/<worker_name>' or 'sri/solo/<payout_address>/<worker_name>'", user_identity);
+                                let open_extended_mining_channel_error = OpenMiningChannelError {
+                                    request_id,
+                                    error_code: "invalid-user-identity"
+                                        .to_string()
+                                        .try_into()
+                                        .expect("error code must be valid string"),
+                                };
+                                return Ok(vec![(
+                                    downstream_id,
+                                    Mining::OpenMiningChannelError(
+                                        open_extended_mining_channel_error,
+                                    ),
+                                )
+                                    .into()]);
+                            }
+                        };
+
                         let channel_id = downstream_data
                             .channel_id_factory
                             .fetch_add(1, Ordering::SeqCst);
@@ -435,11 +505,44 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             // future extended job
                             // and the SetNewPrevHash message
                         } else {
+                            let coinbase_script = match payout_mode {
+                                PayoutMode::Solo(payout_address) => {
+                                    let descriptor = format!("addr({})", payout_address);
+                                    match CoinbaseRewardScript::from_descriptor(&descriptor) {
+                                        Ok(script) => script,
+                                        Err(e) => {
+                                            error!("Invalid solo payout address '{}': {:?}", payout_address, e);
+                                            let open_extended_mining_channel_error = OpenMiningChannelError {
+                                                request_id,
+                                                error_code: "invalid-payout-address"
+                                                    .to_string()
+                                                    .try_into()
+                                                    .expect("error code must be valid string"),
+                                            };
+                                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_extended_mining_channel_error)).into()]);
+                                        }
+                                    }
+                                }
+                                PayoutMode::Donate(_percentage, _payout_address) => {
+                                            let open_extended_mining_channel_error = OpenMiningChannelError {
+                                                request_id,
+                                                error_code: "partial-donation-not-implemented-yet"
+                                                    .to_string()
+                                                    .try_into()
+                                                    .expect("error code must be valid string"),
+                                            };
+                                            error!("Partial donation mode is not available yet. Sending {open_extended_mining_channel_error}");
+                                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_extended_mining_channel_error)).into()]);
+
+                                }
+                                PayoutMode::Pool => self.coinbase_reward_script.clone(),
+                            };
+
                             let pool_coinbase_output = TxOut {
                                 value: Amount::from_sat(
                                     last_future_template.coinbase_tx_value_remaining,
                                 ),
-                                script_pubkey: self.coinbase_reward_script.script_pubkey(),
+                                script_pubkey: coinbase_script.script_pubkey(),
                             };
 
                             extended_channel.on_new_template(
