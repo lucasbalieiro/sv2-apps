@@ -84,4 +84,30 @@ Run the Pool (example using hosted Sv2 TP):
 ```bash
 cd pool-apps/pool
 cargo run -- -c config-examples/pool-config-hosted-sv2-tp-example.toml
-``` 
+```
+
+## Solo Mining Mode
+
+Enable solo mining by adding to your config:
+```toml
+solo_mining_mode = true
+```
+
+### User Identity Patterns
+
+Miners must specify their payout mode via `user_identity`:
+
+| Pattern | Mode | Description |
+|---------|------|-------------|
+| `sri/donate/worker_name` | Pool | Full reward goes to pool |
+| `sri/solo/payout_address/worker_name` | Solo | Full reward goes to miner's address |
+| `sri/donate/percentage/payout_address/worker_name` | Donate | Pool gets %, miner gets remainder *(not yet implemented)* |
+
+### Error Scenarios
+
+| Error Code | Cause |
+|------------|-------|
+| `invalid-user-identity` | Pattern doesn't match expected format |
+| `invalid-payout-address` | Bitcoin address is invalid |
+
+When `solo_mining_mode = false`, any user_identity is accepted (pool mode). 
