@@ -16,6 +16,11 @@ server_id = 1
 # Pool signature (string to be included in coinbase tx)
 pool_signature = "Stratum V2 SRI Pool"
 
+# Solo mining mode: when enabled, users can specify their payout address via user_identity.
+# Pattern: sri/solo/<payout_address>/<worker_name>
+# If not enabled or pattern doesn't match, rewards go to the pool's coinbase_reward_script.
+solo_mining_mode = false
+
 # Enable this option to set a predefined log file path.
 # When enabled, logs will always be written to this file.
 # The CLI option --log-file (or -f) will override this setting if provided.

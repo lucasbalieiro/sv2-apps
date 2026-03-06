@@ -45,6 +45,7 @@ pub struct PoolConfig {
     monitoring_address: Option<SocketAddr>,
     #[serde(default = "default_monitoring_cache_refresh_secs")]
     monitoring_cache_refresh_secs: u64,
+    solo_mining_mode: bool,
 }
 
 fn default_monitoring_cache_refresh_secs() -> u64 {
@@ -85,6 +86,7 @@ impl PoolConfig {
             required_extensions,
             monitoring_address: None,
             monitoring_cache_refresh_secs: 15,
+            solo_mining_mode: false,
         }
     }
 
@@ -179,6 +181,11 @@ impl PoolConfig {
     /// Returns the monitoring cache refresh interval in seconds.
     pub fn monitoring_cache_refresh_secs(&self) -> u64 {
         self.monitoring_cache_refresh_secs
+    }
+
+    /// Returns whether solo mining mode is enabled.
+    pub fn solo_mining_mode(&self) -> bool {
+        self.solo_mining_mode
     }
 }
 
