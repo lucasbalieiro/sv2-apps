@@ -121,6 +121,7 @@ pub async fn start_pool(
     template_provider_config: TemplateProviderType,
     supported_extensions: Vec<u16>,
     required_extensions: Vec<u16>,
+    solo_mining_mode: bool,
 ) -> (PoolSv2, SocketAddr) {
     use pool_sv2::config::PoolConfig;
     let listening_address = get_available_address();
@@ -154,6 +155,7 @@ pub async fn start_pool(
         1,
         supported_extensions,
         required_extensions,
+        solo_mining_mode,
     );
     let pool = PoolSv2::new(config);
     let pool_clone = pool.clone();
@@ -162,6 +164,20 @@ pub async fn start_pool(
     });
     tokio::time::sleep(Duration::from_secs(1)).await;
     (pool, listening_address)
+}
+
+pub async fn start_pool_with_solo_mining(
+    template_provider_config: TemplateProviderType,
+    supported_extensions: Vec<u16>,
+    required_extensions: Vec<u16>,
+) -> (PoolSv2, SocketAddr) {
+    start_pool(
+        template_provider_config,
+        supported_extensions,
+        required_extensions,
+        true,
+    )
+    .await
 }
 
 pub fn start_template_provider(

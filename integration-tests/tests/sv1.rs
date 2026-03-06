@@ -7,7 +7,7 @@ use sv1_sniffer::SV1MessageFilter;
 async fn test_basic_sv1() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (translator, tproxy_addr) =
         start_sv2_translator(&[pool_addr], false, vec![], vec![], None).await;
     let (sniffer_sv1, sniffer_sv1_addr) = start_sv1_sniffer(tproxy_addr);
@@ -47,7 +47,7 @@ async fn test_sniffer_sv1_wait_and_assert() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     tp.fund_wallet().expect("Failed to fund wallet");
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (translator, tproxy_addr) =
         start_sv2_translator(&[pool_addr], false, vec![], vec![], None).await;
     let (sniffer_sv1, sniffer_sv1_addr) = start_sv1_sniffer(tproxy_addr);

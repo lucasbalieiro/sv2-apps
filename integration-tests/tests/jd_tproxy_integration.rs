@@ -5,7 +5,7 @@ use stratum_apps::stratum_core::{common_messages_sv2::*, mining_sv2::*};
 async fn jd_non_aggregated_tproxy_integration() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (jdc_pool_sniffer, jdc_pool_sniffer_addr) =
         start_sniffer("0", pool_addr, false, vec![], None);
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
@@ -81,7 +81,7 @@ async fn jd_non_aggregated_tproxy_integration() {
 async fn jd_aggregated_tproxy_integration() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (jdc_pool_sniffer, jdc_pool_sniffer_addr) =
         start_sniffer("0", pool_addr, false, vec![], None);
     let (_jds, jds_addr) = start_jds(tp.rpc_info());

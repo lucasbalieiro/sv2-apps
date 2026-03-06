@@ -23,7 +23,7 @@ async fn success_pool_template_provider_connection() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let (sniffer, sniffer_addr) = start_sniffer("", tp_addr, true, vec![], None);
-    let (pool, _) = start_pool(sv2_tp_config(sniffer_addr), vec![], vec![]).await;
+    let (pool, _) = start_pool(sv2_tp_config(sniffer_addr), vec![], vec![], false).await;
     // here we assert that the downstream(pool in this case) have sent `SetupConnection` message
     // with the correct parameters, protocol, flags, min_version and max_version.  Note that the
     // macro can take any number of arguments after the message argument, but the order is
@@ -101,7 +101,8 @@ async fn header_timestamp_value_assertion_in_new_extended_mining_job() {
         "header_timestamp_value_assertion_in_new_extended_mining_job tp_pool sniffer";
     let (tp_pool_sniffer, tp_pool_sniffer_addr) =
         start_sniffer(tp_pool_sniffer_identifier, tp_addr, false, vec![], None);
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_pool_sniffer_addr), vec![], vec![]).await;
+    let (pool, pool_addr) =
+        start_pool(sv2_tp_config(tp_pool_sniffer_addr), vec![], vec![], false).await;
     let pool_translator_sniffer_identifier =
         "header_timestamp_value_assertion_in_new_extended_mining_job pool_translator sniffer";
     let (pool_translator_sniffer, pool_translator_sniffer_addr) = start_sniffer(
@@ -184,7 +185,7 @@ async fn header_timestamp_value_assertion_in_new_extended_mining_job() {
 async fn pool_standard_channel_receives_share() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (sniffer, sniffer_addr) = start_sniffer("A", pool_addr, false, vec![], None);
     start_mining_device_sv2(sniffer_addr, None, None, None, 1, None, true);
     sniffer
@@ -241,7 +242,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (pool_jdc_sniffer, pool_jdc_sniffer_addr) =
         start_sniffer("pool_jdc", pool_addr, false, vec![], None);
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
@@ -363,7 +364,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
 async fn pool_reject_setup_connection_with_non_mining_protocol() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let endpoint_host = "127.0.0.1".to_string().into_bytes().try_into().unwrap();
     let vendor = String::new().try_into().unwrap();
     let hardware_version = String::new().try_into().unwrap();
@@ -430,7 +431,7 @@ async fn pool_group_extended_channels() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", pool_addr, false, vec![], None);
 
@@ -596,7 +597,7 @@ async fn pool_group_standard_channels() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", pool_addr, false, vec![], None);
 
@@ -774,7 +775,7 @@ async fn pool_require_standard_jobs_set_does_not_group_standard_channels() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", pool_addr, false, vec![], None);
 
@@ -921,5 +922,260 @@ async fn pool_require_standard_jobs_set_does_not_group_standard_channels() {
             "Channel ID must be different from the group channel ID"
         );
     }
+    pool.shutdown().await;
+}
+
+// Test solo mining mode with standard channel - valid donate pattern
+#[tokio::test]
+async fn pool_solo_mining_mode_standard_donate() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, pool_addr) =
+        start_pool_with_solo_mining(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (sniffer, sniffer_addr) = start_sniffer("solo_test", pool_addr, false, vec![], None);
+
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
+    let send_to_pool = mock_downstream.start().await;
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    // Open standard channel with sri/donate/worker
+    let open_standard_channel = AnyMessage::Mining(Mining::OpenStandardMiningChannel(
+        OpenStandardMiningChannel {
+            request_id: 1u32.into(),
+            user_identity: b"sri/donate/testworker".to_vec().try_into().unwrap(),
+            nominal_hash_rate: 1000.0,
+            max_target: vec![0xff; 32].try_into().unwrap(),
+        },
+    ));
+    send_to_pool.send(open_standard_channel).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
+    pool.shutdown().await;
+}
+
+// Test solo mining mode with standard channel - valid solo pattern
+#[tokio::test]
+async fn pool_solo_mining_mode_standard_solo() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, pool_addr) =
+        start_pool_with_solo_mining(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (sniffer, sniffer_addr) = start_sniffer("solo_test", pool_addr, false, vec![], None);
+
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
+    let send_to_pool = mock_downstream.start().await;
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    // Open standard channel with sri/solo/<valid_btc_addr>/worker
+    let open_standard_channel = AnyMessage::Mining(Mining::OpenStandardMiningChannel(
+        OpenStandardMiningChannel {
+            request_id: 1u32.into(),
+            user_identity: b"sri/solo/tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8/testworker"
+                .to_vec()
+                .try_into()
+                .unwrap(),
+            nominal_hash_rate: 1000.0,
+            max_target: vec![0xff; 32].try_into().unwrap(),
+        },
+    ));
+    send_to_pool.send(open_standard_channel).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
+    pool.shutdown().await;
+}
+
+// Test solo mining mode - invalid user identity should be rejected
+#[tokio::test]
+async fn pool_solo_mining_mode_invalid_user_identity() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, pool_addr) =
+        start_pool_with_solo_mining(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (sniffer, sniffer_addr) = start_sniffer("solo_test", pool_addr, false, vec![], None);
+
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
+    let send_to_pool = mock_downstream.start().await;
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    // Open standard channel with invalid user_identity (sri/invalid/...)
+    let open_standard_channel = AnyMessage::Mining(Mining::OpenStandardMiningChannel(
+        OpenStandardMiningChannel {
+            request_id: 1u32.into(),
+            user_identity: b"sri/invalid/worker".to_vec().try_into().unwrap(),
+            nominal_hash_rate: 1000.0,
+            max_target: vec![0xff; 32].try_into().unwrap(),
+        },
+    ));
+    send_to_pool.send(open_standard_channel).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
+        )
+        .await;
+
+    let error_msg = sniffer.next_message_from_upstream();
+    let error = match error_msg {
+        Some((_, AnyMessage::Mining(Mining::OpenMiningChannelError(msg)))) => msg,
+        msg => panic!("Expected OpenMiningChannelError, got: {:?}", msg),
+    };
+
+    assert_eq!(
+        error.error_code.as_utf8_or_hex(),
+        "invalid-user-identity",
+        "Error code should be invalid-user-identity"
+    );
+
+    pool.shutdown().await;
+}
+
+// Test solo mining mode with extended channel - valid patterns
+#[tokio::test]
+async fn pool_solo_mining_mode_extended() {
+    start_tracing();
+    let sv2_interval = Some(5);
+    let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
+    tp.fund_wallet().unwrap();
+    let (pool, pool_addr) =
+        start_pool_with_solo_mining(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (sniffer, sniffer_addr) = start_sniffer("solo_ext_test", pool_addr, false, vec![], None);
+
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
+    let send_to_pool = mock_downstream.start().await;
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    // Test valid donate pattern
+    let open_extended_channel = AnyMessage::Mining(Mining::OpenExtendedMiningChannel(
+        OpenExtendedMiningChannel {
+            request_id: 1u32.into(),
+            user_identity: b"sri/donate/testworker".to_vec().try_into().unwrap(),
+            nominal_hash_rate: 1000.0,
+            max_target: vec![0xff; 32].try_into().unwrap(),
+            min_extranonce_size: 0,
+        },
+    ));
+    send_to_pool.send(open_extended_channel).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
+    // Test valid solo pattern
+    let open_extended_channel_solo = AnyMessage::Mining(Mining::OpenExtendedMiningChannel(
+        OpenExtendedMiningChannel {
+            request_id: 2u32.into(),
+            user_identity: b"sri/solo/tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8/testworker"
+                .to_vec()
+                .try_into()
+                .unwrap(),
+            nominal_hash_rate: 1000.0,
+            max_target: vec![0xff; 32].try_into().unwrap(),
+            min_extranonce_size: 0,
+        },
+    ));
+    send_to_pool.send(open_extended_channel_solo).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
+    shutdown_all!(pool);
+}
+
+// Test solo mining mode disabled - any user_identity should work
+#[tokio::test]
+async fn pool_solo_mining_mode_disabled() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
+    let (sniffer, sniffer_addr) =
+        start_sniffer("solo_disabled_test", pool_addr, false, vec![], None);
+
+    let mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    );
+    let send_to_pool = mock_downstream.start().await;
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    // Any user_identity should work when solo_mining_mode is false
+    let open_standard_channel = AnyMessage::Mining(Mining::OpenStandardMiningChannel(
+        OpenStandardMiningChannel {
+            request_id: 1u32.into(),
+            user_identity: b"any_random_user_identity".to_vec().try_into().unwrap(),
+            nominal_hash_rate: 1000.0,
+            max_target: vec![0xff; 32].try_into().unwrap(),
+        },
+    ));
+    send_to_pool.send(open_standard_channel).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
+        )
+        .await;
+
     pool.shutdown().await;
 }

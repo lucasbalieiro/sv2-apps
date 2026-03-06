@@ -28,8 +28,13 @@ async fn test_extension_negotiation_with_tlv_in_submit_shares() {
 
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     // Start pool with extension 0x0002 support
-    let (pool, pool_addr) =
-        start_pool(sv2_tp_config(tp_addr), supported_extensions.clone(), vec![]).await;
+    let (pool, pool_addr) = start_pool(
+        sv2_tp_config(tp_addr),
+        supported_extensions.clone(),
+        vec![],
+        false,
+    )
+    .await;
     let (pool_translator_sniffer, pool_translator_sniffer_addr) =
         start_sniffer("pool-translator", pool_addr, false, vec![], None);
     // Start translator with extension 0x0002 support and user_identity configured

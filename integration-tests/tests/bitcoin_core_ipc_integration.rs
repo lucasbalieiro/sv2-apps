@@ -15,6 +15,7 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
         ipc_config(bitcoin_core.data_dir().clone(), bitcoin_core.is_signet()),
         vec![],
         vec![],
+        false,
     )
     .await;
     let (translator, tproxy_addr) =
@@ -45,7 +46,7 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let current_block_hash = tp.get_best_block_hash().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let ignore_push_solution =
         IgnoreMessage::new(MessageDirection::ToUpstream, MESSAGE_TYPE_PUSH_SOLUTION);

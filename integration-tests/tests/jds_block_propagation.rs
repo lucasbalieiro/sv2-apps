@@ -11,7 +11,7 @@ async fn propagated_from_jds_to_tp() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let current_block_hash = tp.get_best_block_hash().unwrap();
-    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![]).await;
+    let (pool, pool_addr) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
     let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (jdc_jds_sniffer, jdc_jds_sniffer_addr) = start_sniffer("0", jds_addr, false, vec![], None);
     let ignore_submit_solution =

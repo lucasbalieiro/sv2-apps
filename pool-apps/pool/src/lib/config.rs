@@ -69,6 +69,7 @@ impl PoolConfig {
         server_id: u16,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
+        solo_mining_mode: bool,
     ) -> Self {
         Self {
             listen_address: pool_connection.listen_address,
@@ -86,7 +87,7 @@ impl PoolConfig {
             required_extensions,
             monitoring_address: None,
             monitoring_cache_refresh_secs: 15,
-            solo_mining_mode: false,
+            solo_mining_mode,
         }
     }
 
