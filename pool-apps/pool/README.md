@@ -101,6 +101,7 @@ Miners must specify their payout mode via `user_identity`:
 |---------|------|-------------|
 | `sri/donate/worker_name` | Pool | Full reward goes to pool |
 | `sri/solo/payout_address/worker_name` | Solo | Full reward goes to miner's address |
+| `bc1qtzqxqaxyy6lda2fhdtp5dp0v56vlf6g0tljy2x` | Solo | Full reward goes to miner's address |
 | `sri/donate/percentage/payout_address/worker_name` | Donate | Pool gets %, miner gets remainder *(not yet implemented)* |
 
 ### Error Scenarios

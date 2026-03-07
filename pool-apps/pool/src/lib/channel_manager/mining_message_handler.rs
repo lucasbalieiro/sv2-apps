@@ -147,7 +147,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             let payout_mode = match validate_user_identity(&user_identity, self.solo_mining_mode) {
                 Ok(mode) => mode,
                 Err(_) => {
-                    error!("Invalid user_identity '{}': must be 'sri/donate/<worker_name>' or 'sri/solo/<payout_address>/<worker_name>'", user_identity);
+                    error!("Invalid user_identity '{}': must be 'sri/donate/<worker_name>', 'sri/solo/<payout_address>/<worker_name>' or `<bitcoin_address>`", user_identity);
                     let open_standard_mining_channel_error = OpenMiningChannelError {
                         request_id,
                         error_code: "invalid-user-identity"
@@ -358,7 +358,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         let payout_mode = match validate_user_identity(&user_identity, self.solo_mining_mode) {
                             Ok(mode) => mode,
                             Err(_) => {
-                                error!("Invalid user_identity '{}': must be 'sri/donate/<worker_name>' or 'sri/solo/<payout_address>/<worker_name>'", user_identity);
+                                error!("Invalid user_identity '{}': must be 'sri/donate/<worker_name>', 'sri/solo/<payout_address>/<worker_name>' or <bitcoin_address>", user_identity);
                                 let open_extended_mining_channel_error = OpenMiningChannelError {
                                     request_id,
                                     error_code: "invalid-user-identity"

@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use stratum_apps::{
+    config_helpers::CoinbaseRewardScript,
     stratum_core::{
         binary_sv2::Str0255,
         common_messages_sv2::{Protocol, SetupConnection},
@@ -116,6 +117,11 @@ pub fn validate_user_identity(
         return Ok(PayoutMode::Pool);
     }
 
+    let descriptor = format!("addr({user_identity})");
+    if CoinbaseRewardScript::from_descriptor(&descriptor).is_ok() {
+        return Ok(PayoutMode::Solo(user_identity.to_string()));
+    }
+
     let parts: Vec<&str> = user_identity.split('/').collect();
 
     if parts.is_empty() || parts[0] != "sri" || parts.len() < 2 {
@@ -206,6 +212,10 @@ mod tests {
         assert!(matches!(
             validate_user_identity("sri/solo/tb1qxyz/worker/subworker", true),
             Ok(PayoutMode::Solo(addr)) if addr == "tb1qxyz"
+        ));
+        assert!(matches!(
+            validate_user_identity("bc1qtzqxqaxyy6lda2fhdtp5dp0v56vlf6g0tljy2x", true),
+            Ok(PayoutMode::Solo(addr)) if addr == "bc1qtzqxqaxyy6lda2fhdtp5dp0v56vlf6g0tljy2x"
         ));
     }
 
