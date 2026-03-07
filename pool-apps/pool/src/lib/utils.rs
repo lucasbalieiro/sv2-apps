@@ -106,10 +106,12 @@ pub enum PayoutMode {
 /// - `sri/donate/worker_name` -> Pool mode (full donation to pool)
 /// - `sri/donate/<percentage>/<payout_address>/<worker_name>` -> Donate mode (partial donation)
 /// - `sri/solo/<payout_address>/<worker_name>` -> Solo mode (full reward to miner)
+/// - `bc1qtzqxqaxyy6lda2fhdtp5dp0v56vlf6g0tljy2x` -> Solo mode
+#[allow(clippy::result_large_err)]
 pub fn validate_user_identity(
     user_identity: &str,
     solo_mining_mode: bool,
-) -> Result<PayoutMode, ()> {
+) -> Result<PayoutMode, PoolErrorKind> {
     if !solo_mining_mode {
         return Ok(PayoutMode::Pool);
     }
@@ -117,7 +119,10 @@ pub fn validate_user_identity(
     let parts: Vec<&str> = user_identity.split('/').collect();
 
     if parts.is_empty() || parts[0] != "sri" || parts.len() < 2 {
-        return Err(());
+        return Err(PoolErrorKind::PayoutModeError(
+            "solo_mining_mode is enabled but the user_identity is not following the pattern"
+                .to_string(),
+        ));
     }
 
     match parts[1] {
@@ -125,23 +130,34 @@ pub fn validate_user_identity(
             if parts.len() >= 3 && !parts[2].is_empty() {
                 Ok(PayoutMode::Solo(parts[2].to_string()))
             } else {
-                Err(())
+                Err(PoolErrorKind::PayoutModeError("solo_mining_mode is enabled but the user_identity is not following the pattern".to_string()))
             }
         }
         "donate" => {
             if parts.len() == 3 {
                 Ok(PayoutMode::Pool)
             } else if parts.len() >= 5 && !parts[3].is_empty() {
-                let percentage: u8 = parts[2].parse().map_err(|_| ())?;
+                let percentage: u8 = parts[2].parse().map_err(|_| {
+                    PoolErrorKind::PayoutModeError(
+                        "Unable to parse the donation percentage from the user_identity"
+                            .to_string(),
+                    )
+                })?;
                 if percentage > 100 {
-                    return Err(());
+                    return Err(PoolErrorKind::PayoutModeError(
+                        "solo_mining_mode is enabled but the donation percentage exceeds 100%"
+                            .to_string(),
+                    ));
                 }
                 Ok(PayoutMode::Donate(percentage, parts[3].to_string()))
             } else {
-                Err(())
+                Err(PoolErrorKind::PayoutModeError("solo_mining_mode is enabled but the user_identity is not following the pattern".to_string()))
             }
         }
-        _ => Err(()),
+        _ => Err(PoolErrorKind::PayoutModeError(
+            "solo_mining_mode is enabled but the user_identity is not following the pattern"
+                .to_string(),
+        )),
     }
 }
 
