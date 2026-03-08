@@ -38,10 +38,13 @@ async fn jds_ask_for_missing_transactions() {
             MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
         )
         .await;
+    // we're using two separate TPs, which are disconnected
+    // we only funding wallet on tp_2, so utxo set on tp_1 is not compatible
+    // with the mempool tx and the job declaration is expected to fail
     sniffer
         .wait_for_message_type(
             MessageDirection::ToDownstream,
-            MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS,
+            MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR,
         )
         .await;
     shutdown_all!(translator, jdc, pool);
