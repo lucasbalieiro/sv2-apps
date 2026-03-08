@@ -5,11 +5,11 @@ services:
     env_file:
       - docker_env
     volumes:
-      - ./config/pool-config.toml.template:/app/pool-config.toml.template:ro
+      - ./config/pool-jds-config.toml.template:/app/pool-jds-config.toml.template:ro
       - "${BITCOIN_SOCKET_PATH?}:/root/.bitcoin/node.sock"
     entrypoint: >
       sh -c '
-        envsubst < /app/pool-config.toml.template> /app/pool-config.toml &&
+        envsubst < /app/pool-jds-config.toml.template> /app/pool-config.toml &&
         exec /app/pool_sv2
       '
     ports:
