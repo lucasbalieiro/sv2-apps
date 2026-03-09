@@ -52,6 +52,7 @@ macro_rules! shutdown_all {
 
 const SHARES_PER_MINUTE: f32 = 120.0;
 
+pub const POOL_COINBASE_REWARD_ADDRESS: &str = "tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8";
 const POOL_COINBASE_REWARD_DESCRIPTOR: &str = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)";
 const JDS_COINBASE_REWARD_DESCRIPTOR: &str = POOL_COINBASE_REWARD_DESCRIPTOR;
 const JDC_COINBASE_REWARD_DESCRIPTOR: &str = "addr(tb1qpusf5256yxv50qt0pm0tue8k952fsu5lzsphft)";
