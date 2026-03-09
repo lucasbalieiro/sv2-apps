@@ -97,6 +97,7 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
                 .assert_message_not_present(
                     MessageDirection::ToUpstream,
                     MESSAGE_TYPE_PUSH_SOLUTION,
+                    std::time::Duration::from_secs(1),
                 )
                 .await;
             shutdown_all!(pool, jdc, translator);

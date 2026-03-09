@@ -248,9 +248,12 @@ mod tests {
     use super::*;
     use crate::{interceptor::MessageDirection, start_sniffer};
     use std::net::TcpListener;
-    use stratum_apps::stratum_core::common_messages_sv2::{
-        MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
-        MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+    use stratum_apps::stratum_core::{
+        common_messages_sv2::{
+            MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        },
+        mining_sv2::MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
     };
 
     #[tokio::test]
@@ -294,6 +297,69 @@ mod tests {
                 MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
             )
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_assert_message_not_present() {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let upstream_socket_addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+        let _mock_upstream = MockUpstream::new(
+            upstream_socket_addr,
+            WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+        )
+        .start()
+        .await;
+
+        let (sniffer, sniffer_addr) = start_sniffer(
+            "assert_not_present_test",
+            upstream_socket_addr,
+            false,
+            vec![],
+            None,
+        );
+
+        let _send_to_upstream = MockDownstream::new(
+            sniffer_addr,
+            WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+        )
+        .start()
+        .await;
+
+        sniffer
+            .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+            .await;
+
+        // SetupConnection was sent, so has_message_type should find it
+        assert!(
+            sniffer.has_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        );
+
+        // OpenExtendedMiningChannel was never sent, so assert_message_not_present should return true
+        assert!(
+            sniffer
+                .assert_message_not_present(
+                    MessageDirection::ToUpstream,
+                    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                    std::time::Duration::from_secs(1),
+                )
+                .await
+        );
+
+        // SetupConnection IS present, so assert_message_not_present should return false
+        assert!(
+            !sniffer
+                .assert_message_not_present(
+                    MessageDirection::ToUpstream,
+                    MESSAGE_TYPE_SETUP_CONNECTION,
+                    std::time::Duration::from_millis(200),
+                )
+                .await
+        );
     }
 
     #[tokio::test]

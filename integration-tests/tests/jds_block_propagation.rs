@@ -36,7 +36,11 @@ async fn propagated_from_jds_to_tp() {
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_PUSH_SOLUTION)
         .await;
     jdc_tp_sniffer
-        .assert_message_not_present(MessageDirection::ToUpstream, MESSAGE_TYPE_SUBMIT_SOLUTION)
+        .assert_message_not_present(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_SUBMIT_SOLUTION,
+            std::time::Duration::from_secs(1),
+        )
         .await;
     let new_block_hash = tp.get_best_block_hash().unwrap();
     assert_ne!(current_block_hash, new_block_hash);

@@ -199,23 +199,31 @@ impl<'a> Sniffer<'a> {
         }
     }
 
-    /// Assert message is not present in the queue
+    /// Assert message is not present in the queue over a given duration.
     ///
-    /// Will return true if the message is not present in the queue, false otherwise.
+    /// Polls the queue every 100ms for `deadline`, returning `false` immediately
+    /// if the message appears at any point. Returns `true` only after the full duration
+    /// passes with no match.
+    ///
+    /// The queue should be cleared before calling this to avoid matching stale messages.
+    /// Use [`Sniffer::wait_for_message_type_and_clean_queue`] or [`Sniffer::clean_queue`]
+    /// to clear the queue first.
     pub async fn assert_message_not_present(
         &self,
         message_direction: MessageDirection,
         message_type: u8,
+        deadline: std::time::Duration,
     ) -> bool {
-        let has_message_type = match message_direction {
-            MessageDirection::ToDownstream => {
-                self.messages_from_upstream.has_message_type(message_type)
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < deadline {
+            if self.has_message_type(message_direction, message_type) {
+                return false;
             }
-            MessageDirection::ToUpstream => {
-                self.messages_from_downstream.has_message_type(message_type)
-            }
-        };
-        !has_message_type
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        true
     }
 
     /// Similar to `[Sniffer::wait_for_message_type]` but also removes the messages from the queue
@@ -268,11 +276,7 @@ impl<'a> Sniffer<'a> {
     }
 
     /// Checks whether the sniffer has received a message of the specified type.
-    pub fn includes_message_type(
-        &self,
-        message_direction: MessageDirection,
-        message_type: u8,
-    ) -> bool {
+    pub fn has_message_type(&self, message_direction: MessageDirection, message_type: u8) -> bool {
         match message_direction {
             MessageDirection::ToDownstream => {
                 self.messages_from_upstream.has_message_type(message_type)

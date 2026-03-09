@@ -417,6 +417,7 @@ async fn aggregated_translator_correctly_deals_with_group_channels() {
             .assert_message_not_present(
                 MessageDirection::ToUpstream,
                 MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                std::time::Duration::from_secs(1),
             )
             .await;
     }
@@ -1327,6 +1328,7 @@ async fn non_aggregated_translator_correctly_deals_with_close_channel_message() 
         .assert_message_not_present(
             MessageDirection::ToUpstream,
             MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+            std::time::Duration::from_secs(1),
         )
         .await;
     translator.shutdown().await;

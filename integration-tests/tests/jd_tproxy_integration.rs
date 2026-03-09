@@ -108,13 +108,16 @@ async fn jd_aggregated_tproxy_integration() {
                 MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
             )
             .await;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        tproxy_jdc_sniffer
-            .assert_message_not_present(
-                MessageDirection::ToUpstream,
-                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
-            )
-            .await;
+        assert!(
+            tproxy_jdc_sniffer
+                .assert_message_not_present(
+                    MessageDirection::ToUpstream,
+                    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                    std::time::Duration::from_secs(2),
+                )
+                .await,
+            "Expected only one OpenExtendedMiningChannel but found another one."
+        );
     }
 
     jdc_pool_sniffer

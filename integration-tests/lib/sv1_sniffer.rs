@@ -171,7 +171,7 @@ impl SnifferSV1 {
         F: FnMut(sv1_api::Message),
     {
         let f = filter.inner();
-        self.wait_for_message(&[&f], direction.clone()).await;
+        self.wait_for_message(&[&f], direction).await;
 
         let aggregator = match direction {
             MessageDirection::ToUpstream => &self.messages_from_downstream,

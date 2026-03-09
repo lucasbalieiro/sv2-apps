@@ -322,6 +322,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
                 MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "Pool should NOT send future NewExtendedMiningJob messages to JDC"
@@ -333,6 +334,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
                 MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "Pool should NOT send SetNewPrevHash messages to JDC"
@@ -349,6 +351,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
                 MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "Pool should NOT send non-future NewExtendedMiningJob messages to JDC"
@@ -537,7 +540,8 @@ async fn pool_group_extended_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no extra NewExtendedMiningJob messages"
@@ -580,7 +584,8 @@ async fn pool_group_extended_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_SET_NEW_PREV_HASH
+                MESSAGE_TYPE_SET_NEW_PREV_HASH,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no second SetNewPrevHash message"
@@ -704,7 +709,8 @@ async fn pool_group_standard_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no second NewMiningJob message"
@@ -716,6 +722,7 @@ async fn pool_group_standard_channels() {
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
                 MESSAGE_TYPE_NEW_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no NewMiningJob message"
@@ -759,6 +766,7 @@ async fn pool_group_standard_channels() {
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
                 MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no extra SetNewPrevHash messages"
