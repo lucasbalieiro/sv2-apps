@@ -11,7 +11,7 @@ use async_channel::{Receiver, Sender};
 use bitcoin_core_sv2::CancellationToken;
 use core::sync::atomic::Ordering;
 use stratum_apps::{
-    coinbase_output_constraints::coinbase_output_constraints_message,
+    coinbase_output_constraints::coinbase_output_constraints_message_with_offset,
     config_helpers::CoinbaseRewardScript,
     custom_mutex::Mutex,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
@@ -631,7 +631,7 @@ impl ChannelManager {
         &self,
         coinbase_outputs: Vec<TxOut>,
     ) -> PoolResult<(), error::ChannelManager> {
-        let msg = coinbase_output_constraints_message(coinbase_outputs);
+        let msg = coinbase_output_constraints_message_with_offset(coinbase_outputs);
 
         self.channel_manager_channel
             .tp_sender
