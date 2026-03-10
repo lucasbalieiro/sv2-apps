@@ -1,3 +1,8 @@
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
+
 use stratum_apps::{
     key_utils::Secp256k1PublicKey,
     stratum_core::{
@@ -135,6 +140,44 @@ pub fn proxy_extranonce_prefix_len(
     downstream_rollable_extranonce_size: usize,
 ) -> usize {
     channel_rollable_extranonce_size - downstream_rollable_extranonce_size
+}
+
+/// Tracks the state of the single upstream extended channel in aggregated mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregatedState {
+    /// No upstream channel has been opened yet.
+    NoChannel = 0,
+    /// An `OpenExtendedMiningChannel` has been sent and we are waiting for the success response.
+    Pending = 1,
+    /// The upstream channel is open and ready to accept new downstream connections directly.
+    Connected = 2,
+}
+
+/// Atomic wrapper around `UpstreamState` for lock-free state transitions.
+#[derive(Clone, Debug)]
+pub struct AtomicAggregatedState {
+    inner: Arc<AtomicU8>,
+}
+
+impl AtomicAggregatedState {
+    pub fn new(state: AggregatedState) -> Self {
+        Self {
+            inner: Arc::new(AtomicU8::new(state as u8)),
+        }
+    }
+
+    pub fn get(&self) -> AggregatedState {
+        match self.inner.load(Ordering::SeqCst) {
+            0 => AggregatedState::NoChannel,
+            1 => AggregatedState::Pending,
+            2 => AggregatedState::Connected,
+            v => panic!("Invalid UpstreamState value: {v}"),
+        }
+    }
+
+    pub fn set(&self, state: AggregatedState) {
+        self.inner.store(state as u8, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug)]
