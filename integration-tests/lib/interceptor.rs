@@ -3,7 +3,7 @@ use std::fmt;
 use crate::types::MsgType;
 use stratum_apps::stratum_core::parsers_sv2::AnyMessage;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageDirection {
     ToDownstream,
     ToUpstream,

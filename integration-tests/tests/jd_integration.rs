@@ -405,7 +405,8 @@ async fn jdc_group_extended_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no extra NewExtendedMiningJob messages"
@@ -449,7 +450,8 @@ async fn jdc_group_extended_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_SET_NEW_PREV_HASH
+                MESSAGE_TYPE_SET_NEW_PREV_HASH,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no extra SetNewPrevHash messages"
@@ -583,7 +585,8 @@ async fn jdc_group_standard_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no extra NewExtendedMiningJob messages"
@@ -592,7 +595,11 @@ async fn jdc_group_standard_channels() {
     // make sure there's no NewMiningJob message
     assert!(
         sniffer
-            .assert_message_not_present(MessageDirection::ToDownstream, MESSAGE_TYPE_NEW_MINING_JOB)
+            .assert_message_not_present(
+                MessageDirection::ToDownstream,
+                MESSAGE_TYPE_NEW_MINING_JOB,
+                std::time::Duration::from_secs(1)
+            )
             .await,
         "There should be no NewMiningJob message"
     );
@@ -635,7 +642,8 @@ async fn jdc_group_standard_channels() {
         sniffer
             .assert_message_not_present(
                 MessageDirection::ToDownstream,
-                MESSAGE_TYPE_SET_NEW_PREV_HASH
+                MESSAGE_TYPE_SET_NEW_PREV_HASH,
+                std::time::Duration::from_secs(1),
             )
             .await,
         "There should be no extra SetNewPrevHash messages"

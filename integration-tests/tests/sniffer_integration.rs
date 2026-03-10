@@ -102,8 +102,7 @@ async fn test_sniffer_interception() {
         0
     );
     assert!(
-        !(sniffer_b
-            .includes_message_type(MessageDirection::ToDownstream, MESSAGE_TYPE_NEW_TEMPLATE))
+        !(sniffer_b.has_message_type(MessageDirection::ToDownstream, MESSAGE_TYPE_NEW_TEMPLATE))
     );
     pool.shutdown().await;
 }
@@ -123,13 +122,13 @@ async fn test_sniffer_wait_for_message_type_with_remove() {
             .await
     );
     assert!(
-        !(sniffer.includes_message_type(
+        !(sniffer.has_message_type(
             MessageDirection::ToDownstream,
             MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS
         ))
     );
     assert!(
-        !(sniffer.includes_message_type(
+        !(sniffer.has_message_type(
             MessageDirection::ToDownstream,
             MESSAGE_TYPE_SET_NEW_PREV_HASH
         ))

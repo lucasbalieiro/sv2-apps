@@ -36,7 +36,11 @@ async fn propagated_from_jdc_to_tp() {
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SUBMIT_SOLUTION)
         .await;
     jdc_jds_sniffer
-        .assert_message_not_present(MessageDirection::ToUpstream, MESSAGE_TYPE_PUSH_SOLUTION)
+        .assert_message_not_present(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_PUSH_SOLUTION,
+            std::time::Duration::from_secs(1),
+        )
         .await;
     let new_block_hash = tp.get_best_block_hash().unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
