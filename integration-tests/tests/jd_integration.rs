@@ -132,6 +132,47 @@ async fn jds_reject_setup_connection_with_non_job_declaration_protocol() {
     shutdown_all!(pool);
 }
 
+// This test verifies that JDS rejects SetupConnection without DECLARE_TX_DATA flag.
+#[tokio::test]
+async fn jds_reject_setup_connection_without_declare_tx_data_flag() {
+    start_tracing();
+    let (tp, _tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, _pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+    let (sniffer, sniffer_addr) = start_sniffer("mock-jds", jds_addr, false, vec![], None);
+    let _mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::JobDeclarationProtocol, 0),
+    )
+    .start()
+    .await;
+
+    sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+        )
+        .await;
+
+    let setup_connection_error = sniffer.next_message_from_upstream();
+    let setup_connection_error = match setup_connection_error {
+        Some((_, AnyMessage::Common(parsers_sv2::CommonMessages::SetupConnectionError(msg)))) => {
+            msg
+        }
+        msg => panic!("Expected SetupConnectionError message, found: {:?}", msg),
+    };
+    assert_eq!(
+        setup_connection_error.error_code.as_utf8_or_hex(),
+        "missing-declare-tx-data-flag",
+        "SetupConnectionError message error code should be missing-declare-tx-data-flag"
+    );
+
+    shutdown_all!(pool);
+}
+
 // This test verifies that JDS does not exit when it receives a `SubmitSolution`
 // while still expecting a `ProvideMissingTransactionsSuccess`.
 //
