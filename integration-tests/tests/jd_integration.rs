@@ -173,6 +173,129 @@ async fn jds_reject_setup_connection_without_declare_tx_data_flag() {
     shutdown_all!(pool);
 }
 
+// This test verifies that JDS rejects DeclareMiningJob when mining_job_token is invalid.
+#[tokio::test]
+async fn jds_reject_declare_mining_job_with_invalid_mining_job_token() {
+    start_tracing();
+    let (tp, _tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, _pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+    let (sniffer, sniffer_addr) = start_sniffer("mock-jds", jds_addr, false, vec![], None);
+    let send_to_jds = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::JobDeclarationProtocol, 0b0001),
+    )
+    .start()
+    .await;
+
+    // complete SetupConnection handshake
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        )
+        .await;
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    // Deliberately send a malformed token (1 byte instead of 8-byte JdToken) to exercise
+    // the decode/parse failure branch before allocation ownership checks.
+    let malformed_token_declare = AnyMessage::JobDeclaration(
+        parsers_sv2::JobDeclaration::DeclareMiningJob(DeclareMiningJob {
+            request_id: 10,
+            mining_job_token: vec![0x01].try_into().unwrap(),
+            version: 0,
+            coinbase_tx_prefix: Vec::<u8>::new().try_into().unwrap(),
+            coinbase_tx_suffix: Vec::<u8>::new().try_into().unwrap(),
+            wtxid_list: Seq064K::new(Vec::new()).unwrap(),
+            excess_data: Vec::<u8>::new().try_into().unwrap(),
+        }),
+    );
+    send_to_jds.send(malformed_token_declare).await.unwrap();
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+        )
+        .await;
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR,
+        )
+        .await;
+
+    // Even with an undecodable token, JDS should respond with a protocol-level error
+    // (not disconnect or panic) so downstream gets an explicit rejection reason.
+    let malformed_token_error = sniffer.next_message_from_upstream();
+    let malformed_token_error = match malformed_token_error {
+        Some((
+            _,
+            AnyMessage::JobDeclaration(parsers_sv2::JobDeclaration::DeclareMiningJobError(msg)),
+        )) => msg,
+        msg => panic!("Expected DeclareMiningJobError message, found: {:?}", msg),
+    };
+    assert_eq!(malformed_token_error.request_id, 10);
+    assert_eq!(
+        malformed_token_error.error_code.as_utf8_or_hex(),
+        "invalid-mining-job-token",
+        "DeclareMiningJobError should use invalid-mining-job-token for malformed token"
+    );
+
+    sniffer.clean_queue(MessageDirection::ToUpstream);
+    sniffer.clean_queue(MessageDirection::ToDownstream);
+
+    // Send a well-formed but never-allocated token to exercise the ownership/allocation
+    // validation branch (distinct from malformed token parsing).
+    let unallocated_token_declare = AnyMessage::JobDeclaration(
+        parsers_sv2::JobDeclaration::DeclareMiningJob(DeclareMiningJob {
+            request_id: 11,
+            mining_job_token: 42_u64.to_le_bytes().to_vec().try_into().unwrap(),
+            version: 0,
+            coinbase_tx_prefix: Vec::<u8>::new().try_into().unwrap(),
+            coinbase_tx_suffix: Vec::<u8>::new().try_into().unwrap(),
+            wtxid_list: Seq064K::new(Vec::new()).unwrap(),
+            excess_data: Vec::<u8>::new().try_into().unwrap(),
+        }),
+    );
+    send_to_jds.send(unallocated_token_declare).await.unwrap();
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+        )
+        .await;
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR,
+        )
+        .await;
+
+    let unallocated_token_error = sniffer.next_message_from_upstream();
+    let unallocated_token_error = match unallocated_token_error {
+        Some((
+            _,
+            AnyMessage::JobDeclaration(parsers_sv2::JobDeclaration::DeclareMiningJobError(msg)),
+        )) => msg,
+        msg => panic!("Expected DeclareMiningJobError message, found: {:?}", msg),
+    };
+    assert_eq!(unallocated_token_error.request_id, 11);
+    assert_eq!(
+        unallocated_token_error.error_code.as_utf8_or_hex(),
+        "invalid-mining-job-token",
+        "DeclareMiningJobError should use invalid-mining-job-token for unallocated token"
+    );
+
+    shutdown_all!(pool);
+}
+
 // This test verifies that JDS does not exit when it receives a `SubmitSolution`
 // while still expecting a `ProvideMissingTransactionsSuccess`.
 //
