@@ -91,6 +91,47 @@ async fn jdc_tp_success_setup() {
     shutdown_all!(translator, jdc, pool);
 }
 
+// This test verifies that JDS rejects SetupConnection with a non-JD protocol.
+#[tokio::test]
+async fn jds_reject_setup_connection_with_non_job_declaration_protocol() {
+    start_tracing();
+    let (tp, _tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, _pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+    let (sniffer, sniffer_addr) = start_sniffer("mock-jds", jds_addr, false, vec![], None);
+    let _mock_downstream = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::TemplateDistributionProtocol, 0),
+    )
+    .start()
+    .await;
+
+    sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+        )
+        .await;
+
+    let setup_connection_error = sniffer.next_message_from_upstream();
+    let setup_connection_error = match setup_connection_error {
+        Some((_, AnyMessage::Common(parsers_sv2::CommonMessages::SetupConnectionError(msg)))) => {
+            msg
+        }
+        msg => panic!("Expected SetupConnectionError message, found: {:?}", msg),
+    };
+    assert_eq!(
+        setup_connection_error.error_code.as_utf8_or_hex(),
+        "unsupported-protocol",
+        "SetupConnectionError message error code should be unsupported-protocol"
+    );
+
+    shutdown_all!(pool);
+}
+
 // This test verifies that JDS does not exit when it receives a `SubmitSolution`
 // while still expecting a `ProvideMissingTransactionsSuccess`.
 //
