@@ -296,6 +296,108 @@ async fn jds_reject_declare_mining_job_with_invalid_mining_job_token() {
     shutdown_all!(pool);
 }
 
+// This test verifies that a SetCustomMiningJob token cannot be reused after a successful
+// SetCustomMiningJob flow has already consumed it.
+#[tokio::test]
+async fn pool_rejects_reused_set_custom_mining_job_token() {
+    start_tracing();
+    let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+
+    // First, run the regular JDC flow and capture one valid SetCustomMiningJob.
+    let (jdc_pool_sniffer, jdc_pool_sniffer_addr) =
+        start_sniffer("jdc-pool", pool_addr, false, vec![], None);
+    let (jdc, jdc_addr, _) = start_jdc(
+        &[(jdc_pool_sniffer_addr, jds_addr)],
+        sv2_tp_config(tp_addr),
+        vec![],
+        vec![],
+        false,
+    );
+    let (translator, tproxy_addr, _) =
+        start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;
+    let (_minerd_process, _minerd_addr) = start_minerd(tproxy_addr, None, None, false).await;
+
+    jdc_pool_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
+        )
+        .await;
+
+    let first_set_custom_mining_job = loop {
+        match jdc_pool_sniffer.next_message_from_downstream() {
+            Some((_, AnyMessage::Mining(Mining::SetCustomMiningJob(msg)))) => break msg,
+            _ => continue,
+        }
+    };
+
+    jdc_pool_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+        )
+        .await;
+
+    // Then, connect a separate mining downstream and replay the exact same SetCustomMiningJob.
+    // Expected result: JDS rejects it as invalid-mining-job-token (token already consumed).
+    let (mock_pool_sniffer, mock_pool_sniffer_addr) =
+        start_sniffer("mock-pool", pool_addr, false, vec![], None);
+    let send_to_pool = MockDownstream::new(
+        mock_pool_sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0),
+    )
+    .start()
+    .await;
+
+    mock_pool_sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        )
+        .await;
+    mock_pool_sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    let replayed_set_custom_mining_job = AnyMessage::Mining(Mining::SetCustomMiningJob(
+        first_set_custom_mining_job.clone(),
+    ));
+    send_to_pool
+        .send(replayed_set_custom_mining_job)
+        .await
+        .unwrap();
+
+    mock_pool_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
+        )
+        .await;
+
+    let set_custom_mining_job_error = loop {
+        match mock_pool_sniffer.next_message_from_upstream() {
+            Some((_, AnyMessage::Mining(Mining::SetCustomMiningJobError(msg)))) => break msg,
+            _ => continue,
+        }
+    };
+    assert_eq!(
+        set_custom_mining_job_error.request_id,
+        first_set_custom_mining_job.request_id
+    );
+    assert_eq!(
+        set_custom_mining_job_error.error_code.as_utf8_or_hex(),
+        "invalid-mining-job-token",
+        "SetCustomMiningJobError should use invalid-mining-job-token for reused token"
+    );
+
+    shutdown_all!(translator, jdc, pool);
+}
+
 // This test verifies that JDS does not exit when it receives a `SubmitSolution`
 // while still expecting a `ProvideMissingTransactionsSuccess`.
 //
