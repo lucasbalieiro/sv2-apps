@@ -84,7 +84,7 @@ pub(crate) fn create_close_channel_msg(channel_id: ChannelId, msg: &str) -> Clos
 ///   `sri/donate/<percentage>/<payout_address>/<worker_name>` (percentage is 0-100, representing
 ///   pool's portion)
 /// - `FullDonation`: Full reward goes to the pool.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PayoutMode {
     /// Solo mode: miner receives full block reward.
     Solo { script: CoinbaseRewardScript },

@@ -163,6 +163,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             );
 
             downstream.downstream_data.super_safe_lock(|downstream_data| {
+                downstream_data.payout_mode = Some(payout_mode);
+
                 let nominal_hash_rate = msg.nominal_hash_rate;
                 let requested_max_target = Target::from_le_bytes(msg.max_target.inner_as_ref().try_into().unwrap());
                 let extranonce_prefix = channel_manager_data.extranonce_prefix_factory_standard.next_prefix_standard().map_err(PoolError::shutdown)?;
@@ -341,6 +343,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     .into()]);
                             }
                         };
+
+                        downstream_data.payout_mode = Some(payout_mode.clone());
 
                         let channel_id = downstream_data
                             .channel_id_factory
