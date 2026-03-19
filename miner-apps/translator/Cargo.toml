@@ -9,7 +9,7 @@ readme = "README.md"
 homepage = "https://stratumprotocol.org"
 repository = "https://github.com/stratum-mining/stratum"
 license = "MIT OR Apache-2.0"
-keywords = ["stratum", "mining", "bitcoin", "protocol", "translator", "proxy"]
+keywords = ["stratum", "mining", "bitcoin", "translator", "proxy"]
 
 [lib]
 name = "translator_sv2"
