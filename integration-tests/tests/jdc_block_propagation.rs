@@ -11,8 +11,8 @@ async fn propagated_from_jdc_to_tp() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let current_block_hash = tp.get_best_block_hash().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
     let ignore_push_solution =
         IgnoreMessage::new(MessageDirection::ToUpstream, MESSAGE_TYPE_PUSH_SOLUTION);
     let (jdc_jds_sniffer, jdc_jds_sniffer_addr) = start_sniffer(

@@ -12,7 +12,11 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
     let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
     let (pool, pool_addr, _) = start_pool(
-        ipc_config(bitcoin_core.data_dir().clone(), bitcoin_core.is_signet()),
+        ipc_config(
+            bitcoin_core.data_dir().clone(),
+            bitcoin_core.is_signet(),
+            None,
+        ),
         vec![],
         vec![],
         false,
@@ -44,10 +48,10 @@ async fn pool_propagates_block_with_bitcoin_core_ipc() {
 #[tokio::test]
 async fn jdc_propagates_block_with_bitcoin_core_ipc() {
     start_tracing();
-    let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (tp, _tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let current_block_hash = tp.get_best_block_hash().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
     let ignore_push_solution =
         IgnoreMessage::new(MessageDirection::ToUpstream, MESSAGE_TYPE_PUSH_SOLUTION);
     let (sniffer, sniffer_addr) = start_sniffer(
@@ -59,7 +63,11 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
     );
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_addr, sniffer_addr)],
-        ipc_config(tp.data_dir().clone(), tp.is_signet()),
+        ipc_config(
+            tp.bitcoin_core().data_dir().clone(),
+            tp.bitcoin_core().is_signet(),
+            None,
+        ),
         vec![],
         vec![],
         false,

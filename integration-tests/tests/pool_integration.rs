@@ -8,6 +8,7 @@ use integration_tests_sv2::{
     *,
 };
 use stratum_apps::stratum_core::{
+    binary_sv2::{Seq0255, U256},
     common_messages_sv2::{has_work_selection, Protocol, SetupConnection, *},
     mining_sv2::*,
     parsers_sv2::{self, AnyMessage, CommonMessages, Mining, TemplateDistribution},
@@ -249,10 +250,10 @@ async fn pool_does_not_send_jobs_to_jdc() {
     let sv2_interval = Some(5);
     let (tp, tp_addr) = start_template_provider(sv2_interval, DifficultyLevel::Low);
     tp.fund_wallet().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
     let (pool_jdc_sniffer, pool_jdc_sniffer_addr) =
         start_sniffer("pool_jdc", pool_addr, false, vec![], None);
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
     let (jdc, jdc_addr, _) = start_jdc(
         &[(pool_jdc_sniffer_addr, jds_addr)],
         sv2_tp_config(tp_addr),
@@ -446,6 +447,79 @@ async fn pool_reject_setup_connection_with_non_mining_protocol() {
         "SetupConnectionError message error code should be unsupported-protocol"
     );
     shutdown_all!(translator, pool);
+}
+
+// This test verifies that pool rejects SetCustomMiningJob when it is started without embedded JDS
+// (`start_pool` with no `[jds]` config).
+#[tokio::test]
+async fn pool_without_jds_rejects_set_custom_mining_job() {
+    start_tracing();
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+
+    // no JDS
+    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
+
+    let (sniffer, sniffer_addr) = start_sniffer("mock-pool", pool_addr, false, vec![], None);
+    let send_to_pool = MockDownstream::new(
+        sniffer_addr,
+        WithSetup::yes_with_defaults(Protocol::MiningProtocol, 0b0010),
+    )
+    .start()
+    .await;
+
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        )
+        .await;
+    sniffer
+        .wait_for_message_type_and_clean_queue(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+
+    let set_custom_mining_job =
+        AnyMessage::Mining(Mining::SetCustomMiningJob(SetCustomMiningJob {
+            channel_id: 1,
+            request_id: 7,
+            token: 42_u64.to_le_bytes().to_vec().try_into().unwrap(),
+            version: 0,
+            prev_hash: U256::Owned(vec![0_u8; 32]),
+            min_ntime: 0,
+            nbits: 0,
+            coinbase_tx_version: 0,
+            coinbase_prefix: Vec::<u8>::new().try_into().unwrap(),
+            coinbase_tx_input_n_sequence: 0,
+            coinbase_tx_outputs: Vec::<u8>::new().try_into().unwrap(),
+            coinbase_tx_locktime: 0,
+            merkle_path: Seq0255::new(Vec::new()).unwrap(),
+        }));
+    send_to_pool.send(set_custom_mining_job).await.unwrap();
+
+    sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
+        )
+        .await;
+
+    let set_custom_mining_job_error = loop {
+        match sniffer.next_message_from_upstream() {
+            Some((_, AnyMessage::Mining(Mining::SetCustomMiningJobError(msg)))) => break msg,
+            _ => continue,
+        }
+    };
+    assert_eq!(set_custom_mining_job_error.request_id, 7);
+    assert_eq!(set_custom_mining_job_error.channel_id, 1);
+    assert_eq!(
+        set_custom_mining_job_error.error_code.as_utf8_or_hex(),
+        "jd-not-supported",
+        "SetCustomMiningJobError should use jd-not-supported when pool has no embedded JDS"
+    );
+
+    shutdown_all!(pool);
 }
 
 // This test launches a Pool and leverages a MockDownstream to test the correct functionalities of

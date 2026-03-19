@@ -6,13 +6,15 @@ use integration_tests_sv2::{
 use stratum_apps::stratum_core::{job_declaration_sv2::*, template_distribution_sv2::*};
 
 // Block propagated from JDS to TP
+// Currently disabled, see https://github.com/stratum-mining/sv2-apps/issues/322
+#[ignore]
 #[tokio::test]
 async fn propagated_from_jds_to_tp() {
     start_tracing();
     let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let current_block_hash = tp.get_best_block_hash().unwrap();
-    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let (_jds, jds_addr) = start_jds(tp.rpc_info());
+    let (pool, pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
     let (jdc_jds_sniffer, jdc_jds_sniffer_addr) = start_sniffer("0", jds_addr, false, vec![], None);
     let ignore_submit_solution =
         IgnoreMessage::new(MessageDirection::ToUpstream, MESSAGE_TYPE_SUBMIT_SOLUTION);

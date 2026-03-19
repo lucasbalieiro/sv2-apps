@@ -25,11 +25,12 @@ ext-config = { version = "0.14.0", features = ["toml"], package = "config" }
 tracing = { version = "0.1" }
 clap = { version = "4.5.39", features = ["derive"] }
 bitcoin_core_sv2 = { path = "../../bitcoin-core-sv2" }
+jd_server_sv2 = { path = "../jd-server" }
 hex = "0.4.3"
 hotpath = "0.9"
 
 [features]
 default = ["monitoring"]
 monitoring = ["stratum-apps/monitoring"]
-hotpath = ["hotpath/hotpath"]
-hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+hotpath = ["hotpath/hotpath", "jd_server_sv2/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc", "jd_server_sv2/hotpath-alloc"]

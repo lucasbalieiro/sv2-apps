@@ -1,10 +1,9 @@
-use std::convert::TryFrom;
-use std::net::SocketAddr;
+use std::{convert::TryFrom, net::SocketAddr};
 use stratum_apps::{
     config_helpers::CoinbaseRewardScript,
-    stratum_core::bitcoin::{Amount, TxOut},
     stratum_core::{
         binary_sv2::Str0255,
+        bitcoin::{Amount, TxOut},
         common_messages_sv2::{Protocol, SetupConnection},
         mining_sv2::CloseChannel,
     },
