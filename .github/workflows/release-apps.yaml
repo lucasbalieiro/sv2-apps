@@ -43,11 +43,11 @@ jobs:
       - name: Publish translator-sv2 crate
         run: ./scripts/release-apps.sh miner-apps/translator
 
+      - name: Publish jd-server-sv2 crate
+        run: ./scripts/release-apps.sh pool-apps/jd-server
+
       - name: Publish pool-sv2 crate
         run: ./scripts/release-apps.sh pool-apps/pool
-
-      - name: Publish jd-server crate
-        run: ./scripts/release-apps.sh jd-server
 
       - name: Publish integration-tests-sv2 crate
         run: ./scripts/release-apps.sh integration-tests
