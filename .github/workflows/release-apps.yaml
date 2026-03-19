@@ -25,6 +25,9 @@ jobs:
       - name: Install Rust (1.85)
         uses: dtolnay/rust-toolchain@1.85
 
+      - name: Install capnp dependencies
+        run: sudo apt-get install -y capnproto libcapnp-dev
+
       - name: Login
         run: cargo login ${{ secrets.CRATES_IO_DEPLOY_KEY }}
 
