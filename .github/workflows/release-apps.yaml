@@ -43,11 +43,8 @@ jobs:
       - name: Publish pool-sv2 crate
         run: ./scripts/release-apps.sh pool-apps/pool
 
-      # todo: uncomment after https://github.com/stratum-mining/sv2-apps/issues/24
-      # - name: Publish jd-server crate
-      #   run: ./scripts/release-apps.sh jd-server
+      - name: Publish jd-server crate
+        run: ./scripts/release-apps.sh jd-server
 
       - name: Publish integration-tests-sv2 crate
         run: ./scripts/release-apps.sh integration-tests
-
-
