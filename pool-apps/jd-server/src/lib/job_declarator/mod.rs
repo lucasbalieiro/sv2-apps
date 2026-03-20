@@ -340,7 +340,9 @@ impl JobDeclarator {
     fn cleanup_downstream(&self, downstream_id: DownstreamId) {
         info!(downstream_id, "Cleaning up disconnected downstream");
 
-        self.downstream_clients.remove(&downstream_id);
+        if let Some((_, mut downstream)) = self.downstream_clients.remove(&downstream_id) {
+            downstream.shutdown();
+        }
 
         self.job_declarator_io
             .downstream_client_senders

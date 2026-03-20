@@ -369,4 +369,9 @@ impl Downstream {
         }
         Ok(())
     }
+
+    // activates the downstream cancellation token, causing any pending tasks to be cancelled
+    pub fn shutdown(&mut self) {
+        self.downstream_cancellation_token.cancel();
+    }
 }
