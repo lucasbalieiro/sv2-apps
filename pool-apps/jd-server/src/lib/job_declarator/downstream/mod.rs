@@ -69,9 +69,6 @@ pub struct Downstream {
     /// Cancelling this stops IO tasks, the pending jobs janitor, and the downstream loop
     /// without affecting other downstreams or the server.
     downstream_cancellation_token: CancellationToken,
-    /// Global/server cancellation token.
-    /// Used to trigger full shutdown when critical coordination fails.
-    global_cancellation_token: CancellationToken,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -121,7 +118,6 @@ impl Downstream {
             supported_extensions,
             required_extensions,
             downstream_cancellation_token,
-            global_cancellation_token,
         }
     }
 
@@ -134,8 +130,8 @@ impl Downstream {
     /// via `disconnect_sender`.
     pub async fn start(
         mut self,
-        disconnect_sender: Sender<DownstreamId>,
         task_manager: Arc<TaskManager>,
+        cleanup: impl FnOnce(DownstreamId) + Send + 'static,
     ) {
         // Setup initial connection
         if let Err(e) = self.setup_connection_with_downstream().await {
@@ -147,14 +143,9 @@ impl Downstream {
 
             self.downstream_cancellation_token.cancel();
 
-            if let Err(e) = disconnect_sender.send(self.downstream_id).await {
-                error!(
-                    downstream_id = self.downstream_id,
-                    error = ?e,
-                    "Failed to notify job declarator about downstream disconnect; triggering global shutdown"
-                );
-                self.global_cancellation_token.cancel();
-            }
+            // cleanup entry on JobDeclarator
+            cleanup(self.downstream_id);
+
             return;
         }
 
@@ -195,15 +186,11 @@ impl Downstream {
                 }
             }
             cancellation_token.cancel();
-            info!("Downstream {downstream_id}: disconnected, notifying job declarator");
-            if let Err(e) = disconnect_sender.send(downstream_id).await {
-                error!(
-                    downstream_id,
-                    error = ?e,
-                    "Failed to notify job declarator about downstream disconnect; triggering global shutdown"
-                );
-                self.global_cancellation_token.cancel();
-            }
+
+            // cleanup entry on JobDeclarator
+            cleanup(downstream_id);
+
+            info!("Downstream {downstream_id}: disconnected.");
         });
     }
 
