@@ -29,7 +29,6 @@ If you're looking for the low-level protocol libraries, check out the [`stratum`
 - `miner-apps/` - Miner applications
   - `jd-client/` - Job Declarator Client allows miners to declare custom block templates for decentralized mining
   - `translator/` - Translator Proxy bridges SV1 miners to SV2 pools, enabling protocol transition
-  - `mining-device/` - Mining device simulator for development and testing
 - `stratum-apps/` - Shared application utilities
   - Configuration helpers (TOML, coinbase outputs, logging)
   - Network connection utilities (Noise protocol, plain TCP, SV1 connections)

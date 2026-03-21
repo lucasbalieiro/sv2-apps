@@ -6,10 +6,6 @@ members = [
     "translator",
 ]
 
-exclude = [
-    "mining-device"
-]
-
 [profile.dev]
 # Required by super_safe_lock
 opt-level = 1

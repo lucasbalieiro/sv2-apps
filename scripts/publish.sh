@@ -73,5 +73,4 @@ publish_crate "miner-apps/translator" "translator_sv2" "$@"
 
 # Publish Test Utils
 echo "📦 Publishing Test Utilities..."
-publish_crate "miner-apps/test-utils/mining-device" "mining_device" "$@"
 publish_crate "integration-tests" "integration_tests_sv2" "$@"
