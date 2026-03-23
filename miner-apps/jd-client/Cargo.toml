@@ -1,6 +1,6 @@
 [package]
 name = "jd_client_sv2"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["The Stratum V2 Developers"]
 edition = "2021"
 description = "Job Declarator Client (JDC) role"
@@ -32,4 +32,3 @@ default = ["monitoring"]
 monitoring = ["stratum-apps/monitoring"]
 hotpath = ["hotpath/hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
-
