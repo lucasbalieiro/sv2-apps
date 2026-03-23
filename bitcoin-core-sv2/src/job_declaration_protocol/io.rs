@@ -6,6 +6,16 @@ use stratum_core::{
 };
 use tokio::sync::oneshot;
 
+/// Snapshot of the template parameters used by the validator at decision time.
+///
+/// This lets callers distinguish stale-tip races from other validation failures.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidationContext {
+    pub prev_hash: BlockHash,
+    pub nbits: CompactTarget,
+    pub min_ntime: u32,
+}
+
 /// A request sent from `jd-server` to the [`BitcoinCoreSv2JDP`](super::BitcoinCoreSv2JDP) IPC
 /// thread.
 ///
@@ -32,11 +42,18 @@ pub enum JdResponse {
     Success {
         prev_hash: BlockHash,
         nbits: CompactTarget,
+        min_ntime: u32,
         /// Txids for all transactions (excluding coinbase), in the same order as the declared
         /// wtxid_list. Enables the caller to build the txid merkle tree for validating
         /// SetCustomMiningJob.merkle_path.
         txid_list: Vec<Txid>,
     },
-    Error(String), // error_code string
-    MissingTransactions(Vec<Wtxid>),
+    Error {
+        error_code: String,
+        validation_context: ValidationContext,
+    },
+    MissingTransactions {
+        missing_wtxids: Vec<Wtxid>,
+        validation_context: ValidationContext,
+    },
 }
