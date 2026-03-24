@@ -132,9 +132,9 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
         warn!("Received: {}", msg);
 
         let error_code = msg.error_code.as_utf8_or_hex();
-        if error_code == "stale-prev-hash" {
+        if error_code == "stale-chain-tip" {
             warn!(
-                "Received non-fatal DeclareMiningJobError from JDS: stale-prev-hash (request_id={})",
+                "Received non-fatal DeclareMiningJobError from JDS: stale-chain-tip (request_id={})",
                 msg.request_id
             );
             return Ok(());

@@ -42,10 +42,8 @@ use stratum_apps::{
 #[derive(Clone)]
 struct DeclaredCustomJob {
     declare_mining_job: DeclareMiningJob<'static>,
-    prev_hash: BlockHash, // committed at the time we receive DeclareMiningJob
-    nbits: CompactTarget, // committed at the time we receive DeclareMiningJob
-    min_ntime: u32,       // committed at the time we receive DeclareMiningJob
-    txid_list: Option<Vec<Txid>>, // populated only on JdResponse::Success
+    validation_context: ValidationContext, // committed at the time we receive DeclareMiningJob
+    txid_list: Option<Vec<Txid>>,          // populated only on JdResponse::Success
     validated: bool,
 }
 
@@ -64,17 +62,12 @@ impl DeclaredCustomJob {
 
     /// Returns `nbits` (difficulty target).
     fn get_nbits(&self) -> u32 {
-        self.nbits.to_consensus()
-    }
-
-    /// Returns `min_ntime` used by validation context.
-    fn get_min_ntime(&self) -> u32 {
-        self.min_ntime
+        self.validation_context.nbits.to_consensus()
     }
 
     /// Returns `prev_hash`.
     fn get_prev_hash(&self) -> BlockHash {
-        self.prev_hash
+        self.validation_context.prev_hash
     }
 
     /// Reconstructs the declared coinbase transaction by concatenating prefix, extranonce (zeros),
@@ -388,11 +381,14 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
         let declared_coinbase_tx = {
             let temp_job = DeclaredCustomJob {
                 declare_mining_job: declare_mining_job_static.clone(),
-                prev_hash: BlockHash::all_zeros(), // irrelevant for coinbase tx validation
-                nbits: CompactTarget::from_consensus(0), // irrelevant for coinbase tx validation
-                min_ntime: 0,                      // irrelevant for coinbase tx validation
-                txid_list: None,                   // irrelevant for coinbase tx validation
-                validated: false,                  // irrelevant for coinbase tx validation
+                validation_context: ValidationContext {
+                    prev_hash: BlockHash::all_zeros(), // irrelevant for coinbase tx validation
+                    nbits: CompactTarget::from_consensus(0), /* irrelevant for coinbase tx
+                                                        * validation */
+                    min_ntime: 0, // irrelevant for coinbase tx validation
+                },
+                txid_list: None,  // irrelevant for coinbase tx validation
+                validated: false, // irrelevant for coinbase tx validation
             };
 
             match temp_job.get_coinbase_tx() {
@@ -452,11 +448,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             provide_missing_transactions_success.as_ref().and_then(|_| {
                 self.declared_custom_jobs
                     .get(&declare_mining_job.request_id)
-                    .map(|job| ValidationContext {
-                        prev_hash: job.prev_hash,
-                        nbits: job.nbits,
-                        min_ntime: job.get_min_ntime(),
-                    })
+                    .map(|job| job.validation_context)
             });
 
         // Create oneshot channel for response
@@ -497,9 +489,11 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             } => {
                 let declared_custom_job = DeclaredCustomJob {
                     declare_mining_job: declare_mining_job_static,
-                    prev_hash,
-                    nbits,
-                    min_ntime,
+                    validation_context: ValidationContext {
+                        prev_hash,
+                        nbits,
+                        min_ntime,
+                    },
                     txid_list: Some(txid_list),
                     validated: true,
                 };
@@ -532,7 +526,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 };
 
                 if tip_drifted {
-                    DeclareMiningJobResult::Error("stale-prev-hash".to_string())
+                    DeclareMiningJobResult::Error("stale-chain-tip".to_string())
                 } else {
                     DeclareMiningJobResult::Error(error_code)
                 }
@@ -543,11 +537,9 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             } => {
                 let declared_custom_job = DeclaredCustomJob {
                     declare_mining_job: declare_mining_job_static,
-                    prev_hash: validation_context.prev_hash,
-                    nbits: validation_context.nbits,
-                    min_ntime: validation_context.min_ntime,
+                    validation_context,
                     txid_list: None,
-                    validated: false,
+                    validated: false, // this is only set to true on JdResponse::Success
                 };
                 self.declared_custom_jobs
                     .insert(declare_mining_job.request_id, declared_custom_job);
