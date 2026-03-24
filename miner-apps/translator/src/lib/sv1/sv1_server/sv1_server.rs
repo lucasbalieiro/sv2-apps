@@ -718,7 +718,14 @@ impl Sv1Server {
         };
 
         let miner_id = self.miner_counter.fetch_add(1, Ordering::SeqCst) + 1;
-        let user_identity = format!("{}.miner{}", self.config.user_identity, miner_id);
+        // SRI patterns use `/`-delimited segments for payout mode parsing, so appending
+        // a suffix would break pool-side validation.
+        // See: https://github.com/stratum-mining/sv2-apps/issues/369
+        let user_identity = if self.config.user_identity.starts_with("sri/") {
+            self.config.user_identity.clone()
+        } else {
+            format!("{}.miner{}", self.config.user_identity, miner_id)
+        };
 
         downstream
             .downstream_data
