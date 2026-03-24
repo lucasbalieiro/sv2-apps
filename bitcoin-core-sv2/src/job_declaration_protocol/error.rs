@@ -8,6 +8,8 @@ use stratum_core::bitcoin::consensus;
 pub enum BitcoinCoreSv2JDPError {
     /// Cap'n Proto RPC error.
     CapnpError(capnp::Error),
+    /// Failed to create a dedicated thread IPC client, capturing the underlying context.
+    FailedToCreateThreadIpcClient(String),
     /// Failed to connect to the Bitcoin Core Unix socket.
     CannotConnectToUnixSocket(PathBuf, String),
     /// Failed to deserialize a block from the IPC response.

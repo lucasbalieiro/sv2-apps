@@ -12,6 +12,16 @@ impl BitcoinCoreSv2JDP {
 
         tokio::task::spawn_local(async move {
             tracing::debug!("monitor_mempool_mirror() task started");
+            tracing::debug!("Creating dedicated blocking_thread_ipc_client for waitNext requests");
+            let blocking_thread_ipc_client = match self_clone.new_thread_ipc_client().await {
+                Ok(blocking_thread_ipc_client) => blocking_thread_ipc_client,
+                Err(e) => {
+                    tracing::error!("Failed to create blocking thread IPC client: {:?}", e);
+                    tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
+                    self_clone.cancellation_token.cancel();
+                    return;
+                }
+            };
             tracing::debug!("monitor_mempool_mirror() entering main loop");
 
             loop {
@@ -22,7 +32,7 @@ impl BitcoinCoreSv2JDP {
                     .wait_next_request();
 
                 match wait_next_request.get().get_context() {
-                    Ok(mut context) => context.set_thread(self_clone.thread_ipc_client.clone()),
+                    Ok(mut context) => context.set_thread(blocking_thread_ipc_client.clone()),
                     Err(e) => {
                         tracing::error!("Failed to set thread: {}", e);
                         self_clone.cancellation_token.cancel();
@@ -39,13 +49,19 @@ impl BitcoinCoreSv2JDP {
                     }
                 };
 
-                // 0 sat fee threshold (accept all mempool transactions)
+                // Rebuild aggressively instead of waiting only for tip changes.
+                // Bitcoin Core reevaluates fee growth on a 1s tick, and with
+                // fee_threshold = 0 it returns any candidate whose total fees
+                // are not lower than the current template. In steady state this
+                // usually produces a new BlockTemplate about once per second.
                 wait_next_request_options.set_fee_threshold(0);
 
-                // 10 seconds timeout for waitNext requests
-                // please note that this is NOT how often we expect to get new templates
-                // it's just the max time we'll wait for the current waitNext request to complete
-                wait_next_request_options.set_timeout(10_000.0);
+                // Bound how long a single waitNext call can stay attached to
+                // one BlockTemplate before the loop recreates it from the
+                // latest current_template_ipc_client when Bitcoin Core does not
+                // produce a returnable candidate. This is a fallback, not the
+                // expected cadence of template updates.
+                wait_next_request_options.set_timeout(3_000.0);
 
                 tokio::select! {
                     _ = self_clone.cancellation_token.cancelled() => {
