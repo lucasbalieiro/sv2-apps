@@ -1,10 +1,10 @@
 #![allow(clippy::option_map_unit_fn)]
 use async_channel::{Receiver, Sender};
-pub use key_utils::Secp256k1PublicKey;
 use num_format::{Locale, ToFormattedString};
 use primitive_types::U256;
 use rand::{thread_rng, Rng};
 use std::{
+    convert::TryInto,
     net::{SocketAddr, ToSocketAddrs},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -13,22 +13,25 @@ use std::{
     thread::available_parallelism,
     time::{Duration, Instant},
 };
-use stratum_common::{
-    network_helpers_sv2::noise_connection::Connection,
-    roles_logic_sv2::{
-        self,
-        bitcoin::{blockdata::block::Header, hash_types::BlockHash, hashes::Hash, CompactTarget},
-        codec_sv2,
-        codec_sv2::{Initiator, StandardEitherFrame, StandardSv2Frame},
-        common_messages_sv2::{Protocol, SetupConnection, SetupConnectionSuccess},
-        errors::Error,
-        handlers::{
-            common::ParseCommonMessagesFromUpstream,
-            mining::{ParseMiningMessagesFromUpstream, SendTo, SupportedChannelTypes},
+pub use stratum_apps::key_utils::Secp256k1PublicKey;
+use stratum_apps::{
+    custom_mutex::Mutex,
+    network_helpers::noise_connection::Connection,
+    stratum_core::{
+        bitcoin::{
+            block::Version, blockdata::block::Header,
+            consensus::encode::serialize as btc_serialize, hash_types::BlockHash, hashes::Hash,
+            CompactTarget,
         },
+        codec_sv2::{HandshakeRole, StandardEitherFrame, StandardSv2Frame},
+        common_messages_sv2::{
+            ChannelEndpointChanged, Protocol, Reconnect, SetupConnection, SetupConnectionError,
+            SetupConnectionSuccess,
+        },
+        mining_sv2,
         mining_sv2::*,
-        parsers_sv2::{Mining, MiningDeviceMessages},
-        utils::{Id, Mutex},
+        noise_sv2::Initiator,
+        parsers_sv2::{CommonMessages, Mining, MiningDeviceMessages, ParserError},
     },
 };
 use tokio::net::TcpStream;
@@ -39,7 +42,6 @@ use sha2::{
     compress256,
     digest::generic_array::{typenum::U64, GenericArray},
 };
-use stratum_common::roles_logic_sv2::bitcoin::consensus::encode::serialize as btc_serialize;
 
 // Tuneable: how many nonces to try per mining loop iteration when fast hasher is available.
 // Runtime-configurable so the binary and benches can adjust it without changing code.
@@ -130,10 +132,9 @@ pub async fn connect(
     info!("Pool tcp connection established at {}", address);
     let address = socket.peer_addr().unwrap();
     let initiator = Initiator::new(pub_key.map(|e| e.0));
-    let (receiver, sender) =
-        Connection::new(socket, codec_sv2::HandshakeRole::Initiator(initiator))
-            .await
-            .unwrap();
+    let (receiver, sender) = Connection::new(socket, HandshakeRole::Initiator(initiator))
+        .await
+        .unwrap();
     info!("Pool noise connection established at {}", address);
     Device::start(
         receiver,
@@ -152,9 +153,23 @@ pub type Message = MiningDeviceMessages<'static>;
 pub type StdFrame = StandardSv2Frame<Message>;
 pub type EitherFrame = StandardEitherFrame<Message>;
 
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+struct Id {
+    state: u32,
+}
+
+impl Id {
+    fn new() -> Self {
+        Self { state: 0 }
+    }
+
+    fn next(&mut self) -> u32 {
+        self.state += 1;
+        self.state
+    }
+}
+
 struct SetupConnectionHandler {}
-use std::convert::TryInto;
-use stratum_common::roles_logic_sv2::{bitcoin::block::Version, common_messages_sv2::Reconnect};
 
 impl SetupConnectionHandler {
     pub fn new() -> Self {
@@ -205,43 +220,57 @@ impl SetupConnectionHandler {
         let mut incoming: StdFrame = receiver.recv().await.unwrap().try_into().unwrap();
         let message_type = incoming.get_header().unwrap().msg_type();
         let payload = incoming.payload();
-        ParseCommonMessagesFromUpstream::handle_message_common(self_, message_type, payload)
-            .unwrap();
+        Self::handle_message_common(self_, message_type, payload).unwrap();
     }
-}
 
-impl ParseCommonMessagesFromUpstream for SetupConnectionHandler {
-    fn handle_setup_connection_success(
-        &mut self,
-        m: SetupConnectionSuccess,
-    ) -> Result<roles_logic_sv2::handlers::common::SendTo, roles_logic_sv2::errors::Error> {
-        use roles_logic_sv2::handlers::common::SendTo;
+    fn handle_message_common(
+        self_: Arc<Mutex<Self>>,
+        message_type: u8,
+        payload: &mut [u8],
+    ) -> Result<(), ParserError> {
+        let message: CommonMessages<'_> = (message_type, payload).try_into()?;
+        self_
+            .safe_lock(|handler| match message {
+                CommonMessages::SetupConnectionSuccess(m) => {
+                    handler.handle_setup_connection_success(m);
+                    Ok(())
+                }
+                CommonMessages::SetupConnectionError(m) => {
+                    handler.handle_setup_connection_error(m);
+                    Ok(())
+                }
+                CommonMessages::ChannelEndpointChanged(m) => {
+                    handler.handle_channel_endpoint_changed(m);
+                    Ok(())
+                }
+                CommonMessages::Reconnect(m) => {
+                    handler.handle_reconnect(m);
+                    Ok(())
+                }
+                CommonMessages::SetupConnection(_) => {
+                    Err(ParserError::UnexpectedMessage(message_type))
+                }
+            })
+            .unwrap()
+    }
+
+    fn handle_setup_connection_success(&mut self, m: SetupConnectionSuccess) {
         info!(
             "Received `SetupConnectionSuccess`: version={}, flags={:b}",
             m.used_version, m.flags
         );
-        Ok(SendTo::None(None))
     }
 
-    fn handle_setup_connection_error(
-        &mut self,
-        _: roles_logic_sv2::common_messages_sv2::SetupConnectionError,
-    ) -> Result<roles_logic_sv2::handlers::common::SendTo, roles_logic_sv2::errors::Error> {
+    fn handle_setup_connection_error(&mut self, _: SetupConnectionError) {
         error!("Setup connection error");
         todo!()
     }
 
-    fn handle_channel_endpoint_changed(
-        &mut self,
-        _: roles_logic_sv2::common_messages_sv2::ChannelEndpointChanged,
-    ) -> Result<roles_logic_sv2::handlers::common::SendTo, roles_logic_sv2::errors::Error> {
+    fn handle_channel_endpoint_changed(&mut self, _: ChannelEndpointChanged) {
         todo!()
     }
 
-    fn handle_reconnect(
-        &mut self,
-        _m: Reconnect,
-    ) -> Result<roles_logic_sv2::handlers::common::SendTo, Error> {
+    fn handle_reconnect(&mut self, _m: Reconnect) {
         todo!()
     }
 }
@@ -361,16 +390,14 @@ impl Device {
             let mut incoming: StdFrame = receiver.recv().await.unwrap().try_into().unwrap();
             let message_type = incoming.get_header().unwrap().msg_type();
             let payload = incoming.payload();
-            let next =
-                Device::handle_message_mining(self_mutex.clone(), message_type, payload).unwrap();
+            Device::handle_message_mining(self_mutex.clone(), message_type, payload).unwrap();
             let mut notify_changes_to_mining_thread = self_mutex
                 .safe_lock(|s| s.notify_changes_to_mining_thread.clone())
                 .unwrap();
             if notify_changes_to_mining_thread.should_send
-                && (message_type == roles_logic_sv2::mining_sv2::MESSAGE_TYPE_NEW_MINING_JOB
-                    || message_type
-                        == roles_logic_sv2::mining_sv2::MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH
-                    || message_type == roles_logic_sv2::mining_sv2::MESSAGE_TYPE_SET_TARGET)
+                && (message_type == mining_sv2::MESSAGE_TYPE_NEW_MINING_JOB
+                    || message_type == mining_sv2::MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH
+                    || message_type == mining_sv2::MESSAGE_TYPE_SET_TARGET)
             {
                 notify_changes_to_mining_thread
                     .sender
@@ -379,15 +406,6 @@ impl Device {
                     .unwrap();
                 notify_changes_to_mining_thread.should_send = false;
             };
-            match next {
-                SendTo::RelayNewMessageToRemote(_, m) => {
-                    let sv2_frame: StdFrame = MiningDeviceMessages::Mining(m).try_into().unwrap();
-                    let either_frame: EitherFrame = sv2_frame.into();
-                    sender.send(either_frame).await.unwrap();
-                }
-                SendTo::None(_) => (),
-                _ => panic!(),
-            }
         }
     }
 
@@ -411,21 +429,61 @@ impl Device {
         let sender = self_mutex.safe_lock(|s| s.sender.clone()).unwrap();
         sender.send(frame.into()).await.unwrap();
     }
-}
 
-impl ParseMiningMessagesFromUpstream<()> for Device {
-    fn get_channel_type(&self) -> SupportedChannelTypes {
-        SupportedChannelTypes::Standard
+    fn handle_message_mining(
+        self_: Arc<Mutex<Self>>,
+        message_type: u8,
+        payload: &mut [u8],
+    ) -> Result<(), ParserError> {
+        let message: Mining<'_> = (message_type, payload).try_into()?;
+        self_
+            .safe_lock(|device| match message {
+                Mining::OpenStandardMiningChannelSuccess(m) => {
+                    device.handle_open_standard_mining_channel_success(m);
+                    Ok(())
+                }
+                Mining::OpenMiningChannelError(m) => {
+                    device.handle_open_mining_channel_error(m);
+                    Ok(())
+                }
+                Mining::UpdateChannelError(m) => {
+                    device.handle_update_channel_error(m);
+                    Ok(())
+                }
+                Mining::CloseChannel(m) => {
+                    device.handle_close_channel(m);
+                    Ok(())
+                }
+                Mining::SetExtranoncePrefix(m) => {
+                    device.handle_set_extranonce_prefix(m);
+                    Ok(())
+                }
+                Mining::SubmitSharesSuccess(m) => {
+                    device.handle_submit_shares_success(m);
+                    Ok(())
+                }
+                Mining::SubmitSharesError(m) => {
+                    device.handle_submit_shares_error(m);
+                    Ok(())
+                }
+                Mining::NewMiningJob(m) => {
+                    device.handle_new_mining_job(m);
+                    Ok(())
+                }
+                Mining::SetNewPrevHash(m) => {
+                    device.handle_set_new_prev_hash(m);
+                    Ok(())
+                }
+                Mining::SetTarget(m) => {
+                    device.handle_set_target(m);
+                    Ok(())
+                }
+                _ => Err(ParserError::UnexpectedMessage(message_type)),
+            })
+            .unwrap()
     }
 
-    fn is_work_selection_enabled(&self) -> bool {
-        false
-    }
-
-    fn handle_open_standard_mining_channel_success(
-        &mut self,
-        m: OpenStandardMiningChannelSuccess,
-    ) -> Result<SendTo<()>, Error> {
+    fn handle_open_standard_mining_channel_success(&mut self, m: OpenStandardMiningChannelSuccess) {
         self.channel_opened = true;
         self.channel_id = Some(m.channel_id);
         let req_id = m.get_request_id_as_u32();
@@ -437,56 +495,37 @@ impl ParseMiningMessagesFromUpstream<()> for Device {
             .safe_lock(|miner| miner.new_target(m.target.to_vec()))
             .unwrap();
         self.notify_changes_to_mining_thread.should_send = true;
-        Ok(SendTo::None(None))
     }
 
-    fn handle_open_extended_mining_channel_success(
-        &mut self,
-        _: OpenExtendedMiningChannelSuccess,
-    ) -> Result<SendTo<()>, Error> {
-        unreachable!()
-    }
-
-    fn handle_open_mining_channel_error(
-        &mut self,
-        _: OpenMiningChannelError,
-    ) -> Result<SendTo<()>, Error> {
+    fn handle_open_mining_channel_error(&mut self, _: OpenMiningChannelError) {
         todo!()
     }
 
-    fn handle_update_channel_error(&mut self, _: UpdateChannelError) -> Result<SendTo<()>, Error> {
+    fn handle_update_channel_error(&mut self, _: UpdateChannelError) {
         todo!()
     }
 
-    fn handle_close_channel(&mut self, _: CloseChannel) -> Result<SendTo<()>, Error> {
+    fn handle_close_channel(&mut self, _: CloseChannel) {
         todo!()
     }
 
-    fn handle_set_extranonce_prefix(
-        &mut self,
-        _: SetExtranoncePrefix,
-    ) -> Result<SendTo<()>, Error> {
+    fn handle_set_extranonce_prefix(&mut self, _: SetExtranoncePrefix) {
         todo!()
     }
 
-    fn handle_submit_shares_success(
-        &mut self,
-        m: SubmitSharesSuccess,
-    ) -> Result<SendTo<()>, Error> {
+    fn handle_submit_shares_success(&mut self, m: SubmitSharesSuccess) {
         info!("Received SubmitSharesSuccess");
         debug!("SubmitSharesSuccess: {}", m);
-        Ok(SendTo::None(None))
     }
 
-    fn handle_submit_shares_error(&mut self, m: SubmitSharesError) -> Result<SendTo<()>, Error> {
+    fn handle_submit_shares_error(&mut self, m: SubmitSharesError) {
         error!(
             "Received SubmitSharesError with error code {}",
             std::str::from_utf8(m.error_code.as_ref()).unwrap_or("unknown error code")
         );
-        Ok(SendTo::None(None))
     }
 
-    fn handle_new_mining_job(&mut self, m: NewMiningJob) -> Result<SendTo<()>, Error> {
+    fn handle_new_mining_job(&mut self, m: NewMiningJob) {
         info!(
             "Received new mining job for channel id: {} with job id: {} is future: {}",
             m.channel_id,
@@ -507,17 +546,9 @@ impl ParseMiningMessagesFromUpstream<()> for Device {
                 panic!()
             }
         }
-        Ok(SendTo::None(None))
     }
 
-    fn handle_new_extended_mining_job(
-        &mut self,
-        _: NewExtendedMiningJob,
-    ) -> Result<SendTo<()>, Error> {
-        todo!()
-    }
-
-    fn handle_set_new_prev_hash(&mut self, m: SetNewPrevHash) -> Result<SendTo<()>, Error> {
+    fn handle_set_new_prev_hash(&mut self, m: SetNewPrevHash) {
         info!(
             "Received SetNewPrevHash channel id: {}, job id: {}",
             m.channel_id, m.job_id
@@ -542,35 +573,15 @@ impl ParseMiningMessagesFromUpstream<()> for Device {
             }
             _ => panic!(),
         }
-        Ok(SendTo::None(None))
     }
 
-    fn handle_set_custom_mining_job_success(
-        &mut self,
-        _: SetCustomMiningJobSuccess,
-    ) -> Result<SendTo<()>, Error> {
-        todo!()
-    }
-
-    fn handle_set_custom_mining_job_error(
-        &mut self,
-        _: SetCustomMiningJobError,
-    ) -> Result<SendTo<()>, Error> {
-        todo!()
-    }
-
-    fn handle_set_target(&mut self, m: SetTarget) -> Result<SendTo<()>, Error> {
+    fn handle_set_target(&mut self, m: SetTarget) {
         info!("Received SetTarget for channel id: {}", m.channel_id);
         debug!("SetTarget: {}", m);
         self.miner
             .safe_lock(|miner| miner.new_target(m.maximum_target.to_vec()))
             .unwrap();
         self.notify_changes_to_mining_thread.should_send = true;
-        Ok(SendTo::None(None))
-    }
-
-    fn handle_set_group_channel(&mut self, _m: SetGroupChannel) -> Result<SendTo<()>, Error> {
-        todo!()
     }
 }
 

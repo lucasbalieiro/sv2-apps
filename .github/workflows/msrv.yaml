@@ -32,9 +32,6 @@ jobs:
       - name: Build miner applications workspace
         run: cargo build --manifest-path=miner-apps/Cargo.toml --all-features
 
-      - name: Build mining-device (separate workspace)
-        run: cargo build --manifest-path=miner-apps/mining-device/Cargo.toml
-
       - name: Build integration tests workspace
         run: cargo build --manifest-path=integration-tests/Cargo.toml
 
@@ -53,9 +50,6 @@ jobs:
 
       - name: Check test compilation for miner applications workspace
         run: cargo test --manifest-path=miner-apps/Cargo.toml --no-run
-
-      - name: Check test compilation for mining-device
-        run: cargo test --manifest-path=miner-apps/mining-device/Cargo.toml --no-run
 
       - name: Check test compilation for integration tests workspace
         run: cargo test --manifest-path=integration-tests/Cargo.toml --no-run

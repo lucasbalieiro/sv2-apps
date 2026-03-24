@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use mining_device::FastSha256d;
+use integration_tests_sv2::mining_device::FastSha256d;
 use rand::{thread_rng, Rng};
 use std::{
     sync::{
@@ -9,7 +9,7 @@ use std::{
     thread,
     time::Instant,
 };
-use stratum_common::roles_logic_sv2::bitcoin::{
+use stratum_apps::stratum_core::bitcoin::{
     block::Version, blockdata::block::Header, hash_types::BlockHash, hashes::Hash, CompactTarget,
 };
 

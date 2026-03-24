@@ -100,9 +100,6 @@ This repository contains multiple SV2 applications organized in **three main wor
 **Miner Applications Workspace (`miner-apps/`):**
 - **`jd-client/`** - Job Declarator Client implementation (`jd_client` crate)
 - **`translator/`** - SV1 to SV2 Translator implementation (`translator_sv2` crate)
-- **`test-utils/`** - Mining device test utilities:
-  - **`mining-device/`** - Mining device simulator (`mining_device` crate)
-  - **`mining-device-sv1/`** - SV1 mining device simulator (`mining_device_sv1` crate)
 
 **Integration Tests Workspace (`integration-tests/`):**
 - **`integration-tests/`** - End-to-end integration tests

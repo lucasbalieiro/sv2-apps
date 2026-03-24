@@ -1,7 +1,9 @@
-use crate::{sniffer::*, sv1_minerd::MinerdProcess, template_provider::*};
+use crate::{
+    mining_device::Secp256k1PublicKey as MiningDeviceSecp256k1PublicKey, sniffer::*,
+    sv1_minerd::MinerdProcess, template_provider::*,
+};
 use interceptor::InterceptAction;
 use jd_client_sv2::JobDeclaratorClient;
-use mining_device::Secp256k1PublicKey as MiningDeviceSecp256k1PublicKey;
 use once_cell::sync::OnceCell;
 use pool_sv2::PoolSv2;
 use std::{
@@ -21,6 +23,7 @@ use utils::get_available_address;
 
 pub mod interceptor;
 pub mod message_aggregator;
+pub mod mining_device;
 pub mod mock_roles;
 pub mod prometheus_metrics_assertions;
 pub mod sniffer;
@@ -423,7 +426,7 @@ pub fn start_mining_device_sv2(
     single_submit: bool,
 ) {
     tokio::spawn(async move {
-        mining_device::connect(
+        crate::mining_device::connect(
             upstream.to_string(),
             pub_key,
             device_id,
