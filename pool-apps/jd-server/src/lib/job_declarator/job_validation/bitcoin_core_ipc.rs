@@ -384,7 +384,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 validation_context: ValidationContext {
                     prev_hash: BlockHash::all_zeros(), // irrelevant for coinbase tx validation
                     nbits: CompactTarget::from_consensus(0), /* irrelevant for coinbase tx
-                                                              * validation */
+                                                        * validation */
                     min_ntime: 0, // irrelevant for coinbase tx validation
                 },
                 txid_list: None,  // irrelevant for coinbase tx validation
@@ -539,7 +539,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declare_mining_job: declare_mining_job_static,
                     validation_context,
                     txid_list: None,
-                    validated: false,
+                    validated: false, // this is only set to true on JdResponse::Success
                 };
                 self.declared_custom_jobs
                     .insert(declare_mining_job.request_id, declared_custom_job);
