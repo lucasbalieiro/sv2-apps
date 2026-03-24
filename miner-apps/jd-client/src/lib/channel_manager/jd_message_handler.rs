@@ -130,6 +130,16 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
         warn!("Received: {}", msg);
+
+        let error_code = msg.error_code.as_utf8_or_hex();
+        if error_code == "stale-prev-hash" {
+            warn!(
+                "Received non-fatal DeclareMiningJobError from JDS: stale-prev-hash (request_id={})",
+                msg.request_id
+            );
+            return Ok(());
+        }
+
         warn!("⚠️ JDS refused the declared job with a DeclareMiningJobError ❌. Starting fallback mechanism.");
         Err(JDCError::fallback(JDCErrorKind::DeclareMiningJobError))
     }

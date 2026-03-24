@@ -1,6 +1,9 @@
 //! Handlers for Job Declaration Protocol messages.
 
-use crate::job_declaration_protocol::{BitcoinCoreSv2JDP, io::JdResponse};
+use crate::job_declaration_protocol::{
+    BitcoinCoreSv2JDP,
+    io::{JdResponse, ValidationContext},
+};
 use stratum_core::{
     bitcoin::{
         Block, Transaction, TxMerkleNode, Txid, Wtxid,
@@ -45,15 +48,6 @@ impl BitcoinCoreSv2JDP {
             // Add the missing transactions to the mempool mirror
             mempool_mirror.add_transactions(missing_txs);
 
-            // Now verify that all wtxids from the declared job are available
-            let missing_wtxids = mempool_mirror.verify(&wtxid_list);
-            if !missing_wtxids.is_empty() {
-                // deliberately ignore potential errors
-                // we don't care if the receiver dropped the channel
-                let _ = response_tx.send(JdResponse::MissingTransactions(missing_wtxids));
-                return;
-            }
-
             let prevhash = mempool_mirror
                 .get_current_prev_hash()
                 .expect("current_prev_hash must be set");
@@ -63,6 +57,23 @@ impl BitcoinCoreSv2JDP {
             let min_ntime = mempool_mirror
                 .get_current_min_ntime()
                 .expect("current_min_ntime must be set");
+
+            // Now verify that all wtxids from the declared job are available
+            let missing_wtxids = mempool_mirror.verify(&wtxid_list);
+            if !missing_wtxids.is_empty() {
+                // deliberately ignore potential errors
+                // we don't care if the receiver dropped the channel
+                let _ = response_tx.send(JdResponse::MissingTransactions {
+                    missing_wtxids,
+                    validation_context: ValidationContext {
+                        prev_hash: prevhash,
+                        nbits,
+                        min_ntime,
+                    },
+                });
+                return;
+            }
+
             let txdata = mempool_mirror.get_txdata(&wtxid_list);
 
             tracing::info!(
@@ -74,6 +85,12 @@ impl BitcoinCoreSv2JDP {
 
             (prevhash, nbits, min_ntime, txdata)
         }; // mempool_mirror dropped here, we don't want to hold it across await points
+
+        let validation_context = ValidationContext {
+            prev_hash: prevhash,
+            nbits,
+            min_ntime,
+        };
 
         let txid_list: Vec<Txid> = txdata.iter().map(|tx| tx.compute_txid()).collect();
 
@@ -121,7 +138,10 @@ impl BitcoinCoreSv2JDP {
                     tracing::error!("Failed to get check block options: {e}");
                     // send error response to the client
                     // deliberately ignore potential send errors
-                    let _ = response_tx.send(JdResponse::Error("internal-error".to_string()));
+                    let _ = response_tx.send(JdResponse::Error {
+                        error_code: "internal-error".to_string(),
+                        validation_context,
+                    });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
                     self.cancellation_token.cancel();
                     return;
@@ -136,7 +156,10 @@ impl BitcoinCoreSv2JDP {
                     tracing::error!("Failed to send check block request: {e}");
                     // send error response to the client
                     // deliberately ignore potential send errors
-                    let _ = response_tx.send(JdResponse::Error("internal-error".to_string()));
+                    let _ = response_tx.send(JdResponse::Error {
+                        error_code: "internal-error".to_string(),
+                        validation_context,
+                    });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
                     self.cancellation_token.cancel();
                     return;
@@ -148,7 +171,10 @@ impl BitcoinCoreSv2JDP {
                     tracing::error!("Failed to get check block result: {e}");
                     // send error response to the client
                     // deliberately ignore potential send errors
-                    let _ = response_tx.send(JdResponse::Error("internal-error".to_string()));
+                    let _ = response_tx.send(JdResponse::Error {
+                        error_code: "internal-error".to_string(),
+                        validation_context,
+                    });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
                     self.cancellation_token.cancel();
                     return;
@@ -184,10 +210,14 @@ impl BitcoinCoreSv2JDP {
             JdResponse::Success {
                 prev_hash: prevhash,
                 nbits,
+                min_ntime,
                 txid_list,
             }
         } else {
-            JdResponse::Error("invalid-job".to_string())
+            JdResponse::Error {
+                error_code: "invalid-job".to_string(),
+                validation_context,
+            }
         };
 
         // deliberately ignore potential send errors

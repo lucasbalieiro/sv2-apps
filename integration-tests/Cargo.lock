@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "bitcoin_core_sv2"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-channel",
  "bitcoin-capnp-types",
@@ -1566,7 +1566,7 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "jd_client_sv2"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-channel",
  "bitcoin_core_sv2",
@@ -1582,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "jd_server_sv2"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-channel",
  "async-trait",
