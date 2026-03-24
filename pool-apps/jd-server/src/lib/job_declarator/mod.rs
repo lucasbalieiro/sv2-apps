@@ -98,8 +98,6 @@ pub struct JobDeclaratorIo {
     downstream_client_senders: DashMap<DownstreamId, Sender<JobDeclarationMessage>>,
     job_declarator_sender: Sender<DownstreamJobDeclarationMessage>,
     job_declarator_receiver: Receiver<DownstreamJobDeclarationMessage>,
-    disconnect_sender: Sender<DownstreamId>,
-    disconnect_receiver: Receiver<DownstreamId>,
 }
 
 /// Central engine for the Job Declaration Protocol.
@@ -127,13 +125,10 @@ impl JobDeclarator {
     ) -> Result<Self, JDSErrorKind> {
         let (job_declarator_sender, job_declarator_receiver) =
             unbounded::<DownstreamJobDeclarationMessage>();
-        let (disconnect_sender, disconnect_receiver) = unbounded::<DownstreamId>();
         let job_declarator_io = Arc::new(JobDeclaratorIo {
             job_declarator_sender,
             job_declarator_receiver,
             downstream_client_senders: DashMap::new(),
-            disconnect_sender,
-            disconnect_receiver,
         });
 
         let token_manager =
@@ -244,12 +239,11 @@ impl JobDeclarator {
                                         .downstream_client_senders
                                         .insert(downstream_id, to_downstream_sender);
 
-                                    let disconnect_sender =
-                                        this.job_declarator_io.disconnect_sender.clone();
-
+                                    let jd = this.clone();
                                     downstream
-                                        .start(disconnect_sender, task_manager_inner)
+                                        .start(task_manager_inner, move |downstream_id| jd.cleanup_downstream(downstream_id))
                                         .await;
+
                                 });
                             }
                             Err(e) => {
@@ -276,8 +270,6 @@ impl JobDeclarator {
         cancellation_token: CancellationToken,
         task_manager: Arc<TaskManager>,
     ) -> JDSResult<(), error::JobDeclarator> {
-        let disconnect_receiver = self.job_declarator_io.disconnect_receiver.clone();
-
         task_manager.spawn(async move {
             loop {
                 tokio::select! {
@@ -294,17 +286,6 @@ impl JobDeclarator {
                                 }
                                 error::Action::Shutdown => break,
                                 error::Action::Log => {}
-                            }
-                        }
-                    }
-                    res = disconnect_receiver.recv() => {
-                        match res {
-                            Ok(downstream_id) => {
-                                self.cleanup_downstream(downstream_id);
-                            }
-                            Err(_) => {
-                                error!("Disconnect channel closed");
-                                break;
                             }
                         }
                     }
@@ -325,8 +306,6 @@ impl JobDeclarator {
 
         self.job_declarator_io.job_declarator_sender.close();
         self.job_declarator_io.job_declarator_receiver.close();
-        self.job_declarator_io.disconnect_sender.close();
-        self.job_declarator_io.disconnect_receiver.close();
         self.job_declarator_io.downstream_client_senders.clear();
         self.downstream_clients.clear();
 
@@ -340,7 +319,9 @@ impl JobDeclarator {
     fn cleanup_downstream(&self, downstream_id: DownstreamId) {
         info!(downstream_id, "Cleaning up disconnected downstream");
 
-        self.downstream_clients.remove(&downstream_id);
+        if let Some((_, mut downstream)) = self.downstream_clients.remove(&downstream_id) {
+            downstream.shutdown();
+        }
 
         self.job_declarator_io
             .downstream_client_senders
