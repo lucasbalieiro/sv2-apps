@@ -532,7 +532,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 };
 
                 if tip_drifted {
-                    DeclareMiningJobResult::Error("stale-prev-hash".to_string())
+                    DeclareMiningJobResult::Error("stale-chain-tip".to_string())
                 } else {
                     DeclareMiningJobResult::Error(error_code)
                 }

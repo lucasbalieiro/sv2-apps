@@ -242,9 +242,9 @@ impl BitcoinCoreSv2JDP {
                     latest_prev_hash = ?latest_validation_context.prev_hash,
                     latest_nbits = ?latest_validation_context.nbits,
                     latest_min_ntime = latest_validation_context.min_ntime,
-                    "Detected mempool context drift during DeclareMiningJob validation; classifying error as stale-prev-hash"
+                    "Detected mempool context drift during DeclareMiningJob validation; classifying error as stale-chain-tip"
                 );
-                "stale-prev-hash".to_string()
+                "stale-chain-tip".to_string()
             } else {
                 "invalid-job".to_string()
             };
