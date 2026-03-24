@@ -334,14 +334,16 @@ impl ChannelManager {
                                 m.request_id as DownstreamId,
                                 (user_identity.clone(), hashrate, min_extranonce_size),
                             );
-                            // Modify user_identity for the `OpenExtendedMiningChannel` which is
-                            // gonna be sent upstream
-                            let translator_identity =
-                                if let Some(dot_index) = user_identity.find('.') {
-                                    format!("{}.translator-proxy", &user_identity[..dot_index])
-                                } else {
-                                    format!("{user_identity}.translator-proxy")
-                                };
+                            // Modify user_identity for the upstream `OpenExtendedMiningChannel`.
+                            // SRI patterns are passed unchanged to preserve pool-side parsing.
+                            // See: https://github.com/stratum-mining/sv2-apps/issues/369
+                            let translator_identity = if user_identity.starts_with("sri/") {
+                                user_identity.clone()
+                            } else if let Some(dot_index) = user_identity.find('.') {
+                                format!("{}.translator-proxy", &user_identity[..dot_index])
+                            } else {
+                                format!("{user_identity}.translator-proxy")
+                            };
                             user_identity = translator_identity;
                             open_channel_msg.user_identity =
                                 user_identity.as_bytes().to_vec().try_into().unwrap();
