@@ -3,6 +3,7 @@
 use crate::job_declaration_protocol::{
     BitcoinCoreSv2JDP,
     io::{JdResponse, ValidationContext},
+    mempool::decode_bip34_height_from_coinbase_script_sig,
 };
 use stratum_core::{
     bitcoin::{
@@ -42,13 +43,25 @@ impl BitcoinCoreSv2JDP {
             coinbase_tx.input[0].script_sig
         );
 
-        let (prevhash, nbits, min_ntime, txdata) = {
+        let declared_bip34_height = coinbase_tx
+            .input
+            .first()
+            .and_then(|input| {
+                decode_bip34_height_from_coinbase_script_sig(input.script_sig.as_bytes())
+            })
+            // Some templates/coinbase formats do not expose BIP34 height in canonical
+            // scriptSig push form (e.g. opcode-encoded small integers in tests/regtest).
+            // Fall back to coinbase lock_time to avoid panics and keep a stable
+            // stale-tip comparison signal.
+            .unwrap_or_else(|| coinbase_tx.lock_time.to_consensus_u32());
+
+        let (initial_validation_context, initial_bip34_height, txdata) = {
             let mut mempool_mirror = self.mempool_mirror.borrow_mut();
 
             // Add the missing transactions to the mempool mirror
             mempool_mirror.add_transactions(missing_txs);
 
-            let prevhash = mempool_mirror
+            let prev_hash = mempool_mirror
                 .get_current_prev_hash()
                 .expect("current_prev_hash must be set");
             let nbits = mempool_mirror
@@ -58,6 +71,16 @@ impl BitcoinCoreSv2JDP {
                 .get_current_min_ntime()
                 .expect("current_min_ntime must be set");
 
+            let initial_validation_context = ValidationContext {
+                prev_hash,
+                nbits,
+                min_ntime,
+            };
+
+            let initial_bip34_height = mempool_mirror
+                .get_current_bip34_height()
+                .expect("current_bip34_height must be set");
+
             // Now verify that all wtxids from the declared job are available
             let missing_wtxids = mempool_mirror.verify(&wtxid_list);
             if !missing_wtxids.is_empty() {
@@ -65,11 +88,7 @@ impl BitcoinCoreSv2JDP {
                 // we don't care if the receiver dropped the channel
                 let _ = response_tx.send(JdResponse::MissingTransactions {
                     missing_wtxids,
-                    validation_context: ValidationContext {
-                        prev_hash: prevhash,
-                        nbits,
-                        min_ntime,
-                    },
+                    validation_context: initial_validation_context,
                 });
                 return;
             }
@@ -77,20 +96,15 @@ impl BitcoinCoreSv2JDP {
             let txdata = mempool_mirror.get_txdata(&wtxid_list);
 
             tracing::info!(
-                "Using prevhash: {:?}, nbits: {:?}, min_ntime: {} from mempool mirror",
-                prevhash,
-                nbits,
-                min_ntime
+                "Using prevhash: {:?}, nbits: {:?}, min_ntime: {}, bip34_height: {} from mempool mirror",
+                initial_validation_context.prev_hash,
+                initial_validation_context.nbits,
+                initial_validation_context.min_ntime,
+                initial_bip34_height
             );
 
-            (prevhash, nbits, min_ntime, txdata)
+            (initial_validation_context, initial_bip34_height, txdata)
         }; // mempool_mirror dropped here, we don't want to hold it across await points
-
-        let validation_context = ValidationContext {
-            prev_hash: prevhash,
-            nbits,
-            min_ntime,
-        };
 
         let txid_list: Vec<Txid> = txdata.iter().map(|tx| tx.compute_txid()).collect();
 
@@ -103,14 +117,14 @@ impl BitcoinCoreSv2JDP {
 
             // Use the min_ntime from the template as the block timestamp
             // This ensures we meet Bitcoin Core's timestamp validation rules
-            let block_time = min_ntime;
+            let block_time = initial_validation_context.min_ntime;
 
             let header = Header {
                 version,
-                prev_blockhash: prevhash,
+                prev_blockhash: initial_validation_context.prev_hash,
                 merkle_root: TxMerkleNode::all_zeros(), // doesn't matter
                 time: block_time,
-                bits: nbits,
+                bits: initial_validation_context.nbits,
                 nonce: 0, // doesn't matter
             };
 
@@ -140,7 +154,7 @@ impl BitcoinCoreSv2JDP {
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
                         error_code: "internal-error".to_string(),
-                        validation_context,
+                        validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
                     self.cancellation_token.cancel();
@@ -158,7 +172,7 @@ impl BitcoinCoreSv2JDP {
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
                         error_code: "internal-error".to_string(),
-                        validation_context,
+                        validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
                     self.cancellation_token.cancel();
@@ -173,7 +187,7 @@ impl BitcoinCoreSv2JDP {
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
                         error_code: "internal-error".to_string(),
-                        validation_context,
+                        validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
                     self.cancellation_token.cancel();
@@ -188,8 +202,8 @@ impl BitcoinCoreSv2JDP {
                 tracing::debug!(
                     "Block details - version: {:?}, prev_blockhash: {:?}, bits: {:?}, num_txs: {}",
                     version,
-                    prevhash,
-                    nbits,
+                    initial_validation_context.prev_hash,
+                    initial_validation_context.nbits,
                     num_transactions
                 );
                 tracing::debug!(
@@ -220,9 +234,9 @@ impl BitcoinCoreSv2JDP {
             }
         }
 
-        let latest_validation_context = {
+        let (latest_validation_context, latest_bip34_height) = {
             let mempool_mirror = self.mempool_mirror.borrow();
-            ValidationContext {
+            let latest_validation_context = ValidationContext {
                 prev_hash: mempool_mirror
                     .get_current_prev_hash()
                     .expect("current_prev_hash must be set"),
@@ -232,31 +246,42 @@ impl BitcoinCoreSv2JDP {
                 min_ntime: mempool_mirror
                     .get_current_min_ntime()
                     .expect("current_min_ntime must be set"),
-            }
+            };
+            let latest_bip34_height = mempool_mirror
+                .get_current_bip34_height()
+                .expect("current_bip34_height must be set");
+            (latest_validation_context, latest_bip34_height)
         };
 
         let response = if valid_job {
             JdResponse::Success {
-                prev_hash: prevhash,
-                nbits,
-                min_ntime,
+                prev_hash: initial_validation_context.prev_hash,
+                nbits: initial_validation_context.nbits,
+                min_ntime: initial_validation_context.min_ntime,
                 txid_list,
             }
         } else {
-            let context_drifted = validation_context.prev_hash
+            let stale_at_arrival_by_bip34 = declared_bip34_height != latest_bip34_height;
+            let context_drifted = initial_validation_context.prev_hash
                 != latest_validation_context.prev_hash
-                || validation_context.nbits != latest_validation_context.nbits
-                || validation_context.min_ntime != latest_validation_context.min_ntime;
+                || initial_validation_context.nbits != latest_validation_context.nbits
+                || initial_validation_context.min_ntime != latest_validation_context.min_ntime
+                || initial_bip34_height != latest_bip34_height
+                || stale_at_arrival_by_bip34;
 
             let error_code = if context_drifted {
                 tracing::debug!(
-                    initial_prev_hash = ?validation_context.prev_hash,
-                    initial_nbits = ?validation_context.nbits,
-                    initial_min_ntime = validation_context.min_ntime,
+                    initial_prev_hash = ?initial_validation_context.prev_hash,
+                    initial_nbits = ?initial_validation_context.nbits,
+                    initial_min_ntime = initial_validation_context.min_ntime,
+                    initial_bip34_height,
+                    declared_bip34_height,
                     latest_prev_hash = ?latest_validation_context.prev_hash,
                     latest_nbits = ?latest_validation_context.nbits,
                     latest_min_ntime = latest_validation_context.min_ntime,
-                    "Detected mempool context drift during DeclareMiningJob validation; classifying error as stale-chain-tip"
+                    latest_bip34_height,
+                    stale_at_arrival_by_bip34,
+                    "Detected stale chain tip during DeclareMiningJob validation; classifying error as stale-chain-tip"
                 );
                 "stale-chain-tip".to_string()
             } else {
