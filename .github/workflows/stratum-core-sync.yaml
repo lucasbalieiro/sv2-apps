@@ -76,6 +76,7 @@ jobs:
           set -euo pipefail
 
           # Update lockfiles in all relevant workspaces in one run.
+          cargo update -p stratum-core --manifest-path stratum-apps/Cargo.toml
           cargo update -p stratum-core --manifest-path pool-apps/Cargo.toml
           cargo update -p stratum-core --manifest-path miner-apps/Cargo.toml
           cargo update -p stratum-core --manifest-path integration-tests/Cargo.toml
@@ -89,7 +90,7 @@ jobs:
           LATEST_SHA="${{ steps.detect.outputs.latest_sha }}"
           FAILED=0
 
-          for lockfile in pool-apps/Cargo.lock miner-apps/Cargo.lock integration-tests/Cargo.lock; do
+          for lockfile in stratum-apps/Cargo.lock pool-apps/Cargo.lock miner-apps/Cargo.lock integration-tests/Cargo.lock; do
             PINNED_SHA="$(grep -oP 'git\+https://github\.com/stratum-mining/stratum\?branch=main#\K[0-9a-f]+' "$lockfile" | head -1 || true)"
 
             if [ -z "${PINNED_SHA}" ]; then
@@ -126,6 +127,7 @@ jobs:
             - Previously pinned SHA: `${{ steps.detect.outputs.pinned_sha }}`
 
             Updated lockfiles:
+            - `stratum-apps/Cargo.lock`
             - `pool-apps/Cargo.lock`
             - `miner-apps/Cargo.lock`
             - `integration-tests/Cargo.lock`
