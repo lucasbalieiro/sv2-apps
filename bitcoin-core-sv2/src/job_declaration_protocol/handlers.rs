@@ -206,6 +206,21 @@ impl BitcoinCoreSv2JDP {
             result
         };
 
+        let latest_validation_context = {
+            let mempool_mirror = self.mempool_mirror.borrow();
+            ValidationContext {
+                prev_hash: mempool_mirror
+                    .get_current_prev_hash()
+                    .expect("current_prev_hash must be set"),
+                nbits: mempool_mirror
+                    .get_current_nbits()
+                    .expect("current_nbits must be set"),
+                min_ntime: mempool_mirror
+                    .get_current_min_ntime()
+                    .expect("current_min_ntime must be set"),
+            }
+        };
+
         let response = if valid_job {
             JdResponse::Success {
                 prev_hash: prevhash,
@@ -214,9 +229,29 @@ impl BitcoinCoreSv2JDP {
                 txid_list,
             }
         } else {
+            let context_drifted = validation_context.prev_hash
+                != latest_validation_context.prev_hash
+                || validation_context.nbits != latest_validation_context.nbits
+                || validation_context.min_ntime != latest_validation_context.min_ntime;
+
+            let error_code = if context_drifted {
+                tracing::debug!(
+                    initial_prev_hash = ?validation_context.prev_hash,
+                    initial_nbits = ?validation_context.nbits,
+                    initial_min_ntime = validation_context.min_ntime,
+                    latest_prev_hash = ?latest_validation_context.prev_hash,
+                    latest_nbits = ?latest_validation_context.nbits,
+                    latest_min_ntime = latest_validation_context.min_ntime,
+                    "Detected mempool context drift during DeclareMiningJob validation; classifying error as stale-prev-hash"
+                );
+                "stale-prev-hash".to_string()
+            } else {
+                "invalid-job".to_string()
+            };
+
             JdResponse::Error {
-                error_code: "invalid-job".to_string(),
-                validation_context,
+                error_code,
+                validation_context: latest_validation_context,
             }
         };
 
