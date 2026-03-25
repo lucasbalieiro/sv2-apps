@@ -199,12 +199,34 @@ impl TokenManager {
                     _ = tokio::time::sleep(janitor_interval) => {
                         // Avoid removing while iterating the same DashMap, which can block.
                         let now = Instant::now();
+
+                        let allocated_before = allocated_tokens.len();
+                        let active_before = active_tokens.len();
+
                         allocated_tokens.retain(|_, (timestamp, _)| {
                             now.duration_since(*timestamp) <= allocated_token_timeout
                         });
                         active_tokens.retain(|_, (_, timestamp, _)| {
                             now.duration_since(*timestamp) <= active_token_timeout
                         });
+
+                        let allocated_after = allocated_tokens.len();
+                        let active_after = active_tokens.len();
+                        let removed_allocated = allocated_before.saturating_sub(allocated_after);
+                        let removed_active = active_before.saturating_sub(active_after);
+
+                        if removed_allocated > 0 || removed_active > 0 {
+                            debug!(
+                                event = "token_janitor_eviction",
+                                removed_allocated,
+                                removed_active,
+                                allocated_before,
+                                allocated_after,
+                                active_before,
+                                active_after,
+                                "TokenManager janitor: evicted expired tokens"
+                            );
+                        }
                     }
                 }
             }

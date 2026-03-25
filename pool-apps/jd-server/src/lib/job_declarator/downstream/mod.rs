@@ -143,6 +143,11 @@ impl Downstream {
 
             self.downstream_cancellation_token.cancel();
 
+            warn!(
+                downstream_id = self.downstream_id,
+                "Downstream exiting before main loop; invoking cleanup callback"
+            );
+
             // cleanup entry on JobDeclarator
             cleanup(self.downstream_id);
 

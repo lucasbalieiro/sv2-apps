@@ -319,15 +319,26 @@ impl JobDeclarator {
     fn cleanup_downstream(&self, downstream_id: DownstreamId) {
         info!(downstream_id, "Cleaning up disconnected downstream");
 
-        if let Some((_, mut downstream)) = self.downstream_clients.remove(&downstream_id) {
-            downstream.shutdown();
-        }
+        let removed_downstream =
+            if let Some((_, mut downstream)) = self.downstream_clients.remove(&downstream_id) {
+                downstream.shutdown();
+                true
+            } else {
+                false
+            };
 
-        self.job_declarator_io
+        let removed_sender = self
+            .job_declarator_io
             .downstream_client_senders
-            .remove(&downstream_id);
+            .remove(&downstream_id)
+            .is_some();
 
         self.token_manager.remove_downstream(downstream_id);
+
+        debug!(
+            downstream_id,
+            removed_downstream, removed_sender, "Downstream cleanup complete"
+        );
     }
 
     /// Receives and dispatches a single JDP message from the fan-in channel.
