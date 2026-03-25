@@ -337,6 +337,15 @@ impl BitcoinCoreIPCEngine {
     }
 }
 
+fn validation_context_drifted(
+    previous_ctx: ValidationContext,
+    current_ctx: ValidationContext,
+) -> bool {
+    previous_ctx.prev_hash != current_ctx.prev_hash
+        || previous_ctx.nbits != current_ctx.nbits
+        || previous_ctx.min_ntime != current_ctx.min_ntime
+}
+
 #[cfg_attr(not(test), hotpath::measure_all)]
 #[async_trait::async_trait]
 impl JobValidationEngine for BitcoinCoreIPCEngine {
@@ -516,14 +525,11 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     .remove(&declare_mining_job.request_id);
                 self.allocated_token_entries.remove(&allocated_token);
 
-                let tip_drifted = match previous_pending_validation_context {
-                    Some(previous_ctx) => {
-                        previous_ctx.prev_hash != validation_context.prev_hash
-                            || previous_ctx.nbits != validation_context.nbits
-                            || previous_ctx.min_ntime != validation_context.min_ntime
-                    }
-                    None => false,
-                };
+                let tip_drifted = previous_pending_validation_context
+                    .map(|previous_ctx| {
+                        validation_context_drifted(previous_ctx, validation_context)
+                    })
+                    .unwrap_or(false);
 
                 if tip_drifted {
                     DeclareMiningJobResult::Error("stale-chain-tip".to_string())
@@ -535,23 +541,39 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 missing_wtxids,
                 validation_context,
             } => {
-                let declared_custom_job = DeclaredCustomJob {
-                    declare_mining_job: declare_mining_job_static,
-                    validation_context,
-                    txid_list: None,
-                    validated: false, // this is only set to true on JdResponse::Success
-                };
-                self.declared_custom_jobs
-                    .insert(declare_mining_job.request_id, declared_custom_job);
-                self.allocated_token_entries.insert(
-                    allocated_token,
-                    AllocatedTokenEntry {
-                        request_id: declare_mining_job.request_id,
-                        inserted_at: Instant::now(),
-                    },
-                );
+                let tip_drifted = previous_pending_validation_context
+                    .map(|previous_ctx| {
+                        validation_context_drifted(previous_ctx, validation_context)
+                    })
+                    .unwrap_or(false);
 
-                DeclareMiningJobResult::MissingTransactions(missing_wtxids)
+                // If this is a retry after ProvideMissingTransactionsSuccess and context drifted,
+                // classify as stale-chain-tip instead of asking for yet another missing-txs round.
+                if provide_missing_transactions_success.is_some() && tip_drifted {
+                    self.declared_custom_jobs
+                        .remove(&declare_mining_job.request_id);
+                    self.allocated_token_entries.remove(&allocated_token);
+
+                    DeclareMiningJobResult::Error("stale-chain-tip".to_string())
+                } else {
+                    let declared_custom_job = DeclaredCustomJob {
+                        declare_mining_job: declare_mining_job_static,
+                        validation_context,
+                        txid_list: None,
+                        validated: false, // this is only set to true on JdResponse::Success
+                    };
+                    self.declared_custom_jobs
+                        .insert(declare_mining_job.request_id, declared_custom_job);
+                    self.allocated_token_entries.insert(
+                        allocated_token,
+                        AllocatedTokenEntry {
+                            request_id: declare_mining_job.request_id,
+                            inserted_at: Instant::now(),
+                        },
+                    );
+
+                    DeclareMiningJobResult::MissingTransactions(missing_wtxids)
+                }
             }
         }
     }
