@@ -259,6 +259,50 @@ impl BitcoinCoreSv2JDP {
         Ok(())
     }
 
+    /// Forces a synchronous template refresh from Bitcoin Core, then refreshes the mempool mirror.
+    ///
+    /// This is useful after `checkBlock` failures to reduce classification races where the async
+    /// `waitNext` monitor has not yet advanced `current_template_ipc_client`.
+    ///
+    /// It differs from update_mempool_mirror in the sense that it doesn't assume a new template is
+    /// available. It forces the template refresh before updating MempoolMirror
+    pub(crate) async fn force_update_mempool_mirror(&self) -> Result<(), BitcoinCoreSv2JDPError> {
+        let mut create_new_block_request = self.mining_ipc_client.create_new_block_request();
+
+        let mut create_new_block_options =
+            create_new_block_request.get().get_options().map_err(|e| {
+                tracing::error!("Failed to get createNewBlock options: {e}");
+                e
+            })?;
+
+        create_new_block_options.set_use_mempool(true);
+
+        let create_new_block_response =
+            create_new_block_request.send().promise.await.map_err(|e| {
+                tracing::error!("Failed to send createNewBlock request: {e}");
+                e
+            })?;
+
+        let new_template_ipc_client = create_new_block_response
+            .get()
+            .map_err(|e| {
+                tracing::error!("Failed to read createNewBlock response: {e}");
+                e
+            })?
+            .get_result()
+            .map_err(|e| {
+                tracing::error!("Failed to get BlockTemplate from createNewBlock: {e}");
+                e
+            })?;
+
+        {
+            let mut current_template_ipc_client = self.current_template_ipc_client.borrow_mut();
+            *current_template_ipc_client = new_template_ipc_client;
+        }
+
+        self.update_mempool_mirror().await
+    }
+
     /// Processes a single job declaration request and dispatches to the appropriate handler.
     async fn process_request(&self, request: JdRequest) {
         match request {

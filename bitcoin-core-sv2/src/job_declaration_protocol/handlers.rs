@@ -196,9 +196,16 @@ impl BitcoinCoreSv2JDP {
             };
 
             let result = check_block_result.get_result();
+            let check_block_reason = check_block_result.get_reason();
+            let check_block_debug = check_block_result.get_debug();
+
             tracing::debug!("checkBlock returned: {}", result);
             if !result {
-                tracing::error!("Bitcoin Core rejected the block via checkBlock");
+                tracing::error!(
+                    reason = ?check_block_reason,
+                    debug = ?check_block_debug,
+                    "Bitcoin Core rejected the block via checkBlock"
+                );
                 tracing::debug!(
                     "Block details - version: {:?}, prev_blockhash: {:?}, bits: {:?}, num_txs: {}",
                     version,
@@ -221,15 +228,15 @@ impl BitcoinCoreSv2JDP {
         };
 
         if !valid_job {
-            // On checkBlock failure, force-refresh the mirror before classifying the error.
+            // On checkBlock failure, force-refresh template + mirror before classifying the error.
             // The template monitor updates mempool_mirror asynchronously, so we need to avoid races
             // where validation can run on context A while chain tip has already moved to context B.
             // Refreshing here narrows this TOCTOU window and lets us correctly emit
             // `stale-chain-tip` instead of generic `invalid-job` when context drift occurred.
-            if let Err(e) = self.update_mempool_mirror().await {
+            if let Err(e) = self.force_update_mempool_mirror().await {
                 tracing::debug!(
                     error = ?e,
-                    "Failed to refresh mempool mirror after checkBlock failure; continuing with current validation context"
+                    "Failed to force-refresh template/mempool mirror after checkBlock failure; continuing with current validation context"
                 );
             }
         }
