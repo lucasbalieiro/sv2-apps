@@ -32,6 +32,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::types::{DownstreamId, JdToken},
 };
+use tracing::debug;
 
 /// Data associated with an allocated token.
 /// - Instant is the allocation timestamp
@@ -96,24 +97,56 @@ impl TokenManager {
     /// Takes an allocated token and removes it from the internal set.
     /// Creates a corresponding active token and adds it to the internal set.
     pub fn activate(&self, allocated_token: JdToken, downstream_id: DownstreamId) -> JdToken {
-        self.allocated_tokens.remove(&allocated_token);
+        let removed_allocated = self.allocated_tokens.remove(&allocated_token).is_some();
+
         let activated_token = self.token_factory.fetch_add(1, Ordering::Relaxed);
         self.active_tokens.insert(
             activated_token,
             (allocated_token, Instant::now(), downstream_id),
         );
+
+        debug!(
+            event = "token_activation",
+            allocated_token,
+            activated_token,
+            downstream_id,
+            allocated_token_was_present = removed_allocated,
+            allocated_tokens_len = self.allocated_tokens.len(),
+            active_tokens_len = self.active_tokens.len(),
+            "TokenManager: activated token"
+        );
+
         activated_token
     }
 
     /// Removes an active token from the internal set.
     pub fn deactivate(&self, active_token: JdToken) {
-        self.active_tokens.remove(&active_token);
+        let removed = self.active_tokens.remove(&active_token);
+        debug!(
+            active_token,
+            removed = removed.is_some(),
+            mapped_allocated_token = removed.as_ref().map(|(_, (allocated, _, _))| *allocated),
+            mapped_downstream_id = removed
+                .as_ref()
+                .map(|(_, (_, _, downstream_id))| *downstream_id),
+            active_tokens_len = self.active_tokens.len(),
+            "TokenManager::deactivate"
+        );
     }
 
     /// Returns the allocated token that corresponds to an active token.
     /// Returns `None` if the active token is not found.
     pub fn allocated_from_active(&self, active_token: JdToken) -> Option<JdToken> {
-        self.active_tokens.get(&active_token).map(|entry| entry.0)
+        let mapped = self.active_tokens.get(&active_token).map(|entry| entry.0);
+        debug!(
+            active_token,
+            mapped_allocated_token = mapped,
+            found = mapped.is_some(),
+            active_tokens_len = self.active_tokens.len(),
+            allocated_tokens_len = self.allocated_tokens.len(),
+            "TokenManager::allocated_from_active lookup"
+        );
+        mapped
     }
 
     /// Clears all allocated and active tokens.

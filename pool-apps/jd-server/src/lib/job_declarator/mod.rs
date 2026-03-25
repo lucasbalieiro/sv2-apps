@@ -37,7 +37,7 @@ use stratum_apps::{
     utils::types::{DownstreamId, JdToken},
 };
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 // see https://github.com/stratum-mining/sv2-apps/issues/335
 const TEMPORARY_TIMEOUT_MULTIPLIER: u64 = 144;
@@ -375,25 +375,53 @@ impl JobDeclarator {
         let channel_id = set_custom_mining_job.channel_id;
 
         let active_token: JdToken = match set_custom_mining_job.token.inner_as_ref().try_into() {
-            Ok(token_bytes) => u64::from_le_bytes(token_bytes),
+            Ok(token_bytes) => {
+                let token = u64::from_le_bytes(token_bytes);
+                debug!(
+                    request_id,
+                    channel_id,
+                    active_token = token,
+                    "SetCustomMiningJob: parsed active token"
+                );
+                token
+            }
             Err(_) => {
+                debug!(
+                    request_id,
+                    channel_id, "SetCustomMiningJob: failed to parse active token"
+                );
                 return Ok(SetCustomMiningJobResponse::error(
                     request_id,
                     channel_id,
                     "invalid-mining-job-token",
-                ))
+                ));
             }
         };
 
         // this allows JobValidationEngine to lookup the corresponding DeclareMiningJob
         let allocated_token = match self.token_manager.allocated_from_active(active_token) {
-            Some(token) => token,
+            Some(token) => {
+                debug!(
+                    request_id,
+                    channel_id,
+                    active_token,
+                    allocated_token = token,
+                    "SetCustomMiningJob: active token mapped to allocated token"
+                );
+                token
+            }
             None => {
+                debug!(
+                    request_id,
+                    channel_id,
+                    active_token,
+                    "SetCustomMiningJob: active token not found in TokenManager"
+                );
                 return Ok(SetCustomMiningJobResponse::error(
                     request_id,
                     channel_id,
                     "invalid-mining-job-token",
-                ))
+                ));
             }
         };
 
