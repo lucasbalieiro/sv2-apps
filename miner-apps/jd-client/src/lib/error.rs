@@ -38,7 +38,7 @@ use stratum_apps::{
         RequestId, TemplateId, VardiffKey,
     },
 };
-use tokio::{sync::broadcast, time::error::Elapsed};
+use tokio::time::error::Elapsed;
 
 pub type JDCResult<T, Owner> = Result<T, JDCError<Owner>>;
 
@@ -164,8 +164,6 @@ pub enum JDCErrorKind {
     ChannelErrorReceiver(async_channel::RecvError),
     /// Channel sender error
     ChannelErrorSender,
-    /// Broadcast channel receiver error
-    BroadcastChannelErrorReceiver(broadcast::error::RecvError),
     /// Network helpers error
     NetworkHelpersError(network_helpers::Error),
     /// Unexpected message
@@ -269,9 +267,6 @@ impl fmt::Display for JDCErrorKind {
             ParseInt(ref e) => write!(f, "Bad convert from `String` to `int`: `{e:?}`"),
             ChannelErrorReceiver(ref e) => write!(f, "Channel receive error: `{e:?}`"),
             Parser(ref e) => write!(f, "Parser error: `{e:?}`"),
-            BroadcastChannelErrorReceiver(ref e) => {
-                write!(f, "Broadcast channel receive error: {e:?}")
-            }
             ChannelErrorSender => write!(f, "Sender error"),
             NetworkHelpersError(ref e) => write!(f, "Network error: {e:?}"),
             UnexpectedMessage(extension_type, message_type) => {
@@ -501,6 +496,12 @@ impl From<ExtendedExtranonceError> for JDCErrorKind {
 impl From<GroupChannelError> for JDCErrorKind {
     fn from(value: GroupChannelError) -> Self {
         JDCErrorKind::ChannelSv2(ChannelSv2Error::GroupChannelServerSide(value))
+    }
+}
+
+impl<T> From<async_channel::SendError<T>> for JDCErrorKind {
+    fn from(_: async_channel::SendError<T>) -> Self {
+        JDCErrorKind::ChannelErrorSender
     }
 }
 

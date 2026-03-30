@@ -89,7 +89,16 @@ impl HandleExtensionsFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Extensions(error.into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            _ = self.downstream_channel.downstream_sender.send(frame).await;
+            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+                error!(
+                    "Failed to send RequestExtensionsError to downstream {}: {e}",
+                    self.downstream_id
+                );
+                return Err(JDCError::disconnect(
+                    JDCErrorKind::ChannelErrorSender,
+                    self.downstream_id,
+                ));
+            }
 
             // If required extensions are missing, the server SHOULD disconnect the client
             if !missing_required.is_empty() {
@@ -121,7 +130,16 @@ impl HandleExtensionsFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Extensions(success.into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            _ = self.downstream_channel.downstream_sender.send(frame).await;
+            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+                error!(
+                    "Failed to send RequestExtensionsSuccess to downstream {}: {e}",
+                    self.downstream_id
+                );
+                return Err(JDCError::disconnect(
+                    JDCErrorKind::ChannelErrorSender,
+                    self.downstream_id,
+                ));
+            }
 
             info!(
                 "Downstream {}: Stored negotiated extensions: {:?}",

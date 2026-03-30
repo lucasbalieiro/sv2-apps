@@ -111,33 +111,36 @@ impl RouteMessageTo<'_> {
     ) -> Result<(), JDCErrorKind> {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
-                _ = channel_manager_channel.downstream_sender.send((
-                    downstream_id,
-                    message.into_static(),
-                    None,
-                ));
+                let sender = channel_manager_channel
+                    .downstream_sender
+                    .super_safe_lock(|map| map.get(&downstream_id).cloned());
+                if let Some(sender) = sender {
+                    sender.send((message.into_static(), None)).await?;
+                } else {
+                    debug!("Dropping message for downstream {downstream_id}: no longer connected");
+                }
             }
             RouteMessageTo::Upstream(message) => {
                 if get_jd_mode() != JdMode::SoloMining {
                     let message_static = message.into_static();
                     let sv2_frame: Sv2Frame = AnyMessage::Mining(message_static).try_into()?;
-                    _ = channel_manager_channel
+                    channel_manager_channel
                         .upstream_sender
                         .send(sv2_frame)
-                        .await;
+                        .await?;
                 }
             }
             RouteMessageTo::JobDeclarator(message) => {
-                _ = channel_manager_channel
+                channel_manager_channel
                     .jd_sender
                     .send(message.into_static())
-                    .await;
+                    .await?;
             }
             RouteMessageTo::TemplateProvider(message) => {
-                _ = channel_manager_channel
+                channel_manager_channel
                     .tp_sender
                     .send(message.into_static())
-                    .await;
+                    .await?;
             }
         }
         Ok(())
@@ -460,9 +463,15 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     })
                 })?;
 
-        for messages in messages {
-            let _ = messages.forward(&self.channel_manager_channel).await;
+        for message in messages {
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
+
         Ok(())
     }
 
@@ -723,8 +732,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     })
             })?;
 
-        for messages in messages {
-            let _ = messages.forward(&self.channel_manager_channel).await;
+        for message in messages {
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
 
         Ok(())
@@ -918,8 +932,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 messages
             });
 
-        for messages in messages {
-            let _ = messages.forward(&self.channel_manager_channel).await;
+        for message in messages {
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
 
         Ok(())
@@ -1153,8 +1172,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             })
         })?;
 
-        for messages in messages {
-            let _ = messages.forward(&self.channel_manager_channel).await;
+        for message in messages {
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
 
         Ok(())
@@ -1411,8 +1435,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             })
         })?;
 
-        for messages in messages {
-            _ = messages.forward(&self.channel_manager_channel).await;
+        for message in messages {
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
 
         Ok(())

@@ -16,7 +16,7 @@ use stratum_apps::{
     tp_type::TemplateProviderType,
     utils::types::{Sv2Frame, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS},
 };
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::Notify;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -96,8 +96,6 @@ impl JobDeclaratorClient {
         let (channel_manager_to_jd_sender, channel_manager_to_jd_receiver) = unbounded();
         let (jd_to_channel_manager_sender, jd_to_channel_manager_receiver) = unbounded();
 
-        let (channel_manager_to_downstream_sender, _channel_manager_to_downstream_receiver) =
-            broadcast::channel(10);
         let (downstream_to_channel_manager_sender, downstream_to_channel_manager_receiver) =
             unbounded();
 
@@ -114,7 +112,6 @@ impl JobDeclaratorClient {
             jd_to_channel_manager_receiver.clone(),
             channel_manager_to_tp_sender.clone(),
             tp_to_channel_manager_receiver.clone(),
-            channel_manager_to_downstream_sender.clone(),
             downstream_to_channel_manager_receiver,
             encoded_outputs.clone(),
             self.config.supported_extensions().to_vec(),
@@ -350,7 +347,6 @@ impl JobDeclaratorClient {
                 fallback_coordinator.clone(),
                 status_sender.clone(),
                 downstream_to_channel_manager_sender.clone(),
-                channel_manager_to_downstream_sender.clone(),
                 self.config.supported_extensions().to_vec(),
                 self.config.required_extensions().to_vec(),
             )
@@ -416,8 +412,6 @@ impl JobDeclaratorClient {
                                 let (channel_manager_to_jd_sender_new, channel_manager_to_jd_receiver_new) = unbounded();
                                 let (jd_to_channel_manager_sender_new, jd_to_channel_manager_receiver_new) = unbounded();
 
-                                let (channel_manager_to_downstream_sender_new, _channel_manager_to_downstream_receiver_new) =
-                                    broadcast::channel(10);
                                 let (downstream_to_channel_manager_sender_new, downstream_to_channel_manager_receiver_new) =
                                     unbounded();
 
@@ -430,7 +424,6 @@ impl JobDeclaratorClient {
                                     jd_to_channel_manager_receiver_new.clone(),
                                     channel_manager_to_tp_sender.clone(),
                                     tp_to_channel_manager_receiver.clone(),
-                                    channel_manager_to_downstream_sender_new.clone(),
                                     downstream_to_channel_manager_receiver_new.clone(),
                                     encoded_outputs.clone(),
                                     self.config.supported_extensions().to_vec(),
@@ -556,7 +549,6 @@ impl JobDeclaratorClient {
                                         fallback_coordinator.clone(),
                                         status_sender.clone(),
                                         downstream_to_channel_manager_sender_new.clone(),
-                                        channel_manager_to_downstream_sender_new.clone(),
                                         self.config.supported_extensions().to_vec(),
                                         self.config.required_extensions().to_vec(),
                                     )
