@@ -584,10 +584,6 @@ impl Sv1Server {
                                 downstream_id
                             );
 
-                            // Set flag to indicate we're processing queued responses
-                            downstream
-                                .processing_queued_sv1_handshake_responses
-                                .store(true, Ordering::SeqCst);
                             let downstream_sv1_sender = downstream
                                 .downstream_channel_state
                                 .downstream_sv1_sender
