@@ -1,6 +1,8 @@
 use std::{
+    backtrace::Backtrace,
     fs::OpenOptions,
     io::{self, IsTerminal},
+    panic,
     path::Path,
     str::FromStr,
 };
@@ -44,4 +46,14 @@ pub fn init_logging(log_file: Option<&Path>) {
     };
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+
+    // Set up a panic hook that records panic information and a backtrace
+    // as tracing events, ensuring they are persisted in the log file.
+    let default_panic_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        let backtrace = Backtrace::force_capture();
+        tracing::error!("panic: {panic_info}");
+        tracing::error!("Backtrace: {backtrace}");
+        default_panic_hook(panic_info);
+    }));
 }
