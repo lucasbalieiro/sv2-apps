@@ -6,11 +6,14 @@ use stratum_apps::{
         bitcoin::{Amount, TxOut},
         common_messages_sv2::{Protocol, SetupConnection},
         mining_sv2::CloseChannel,
+        parsers_sv2::{Mining, Tlv},
     },
     utils::types::ChannelId,
 };
 
 use crate::error::PoolErrorKind;
+
+pub(crate) type DownstreamMessage = (Mining<'static>, Option<Vec<Tlv>>);
 
 /// Constructs a `SetupConnection` message for the mining protocol.
 #[allow(clippy::result_large_err)]

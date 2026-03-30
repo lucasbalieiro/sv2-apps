@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use async_channel::{Receiver, Sender};
+use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use core::sync::atomic::Ordering;
 use stratum_apps::{
@@ -37,7 +37,7 @@ use stratum_apps::{
     task_manager::TaskManager,
     utils::types::{ChannelId, DownstreamId, SharesPerMinute, VardiffKey},
 };
-use tokio::{net::TcpListener, select, sync::broadcast};
+use tokio::{net::TcpListener, select};
 use tracing::{debug, error, info, warn};
 
 use jd_server_sv2::job_declarator::JobDeclarator;
@@ -47,6 +47,7 @@ use crate::{
     downstream::Downstream,
     error::{self, PoolError, PoolErrorKind, PoolResult},
     status::{handle_error, Status, StatusSender},
+    utils::DownstreamMessage,
 };
 
 mod mining_message_handler;
@@ -83,7 +84,7 @@ pub struct ChannelManagerData {
 pub struct ChannelManagerChannel {
     tp_sender: Sender<TemplateDistribution<'static>>,
     tp_receiver: Receiver<TemplateDistribution<'static>>,
-    downstream_sender: broadcast::Sender<(usize, Mining<'static>, Option<Vec<Tlv>>)>,
+    downstream_sender: Arc<Mutex<HashMap<DownstreamId, Sender<DownstreamMessage>>>>,
     downstream_receiver: Receiver<(usize, Mining<'static>, Option<Vec<Tlv>>)>,
 }
 
@@ -114,7 +115,6 @@ impl ChannelManager {
         config: PoolConfig,
         tp_sender: Sender<TemplateDistribution<'static>>,
         tp_receiver: Receiver<TemplateDistribution<'static>>,
-        downstream_sender: broadcast::Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         downstream_receiver: Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         coinbase_outputs: Vec<u8>,
         job_declarator: Option<JobDeclarator>,
@@ -155,7 +155,7 @@ impl ChannelManager {
         let channel_manager_channel = ChannelManagerChannel {
             tp_sender,
             tp_receiver,
-            downstream_sender,
+            downstream_sender: Arc::new(Mutex::new(HashMap::new())),
             downstream_receiver,
         };
 
@@ -236,11 +236,6 @@ impl ChannelManager {
         cancellation_token: CancellationToken,
         status_sender: Sender<Status>,
         channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-        channel_manager_receiver: broadcast::Sender<(
-            DownstreamId,
-            Mining<'static>,
-            Option<Vec<Tlv>>,
-        )>,
     ) -> PoolResult<(), error::ChannelManager> {
         // todo: let start_downstream_server accept Arc, instead of clone.
         let this = Arc::new(self);
@@ -293,7 +288,6 @@ impl ChannelManager {
                                 let cancellation_token_inner = cancellation_token_clone.clone();
                                 let status_sender_inner = status_sender.clone();
                                 let channel_manager_sender_inner = channel_manager_sender.clone();
-                                let channel_manager_receiver_inner = channel_manager_receiver.clone();
                                 let task_manager_inner = task_manager_clone.clone();
 
                                 task_manager_clone.spawn(async move {
@@ -329,18 +323,22 @@ impl ChannelManager {
                                         }
                                     };
 
+                                    let (channel_manager_sender, channel_manager_receiver) = unbounded();
+
                                     let downstream = Downstream::new(
                                         downstream_id,
                                         channel_id_factory,
                                         group_channel,
                                         channel_manager_sender_inner,
-                                        channel_manager_receiver_inner,
+                                        channel_manager_receiver,
                                         noise_stream,
                                         cancellation_token_inner.clone(),
                                         task_manager_inner.clone(),
                                         this.supported_extensions.clone(),
                                         this.required_extensions.clone(),
                                     );
+
+                                    this.channel_manager_channel.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender));
 
                                     this.channel_manager_data.super_safe_lock(|data| {
                                         data.downstream.insert(downstream_id, downstream.clone());
@@ -437,6 +435,9 @@ impl ChannelManager {
                 .vardiff
                 .retain(|key, _| key.downstream_id != downstream_id);
         });
+        self.channel_manager_channel
+            .downstream_sender
+            .super_safe_lock(|map| map.remove(&downstream_id));
         Ok(())
     }
 
@@ -617,7 +618,12 @@ impl ChannelManager {
             });
 
         for message in messages {
-            message.forward(&self.channel_manager_channel).await;
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                error!("Failed to forward message {e:?}");
+            }
         }
 
         info!("Vardiff update cycle complete");
@@ -652,7 +658,7 @@ impl ChannelManager {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum RouteMessageTo<'a> {
     /// Route to the template provider subsystem.
     TemplateProvider(TemplateDistribution<'a>),
@@ -673,21 +679,29 @@ impl<'a> From<(DownstreamId, Mining<'a>)> for RouteMessageTo<'a> {
 }
 
 impl RouteMessageTo<'_> {
-    pub async fn forward(self, channel_manager_channel: &ChannelManagerChannel) {
+    pub async fn forward(
+        self,
+        channel_manager_channel: &ChannelManagerChannel,
+    ) -> Result<(), PoolErrorKind> {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
-                _ = channel_manager_channel.downstream_sender.send((
-                    downstream_id,
-                    message.into_static(),
-                    None,
-                ));
+                let sender = channel_manager_channel
+                    .downstream_sender
+                    .super_safe_lock(|map| map.get(&downstream_id).cloned());
+
+                if let Some(sender) = sender {
+                    sender.send((message.into_static(), None)).await?;
+                } else {
+                    debug!("Dropping message for downstream {downstream_id}: no longer connected");
+                }
             }
             RouteMessageTo::TemplateProvider(message) => {
-                _ = channel_manager_channel
+                channel_manager_channel
                     .tp_sender
                     .send(message.into_static())
-                    .await;
+                    .await?;
             }
         }
+        Ok(())
     }
 }
