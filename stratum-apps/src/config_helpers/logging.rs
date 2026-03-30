@@ -23,15 +23,13 @@ pub fn init_logging(log_file: Option<&Path>) {
         Some(path) => {
             // Log to both file and stdout
             let path = path.to_owned();
-            let file_layer = fmt::layer()
-                .with_writer(move || {
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&path)
-                        .expect("Failed to open log file")
-                })
-                .with_ansi(false);
+            // Open file only once, and not on every write.
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .expect("Failed to open log file");
+            let file_layer = fmt::layer().with_writer(file).with_ansi(false);
             Box::new(
                 Registry::default()
                     .with(env_filter)
