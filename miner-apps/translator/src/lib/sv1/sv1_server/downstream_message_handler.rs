@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     error, is_aggregated,
-    sv1::{downstream::SubmitShareWithChannelId, Sv1Server},
+    sv1::{downstream::SubmitShareWithChannelId, sv1_server::tlv_compatible_username, Sv1Server},
     utils::{validate_sv1_share, AGGREGATED_CHANNEL_ID},
 };
 
@@ -204,7 +204,7 @@ impl IsServer<'static> for Sv1Server {
             if !is_authorized {
                 data.authorized_worker_name = name.to_string();
             }
-            data.user_identity = name.to_string();
+            data.user_identity = tlv_compatible_username(name).to_string();
             debug!(
                 "Down: Set user_identity to '{}' for downstream {}",
                 data.user_identity, downstream_id
