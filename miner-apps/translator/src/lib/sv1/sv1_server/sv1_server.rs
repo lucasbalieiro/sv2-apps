@@ -4,7 +4,7 @@ use crate::{
     is_aggregated, is_non_aggregated,
     status::{handle_error, Status, StatusSender},
     sv1::{
-        downstream::downstream::Downstream,
+        downstream::{downstream::Downstream, SubmitShareWithChannelId},
         sv1_server::{
             channel::Sv1ServerChannelState, is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER,
         },
@@ -406,7 +406,7 @@ impl Sv1Server {
     /// Handles share submission messages from downstream.
     async fn handle_submit_shares(
         &self,
-        message: crate::sv1::downstream::SubmitShareWithChannelId,
+        message: SubmitShareWithChannelId,
     ) -> TproxyResult<(), error::Sv1Server> {
         // Increment vardiff counter for this downstream (only if vardiff is enabled)
         if self.config.downstream_difficulty_config.enable_vardiff {
@@ -456,14 +456,24 @@ impl Sv1Server {
 
         // Only add TLV fields with user identity in non-aggregated mode
         let tlv_fields = if is_non_aggregated() {
-            let user_identity_string = self
-                .downstreams
-                .get(&message.downstream_id)
-                .unwrap()
+            let Some(downstream) = self.downstreams.get(&message.downstream_id) else {
+                return Err(TproxyError::disconnect(
+                    TproxyErrorKind::DownstreamNotPresent(message.downstream_id),
+                    message.downstream_id,
+                ));
+            };
+            let user_identity = downstream
                 .downstream_data
                 .super_safe_lock(|d| d.user_identity.clone());
-            UserIdentity::new(&user_identity_string)
-                .unwrap()
+            // Considering we are trucating user identity to 32 bytes,
+            // If an error happen we should disconnect the downstream.
+            UserIdentity::new(&user_identity)
+                .map_err(|e| {
+                    TproxyError::disconnect(
+                        TproxyErrorKind::General(e.into()),
+                        message.downstream_id,
+                    )
+                })?
                 .to_tlv()
                 .ok()
                 .map(|tlv| vec![tlv])
