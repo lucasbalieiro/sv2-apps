@@ -5,7 +5,9 @@ use crate::{
     status::{handle_error, Status, StatusSender},
     sv1::{
         downstream::downstream::Downstream,
-        sv1_server::{channel::Sv1ServerChannelState, KEEPALIVE_JOB_ID_DELIMITER},
+        sv1_server::{
+            channel::Sv1ServerChannelState, is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER,
+        },
     },
     utils::AGGREGATED_CHANNEL_ID,
 };
@@ -41,7 +43,7 @@ use stratum_apps::{
             },
             sv2_to_sv1::{build_sv1_notify_from_sv2, build_sv1_set_difficulty_from_sv2_target},
         },
-        sv1_api::{json_rpc, server_to_client, utils::HexU32Be, IsServer},
+        sv1_api::{server_to_client, utils::HexU32Be, IsServer},
     },
     task_manager::TaskManager,
     utils::types::{ChannelId, DownstreamId, Hashrate, RequestId, SharesPerMinute},
@@ -346,9 +348,11 @@ impl Sv1Server {
                 return Ok(());
             }
 
+            let is_authorize = is_mining_authorize(&downstream_message);
+
             let response = self
                 .clone()
-                .handle_message(Some(downstream_id), downstream_message.clone());
+                .handle_message(Some(downstream_id), downstream_message);
 
             match response {
                 Ok(Some(response_msg)) => {
@@ -370,13 +374,11 @@ impl Sv1Server {
                         })?;
 
                     // Check if this was an authorize message and handle sv1 handshake completion
-                    if let json_rpc::Message::StandardRequest(request) = &downstream_message {
-                        if request.method == "mining.authorize" {
-                            info!("Down: Handling mining.authorize after handshake completion");
-                            if let Err(e) = downstream.handle_sv1_handshake_completion().await {
-                                error!("Down: Failed to handle handshake completion: {:?}", e);
-                                return Err(TproxyError::disconnect(e, downstream_id));
-                            }
+                    if is_authorize {
+                        info!("Down: Handling mining.authorize after handshake completion");
+                        if let Err(e) = downstream.handle_sv1_handshake_completion().await {
+                            error!("Down: Failed to handle handshake completion: {:?}", e);
+                            return Err(TproxyError::disconnect(e, downstream_id));
                         }
                     }
                 }
@@ -570,11 +572,11 @@ impl Sv1Server {
                         .map_err(TproxyError::shutdown)?;
 
                     // Process all queued messages now that channel is established
-                    if let Ok(queued_messages) = downstream.downstream_data.safe_lock(|d| {
-                        let messages = d.queued_sv1_handshake_messages.clone();
-                        d.queued_sv1_handshake_messages.clear();
-                        messages
-                    }) {
+                    let queued_messages = downstream
+                        .downstream_data
+                        .safe_lock(|d| std::mem::take(&mut d.queued_sv1_handshake_messages))
+                        .ok();
+                    if let Some(queued_messages) = queued_messages {
                         if !queued_messages.is_empty() {
                             info!(
                                 "Processing {} queued Sv1 messages for downstream {}",
@@ -582,27 +584,50 @@ impl Sv1Server {
                                 downstream_id
                             );
 
-                            // Set flag to indicate we're processing queued responses
-                            downstream
-                                .processing_queued_sv1_handshake_responses
-                                .store(true, Ordering::SeqCst);
+                            let downstream_sv1_sender = downstream
+                                .downstream_channel_state
+                                .downstream_sv1_sender
+                                .clone();
 
                             for message in queued_messages {
-                                if let Ok(Some(response_msg)) =
-                                    self.clone().handle_message(Some(downstream_id), message)
-                                {
-                                    self.sv1_server_channel_state
-                                        .sv1_server_to_downstream_sender
-                                        .send((
-                                            m.channel_id,
-                                            Some(downstream_id),
-                                            response_msg.into(),
-                                        ))
-                                        .map_err(|_| {
-                                            TproxyError::shutdown(
-                                                TproxyErrorKind::ChannelErrorSender,
-                                            )
-                                        })?;
+                                let is_authorize = is_mining_authorize(&message);
+                                let response =
+                                    self.clone().handle_message(Some(downstream_id), message);
+                                match response {
+                                    Ok(Some(response_msg)) => {
+                                        downstream_sv1_sender.send(response_msg.into()).await
+                                            .map_err(|e| {
+                                                error!(
+                                                    "Down: Failed to send message to downstream: {e:?}"
+                                                );
+                                                TproxyError::disconnect(
+                                                    TproxyErrorKind::ChannelErrorSender, downstream_id
+                                                )
+                                            })?;
+
+                                        if is_authorize {
+                                            info!("Down: Handling mining.authorize after upstream channel is open");
+                                            if let Err(e) =
+                                                downstream.handle_sv1_handshake_completion().await
+                                            {
+                                                error!(
+                                                    "Down: Failed to handle handshake completion: {:?}",
+                                                    e
+                                                );
+                                                return Err(TproxyError::disconnect(
+                                                    e,
+                                                    downstream_id,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        // Message was handled but no response needed
+                                    }
+                                    Err(e) => {
+                                        error!("Down: Error handling downstream message: {:?}", e);
+                                        return Err(TproxyError::disconnect(e, downstream_id));
+                                    }
                                 }
                             }
                         }
