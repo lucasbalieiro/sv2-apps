@@ -204,6 +204,8 @@ pub enum TproxyErrorKind {
     AggregatedChannelClosed,
     /// Invalid key
     InvalidKey,
+    /// Downstream not found with given downstream_id
+    DownstreamNotPresent(DownstreamId),
 }
 
 impl std::error::Error for TproxyErrorKind {}
@@ -281,6 +283,10 @@ impl fmt::Display for TproxyErrorKind {
             }
             AggregatedChannelClosed => write!(f, "Aggregated channel was closed"),
             InvalidKey => write!(f, "Invalid key used during noise handshake"),
+            DownstreamNotPresent(downstream_id) => write!(
+                f,
+                "downstream not found with downstream_id: {downstream_id}"
+            ),
         }
     }
 }
