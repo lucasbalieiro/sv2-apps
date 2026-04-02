@@ -71,6 +71,11 @@ impl BitcoinCore {
     pub fn start(port: u16, difficulty_level: DifficultyLevel) -> Self {
         let current_dir: PathBuf = std::env::current_dir().expect("failed to read current dir");
         let bin_dir = current_dir.join("template-provider");
+        if !bin_dir.exists() {
+            create_dir_all(&bin_dir).expect("Failed to create bin directory");
+        }
+        let high_diff_chain_dir = bin_dir.join("high_diff_chain");
+
         // Use temp dir for Bitcoin datadir to avoid long Unix socket paths in CI
         let data_dir = std::env::temp_dir().join("sv2-integration-tests");
 
@@ -103,8 +108,25 @@ impl BitcoinCore {
                 let signet_datadir = data_dir.join(staticdir.clone()).join("signet");
                 create_dir_all(signet_datadir.clone()).expect("Failed to create signet directory");
 
+                // Download and cache high difficulty chain if not exists
+                if !high_diff_chain_dir.exists() {
+                    let local_tarball =
+                        current_dir.join("resources").join("high_diff_chain.tar.gz");
+                    let tarball_bytes = if local_tarball.exists() {
+                        warn!("Using local high_diff_chain.tar.gz");
+                        tarball::read_from_file(local_tarball.to_str().unwrap())
+                    } else {
+                        warn!("Downloading high_diff_chain for the testing session...");
+                        //this is pinning to the commit right before the current one, where I added
+                        //the tar.gz file with the chain data.
+                        let url = "https://raw.githubusercontent.com/stratum-mining/sv2-apps/eb41b790626fb51ce55e74be8fa0b4f07d4029bf/integration-tests/resources/high_diff_chain.tar.gz";
+                        http::make_get_request(url, 5)
+                    };
+
+                    tarball::unpack(&tarball_bytes, &bin_dir);
+                }
+
                 // Copy high difficulty signet data into signet datadir
-                let high_diff_chain_dir = current_dir.join("high_diff_chain");
                 fs_utils::copy_dir_contents(&high_diff_chain_dir, &signet_datadir)
                     .expect("Failed to copy high difficulty chain data");
             }
