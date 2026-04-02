@@ -10,6 +10,8 @@ repository = "https://github.com/stratum-mining/stratum"
 license = "MIT OR Apache-2.0"
 keywords = ["stratum", "mining", "bitcoin", "protocol"]
 
+exclude = ["resources/high_diff_chain.tar.gz"]
+
 [dependencies]
 stratum-apps = { version = "0.3.0", path = "../stratum-apps", features = ["network", "config"] }
 jd_client_sv2 = { version = "0.1.0", path = "../miner-apps/jd-client" }
