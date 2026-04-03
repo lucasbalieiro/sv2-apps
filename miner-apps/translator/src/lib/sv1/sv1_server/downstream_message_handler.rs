@@ -13,7 +13,7 @@ use crate::{
 };
 
 // Implements `IsServer` for `Sv1Server` to handle the Sv1 messages.
-#[hotpath::measure_all]
+#[cfg_attr(not(test), hotpath::measure_all)]
 impl IsServer<'static> for Sv1Server {
     fn handle_configure(
         &mut self,
