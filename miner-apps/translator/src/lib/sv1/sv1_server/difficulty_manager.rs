@@ -24,6 +24,7 @@ enum AggregatedSnapshot {
     NoDownstreams,
 }
 
+#[cfg_attr(not(test), hotpath::measure_all)]
 impl Sv1Server {
     /// Spawns the variable difficulty adjustment loop.
     ///
