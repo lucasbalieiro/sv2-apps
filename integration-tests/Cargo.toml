@@ -26,6 +26,7 @@ tokio-util = { version = "0.7", default-features = false }
 tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3.19", default-features = false }
 hex = "0.4.3"
+clap = { version = "^4.5.4", features = ["derive"] }
 
 # Direct dependencies kept only for the embedded `mining_device` module.
 # Remove this block when removing:
@@ -47,6 +48,11 @@ num_cpus = "1"
 
 [lib]
 path = "lib/mod.rs"
+
+# Binary target preserved from the former standalone `mining_device` crate.
+[[bin]]
+name = "mining_device"
+path = "bin/mining_device.rs"
 
 # Bench targets preserved from the former standalone `mining_device` crate.
 # Remove these entries when the embedded `mining_device` module is deprecated.
