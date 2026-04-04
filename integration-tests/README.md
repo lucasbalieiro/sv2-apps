@@ -33,6 +33,27 @@ Note: during the execution of the tests, the `template-provider` directory holds
 binaries (Bitcoin Core and sv2-tp), while test data directories are created in the system temp
 directory.
 
+## Standalone `mining_device` Binary
+
+The embedded `integration_tests_sv2::mining_device` module also exposes a standalone executable
+binary again.
+
+To build it:
+
+```bash
+cargo build --manifest-path=integration-tests/Cargo.toml --release --bin mining_device
+```
+
+The executable will be available at `integration-tests/target/release/mining_device`.
+
+To run it directly through Cargo:
+
+```bash
+cargo run --manifest-path=integration-tests/Cargo.toml --release --bin mining_device -- \
+  --address-pool 127.0.0.1:3333 \
+  --id-device test
+```
+
 ## Writing Custom Integration Tests
 
  - To write your own integration tests using this library, you can install the library as follows:
