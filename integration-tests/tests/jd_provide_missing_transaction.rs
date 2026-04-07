@@ -15,6 +15,7 @@ async fn jds_ask_for_missing_transactions() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (translator, tproxy_addr, _) =
         start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;

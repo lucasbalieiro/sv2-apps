@@ -31,6 +31,7 @@ async fn jds_should_not_panic_if_jdc_shutsdown() {
         vec![],
         vec![],
         false,
+        None,
     );
     sniffer_a
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
@@ -50,6 +51,7 @@ async fn jds_should_not_panic_if_jdc_shutsdown() {
         vec![],
         vec![],
         false,
+        None,
     );
     sniffer
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
@@ -74,6 +76,7 @@ async fn jdc_tp_success_setup() {
         vec![],
         vec![],
         false,
+        None,
     );
     // This is needed because jd-client waits for a downstream connection before it starts
     // exchanging messages with the Template Provider.
@@ -314,6 +317,7 @@ async fn pool_rejects_reused_set_custom_mining_job_token() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (translator, tproxy_addr, _) =
         start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;
@@ -447,6 +451,7 @@ async fn jds_receive_solution_while_processing_declared_job_test() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (translator, tproxy_addr, _) =
         start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;
@@ -540,6 +545,7 @@ async fn jds_wont_exit_upon_receiving_unexpected_txids_in_provide_missing_transa
         vec![],
         vec![],
         false,
+        None,
     );
     let (translator, tproxy_addr, _) =
         start_sv2_translator(&[jdc_addr_1], false, vec![], vec![], None, false).await;
@@ -606,6 +612,7 @@ async fn jdc_group_extended_channels() {
         vec![],
         vec![],
         false,
+        None,
     );
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", jdc_addr, false, vec![], None);
@@ -790,6 +797,7 @@ async fn jdc_group_standard_channels() {
         vec![],
         vec![],
         false,
+        None,
     );
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", jdc_addr, false, vec![], None);
@@ -983,6 +991,7 @@ async fn jdc_require_standard_jobs_set_does_not_group_standard_channels() {
         vec![],
         vec![],
         false,
+        None,
     );
 
     let (sniffer, sniffer_addr) = start_sniffer("sniffer", jdc_addr, false, vec![], None);

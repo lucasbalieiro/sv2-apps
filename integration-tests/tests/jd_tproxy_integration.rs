@@ -19,6 +19,7 @@ async fn jd_non_aggregated_tproxy_integration() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) =
         start_sniffer("1", jdc_addr, false, vec![], None);
@@ -107,6 +108,7 @@ async fn jd_aggregated_tproxy_integration() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) =
         start_sniffer("1", jdc_addr, false, vec![], None);

@@ -37,6 +37,7 @@ impl HandleCommonMessagesFromServerAsync for JobDeclarator {
         let jd_mode = match self.mode {
             ConfigJDCMode::CoinbaseOnly => JdMode::CoinbaseOnly,
             ConfigJDCMode::FullTemplate => JdMode::FullTemplate,
+            ConfigJDCMode::SoloMining => JdMode::SoloMining,
         };
 
         set_jd_mode(jd_mode);
