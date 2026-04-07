@@ -45,6 +45,7 @@ async fn jdc_cached_shares_relayed_on_set_custom_job_success() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (translator, tproxy_addr, _) =
         start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;

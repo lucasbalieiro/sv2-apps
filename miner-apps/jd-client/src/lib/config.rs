@@ -45,7 +45,7 @@ pub struct JobDeclaratorClientConfig {
     shares_per_minute: SharesPerMinute,
     /// share batch size
     share_batch_size: SharesBatchSize,
-    /// JDC mode: FullTemplate or CoinbaseOnly
+    /// JDC mode: FullTemplate, CoinbaseOnly, or SoloMining
     #[serde(deserialize_with = "deserialize_jdc_mode", default)]
     pub mode: ConfigJDCMode,
     /// Protocol extensions that the JDC supports (will accept if requested by downstream clients).
@@ -74,7 +74,7 @@ impl JobDeclaratorClientConfig {
         template_provider_type: TemplateProviderType,
         upstreams: Vec<Upstream>,
         jdc_signature: String,
-        jdc_mode: Option<String>,
+        jdc_mode: Option<ConfigJDCMode>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
         monitoring_address: Option<SocketAddr>,
@@ -95,9 +95,7 @@ impl JobDeclaratorClientConfig {
             user_identity,
             shares_per_minute,
             share_batch_size: shares_batch_size,
-            mode: jdc_mode
-                .map(|s| s.parse::<ConfigJDCMode>().unwrap_or_default())
-                .unwrap_or_default(),
+            mode: jdc_mode.unwrap_or_default(),
             supported_extensions,
             required_extensions,
             monitoring_address,
@@ -200,12 +198,13 @@ impl JobDeclaratorClientConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ConfigJDCMode {
     #[default]
     FullTemplate,
     CoinbaseOnly,
+    SoloMining,
 }
 
 impl std::str::FromStr for ConfigJDCMode {
@@ -214,6 +213,7 @@ impl std::str::FromStr for ConfigJDCMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "COINBASEONLY" => Ok(ConfigJDCMode::CoinbaseOnly),
+            "SOLOMINING" => Ok(ConfigJDCMode::SoloMining),
             _ => Ok(ConfigJDCMode::FullTemplate),
         }
     }

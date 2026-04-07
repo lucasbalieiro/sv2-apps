@@ -274,53 +274,69 @@ impl JobDeclaratorClient {
             )
             .await;
 
-        info!("Attempting to initialize upstream...");
-
-        match self
-            .initialize_jd(
-                &mut upstream_addresses,
-                channel_manager_to_upstream_receiver.clone(),
-                upstream_to_channel_manager_sender.clone(),
-                channel_manager_to_jd_receiver.clone(),
-                jd_to_channel_manager_sender.clone(),
-                self.cancellation_token.clone(),
-                fallback_coordinator.clone(),
-                self.config.mode.clone(),
-                task_manager.clone(),
-            )
-            .await
-        {
-            Ok((upstream, job_declarator)) => {
-                upstream
-                    .start(
-                        self.config.min_supported_version(),
-                        self.config.max_supported_version(),
-                        self.cancellation_token.clone(),
-                        fallback_coordinator.clone(),
-                        status_sender.clone(),
-                        task_manager.clone(),
-                    )
-                    .await;
-
-                job_declarator
-                    .start(
-                        self.cancellation_token.clone(),
-                        fallback_coordinator.clone(),
-                        status_sender.clone(),
-                        task_manager.clone(),
-                    )
-                    .await;
-
-                channel_manager_clone
-                    .upstream_state
-                    .set(UpstreamState::NoChannel);
-                _ = channel_manager_clone.allocate_tokens(2).await;
+        if self.config.mode == config::ConfigJDCMode::SoloMining {
+            if !upstream_addresses.is_empty() {
+                warn!(
+                    "Solo mining mode configured but upstreams are present - they will be ignored"
+                );
             }
-            Err(e) => {
-                tracing::error!("Failed to initialize upstream: {:?}", e);
-                set_jd_mode(jd_mode::JdMode::SoloMining);
-            }
-        };
+            info!("Starting in solo mining mode");
+            set_jd_mode(jd_mode::JdMode::SoloMining);
+        } else if upstream_addresses.is_empty() {
+            error!(
+                "No upstreams configured for {:?} mode - at least one upstream is required",
+                self.config.mode
+            );
+            self.cancellation_token.cancel();
+        } else {
+            info!("Attempting to initialize upstream...");
+
+            match self
+                .initialize_jd(
+                    &mut upstream_addresses,
+                    channel_manager_to_upstream_receiver.clone(),
+                    upstream_to_channel_manager_sender.clone(),
+                    channel_manager_to_jd_receiver.clone(),
+                    jd_to_channel_manager_sender.clone(),
+                    self.cancellation_token.clone(),
+                    fallback_coordinator.clone(),
+                    self.config.mode.clone(),
+                    task_manager.clone(),
+                )
+                .await
+            {
+                Ok((upstream, job_declarator)) => {
+                    upstream
+                        .start(
+                            self.config.min_supported_version(),
+                            self.config.max_supported_version(),
+                            self.cancellation_token.clone(),
+                            fallback_coordinator.clone(),
+                            status_sender.clone(),
+                            task_manager.clone(),
+                        )
+                        .await;
+
+                    job_declarator
+                        .start(
+                            self.cancellation_token.clone(),
+                            fallback_coordinator.clone(),
+                            status_sender.clone(),
+                            task_manager.clone(),
+                        )
+                        .await;
+
+                    channel_manager_clone
+                        .upstream_state
+                        .set(UpstreamState::NoChannel);
+                    _ = channel_manager_clone.allocate_tokens(2).await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize upstream: {:?}", e);
+                    set_jd_mode(jd_mode::JdMode::SoloMining);
+                }
+            };
+        }
 
         _ = channel_manager_clone
             .clone()

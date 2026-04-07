@@ -260,6 +260,7 @@ async fn pool_does_not_send_jobs_to_jdc() {
         vec![],
         vec![],
         false,
+        None,
     );
     // Block NewExtendedMiningJob and SetNewPrevHash messages between JDC and translator proxy
     let (_tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) = start_sniffer(

@@ -3,7 +3,7 @@ use crate::{
     sv1_minerd::MinerdProcess, template_provider::*,
 };
 use interceptor::InterceptAction;
-use jd_client_sv2::JobDeclaratorClient;
+use jd_client_sv2::{config::ConfigJDCMode, JobDeclaratorClient};
 use once_cell::sync::OnceCell;
 use pool_sv2::PoolSv2;
 use std::{
@@ -197,6 +197,7 @@ pub fn start_jdc(
     supported_extensions: Vec<u16>,
     required_extensions: Vec<u16>,
     enable_monitoring: bool,
+    jdc_mode: Option<ConfigJDCMode>,
 ) -> (JobDeclaratorClient, SocketAddr, Option<SocketAddr>) {
     use jd_client_sv2::config::{JobDeclaratorClientConfig, PoolConfig, ProtocolConfig, Upstream};
     let jdc_address = get_available_address();
@@ -255,7 +256,7 @@ pub fn start_jdc(
         template_provider_config,
         upstreams,
         jdc_signature,
-        None,
+        jdc_mode,
         supported_extensions,
         required_extensions,
         monitoring_address,

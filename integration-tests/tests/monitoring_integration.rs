@@ -139,6 +139,7 @@ async fn jd_aggregated_topology_monitoring() {
         vec![],
         vec![],
         true,
+        None,
     );
     let (_tproxy_jdc_sniffer, tproxy_jdc_sniffer_addr) =
         start_sniffer("1", jdc_addr, false, vec![], None);
@@ -213,6 +214,7 @@ async fn block_found_detected_in_pool_metrics() {
         vec![],
         vec![],
         false,
+        None,
     );
     let (_tproxy, tproxy_addr, _) =
         start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;
