@@ -20,7 +20,10 @@ pub use client::{
     ExtendedChannelInfo, StandardChannelInfo, Sv2ClientInfo, Sv2ClientMetadata,
     Sv2ClientsMonitoring, Sv2ClientsSummary,
 };
-pub use http_server::MonitoringServer;
+pub use http_server::{
+    ErrorResponse, HealthResponse, MonitoringServer, ServerChannelsResponse, ServerResponse,
+    Sv1ClientsResponse, Sv2ClientChannelsResponse, Sv2ClientResponse, Sv2ClientsResponse,
+};
 pub use server::{
     ServerExtendedChannelInfo, ServerInfo, ServerMonitoring, ServerStandardChannelInfo,
     ServerSummary,
