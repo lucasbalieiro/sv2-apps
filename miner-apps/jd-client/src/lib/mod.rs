@@ -643,7 +643,13 @@ impl JobDeclaratorClient {
                 upstream_entry.jds_port,
             );
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("Shutdown requested while waiting to initialize upstream, aborting retries");
+                    return Err(JDCErrorKind::CouldNotInitiateSystem);
+                }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
 
             if upstream_entry.tried_or_flagged {
                 info!(
@@ -653,6 +659,13 @@ impl JobDeclaratorClient {
             }
 
             for attempt in 1..=MAX_RETRIES {
+                if cancellation_token.is_cancelled() {
+                    info!(
+                        "Shutdown requested before upstream connection attempt, aborting retries"
+                    );
+                    return Err(JDCErrorKind::CouldNotInitiateSystem);
+                }
+
                 info!("Connection attempt {}/{}...", attempt, MAX_RETRIES);
 
                 match try_initialize_single(
@@ -675,7 +688,15 @@ impl JobDeclaratorClient {
                     }
                     Err(e) => {
                         tracing::error!("Upstream and JDS connection terminated");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+
+                        tokio::select! {
+                            _ = cancellation_token.cancelled() => {
+                                info!("Shutdown requested after upstream initialization failure, aborting retries");
+                                return Err(JDCErrorKind::CouldNotInitiateSystem);
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        }
+
                         warn!(
                             "Attempt {}/{} failed for pool={}:{}, jds={}:{}: {:?}",
                             attempt,
