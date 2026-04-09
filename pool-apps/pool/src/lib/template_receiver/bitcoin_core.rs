@@ -1,6 +1,6 @@
 use crate::{
-    error::{self, PoolError, PoolErrorKind},
-    status::{handle_error, State, Status, StatusSender},
+    error::PoolErrorKind,
+    status::{State, Status},
 };
 use async_channel::{Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::{BitcoinCoreSv2TDP, CancellationToken};
@@ -25,7 +25,6 @@ pub async fn connect_to_bitcoin_core(
     status_sender: Sender<Status>,
 ) -> JoinHandle<()> {
     let bitcoin_core_canc_token = bitcoin_core_config.cancellation_token.clone();
-    let status_sender_clone = status_sender.clone();
 
     // spawn a task to handle shutdown signals and cancellation token activations
     task_manager.spawn(async move {
@@ -34,19 +33,10 @@ pub async fn connect_to_bitcoin_core(
                 bitcoin_core_canc_token.cancel();
             }
             _ = bitcoin_core_canc_token.cancelled() => {
-                // turn status_sender into a StatusSender::TemplateReceiver
-                let status_sender = StatusSender::TemplateReceiver(status_sender_clone);
-
-                handle_error::<error::TemplateProvider>(
-                    &status_sender,
-                    PoolError::shutdown(PoolErrorKind::BitcoinCoreSv2TDPCancellationTokenActivated),
-                )
-                .await;
+                cancellation_token.cancel();
             }
         }
     });
-
-    let status_sender_clone = status_sender.clone();
 
     // spawn a dedicated thread to run the BitcoinCoreSv2TDP instance
     // because we're limited to tokio::task::LocalSet due to the use of `capnp` clients on
@@ -59,7 +49,7 @@ pub async fn connect_to_bitcoin_core(
                 tracing::error!("Failed to create Tokio runtime: {:?}", e);
 
                 // we can't use handle_error here because we're not in a async context yet
-                let _ = status_sender_clone.send_blocking(Status {
+                let _ = status_sender.send_blocking(Status {
                     state: State::TemplateReceiverShutdown(
                         PoolErrorKind::FailedToCreateBitcoinCoreTokioRuntime,
                     ),
