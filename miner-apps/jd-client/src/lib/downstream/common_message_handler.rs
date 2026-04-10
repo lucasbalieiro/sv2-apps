@@ -14,7 +14,7 @@ use stratum_apps::{
     },
     utils::types::Sv2Frame,
 };
-use tracing::info;
+use tracing::{error, info};
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleCommonMessagesFromClientAsync for Downstream {
@@ -69,7 +69,12 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            _ = self.downstream_channel.downstream_sender.send(frame).await;
+            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+                error!(
+                    "Failed to send SetupConnectionError to downstream {}: {e}",
+                    self.downstream_id
+                );
+            }
 
             return Err(JDCError::disconnect(
                 JDCErrorKind::SetupConnectionError,
@@ -89,7 +94,12 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            _ = self.downstream_channel.downstream_sender.send(frame).await;
+            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+                error!(
+                    "Failed to send SetupConnectionError to downstream {}: {e}",
+                    self.downstream_id
+                );
+            }
 
             return Err(JDCError::disconnect(
                 JDCErrorKind::SetupConnectionError,
@@ -109,7 +119,16 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             .try_into()
             .map_err(JDCError::shutdown)?;
 
-        _ = self.downstream_channel.downstream_sender.send(frame).await;
+        if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+            error!(
+                "Failed to send SetupConnectionSuccess to downstream {}: {e}",
+                self.downstream_id
+            );
+            return Err(JDCError::disconnect(
+                JDCErrorKind::ChannelErrorSender,
+                self.downstream_id,
+            ));
+        }
 
         Ok(())
     }

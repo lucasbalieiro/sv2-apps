@@ -13,7 +13,7 @@ use stratum_apps::{
     stratum_core::bitcoin::consensus::Encodable, task_manager::TaskManager,
     tp_type::TemplateProviderType, utils::types::GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
 };
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::Notify;
 use tracing::{debug, error, info, warn};
 
 use jd_server_sv2::job_declarator::{
@@ -77,8 +77,6 @@ impl PoolSv2 {
 
         let (status_sender, status_receiver) = unbounded();
 
-        let (channel_manager_to_downstream_sender, _channel_manager_to_downstream_receiver) =
-            broadcast::channel(10);
         let (downstream_to_channel_manager_sender, downstream_to_channel_manager_receiver) =
             unbounded();
 
@@ -159,7 +157,6 @@ impl PoolSv2 {
             self.config.clone(),
             channel_manager_to_tp_sender.clone(),
             tp_to_channel_manager_receiver,
-            channel_manager_to_downstream_sender.clone(),
             downstream_to_channel_manager_receiver,
             encoded_outputs.clone(),
             job_declarator,
@@ -287,7 +284,6 @@ impl PoolSv2 {
                 cancellation_token.clone(),
                 status_sender,
                 downstream_to_channel_manager_sender,
-                channel_manager_to_downstream_sender,
             )
             .await?;
 

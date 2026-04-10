@@ -32,7 +32,7 @@ use stratum_apps::{
             CloseChannel, OpenExtendedMiningChannel, OpenStandardMiningChannel,
             SubmitSharesExtended,
         },
-        parsers_sv2::{JobDeclaration, Mining},
+        parsers_sv2::{JobDeclaration, Mining, Tlv},
     },
     utils::types::{ChannelId, DownstreamId, Hashrate, JobId},
 };
@@ -43,6 +43,8 @@ use crate::{
     config::ConfigJDCMode,
     error::JDCErrorKind,
 };
+
+pub(crate) type DownstreamMessage = (Mining<'static>, Option<Vec<Tlv>>);
 
 /// Represents a single upstream entry (Pool + JDS pair) with raw address strings
 /// that are resolved via DNS at connection time.

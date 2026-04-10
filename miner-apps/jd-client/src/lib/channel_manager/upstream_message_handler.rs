@@ -482,7 +482,12 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 })?;
 
         for message in messages_results.into_iter().flatten() {
-            let _ = message.forward(&self.channel_manager_channel).await;
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
         Ok(())
     }

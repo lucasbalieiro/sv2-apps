@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use async_channel::{Receiver, Sender};
+use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
     coinbase_output_constraints::coinbase_output_constraints_message,
@@ -55,7 +55,7 @@ use stratum_apps::{
         },
     },
 };
-use tokio::{net::TcpListener, select, sync::broadcast};
+use tokio::{net::TcpListener, select};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -65,8 +65,8 @@ use crate::{
     error::{self, JDCError, JDCErrorKind, JDCResult},
     status::{handle_error, Status, StatusSender},
     utils::{
-        AtomicUpstreamState, DownstreamChannelJobId, PendingChannelRequest, SharesOrderedByDiff,
-        UpstreamState,
+        AtomicUpstreamState, DownstreamChannelJobId, DownstreamMessage, PendingChannelRequest,
+        SharesOrderedByDiff, UpstreamState,
     },
 };
 pub mod downstream_message_handler;
@@ -246,7 +246,7 @@ pub struct ChannelManagerChannel {
     jd_receiver: Receiver<JobDeclaration<'static>>,
     tp_sender: Sender<TemplateDistribution<'static>>,
     tp_receiver: Receiver<TemplateDistribution<'static>>,
-    downstream_sender: broadcast::Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
+    downstream_sender: Arc<Mutex<HashMap<DownstreamId, Sender<DownstreamMessage>>>>,
     downstream_receiver: Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
 }
 
@@ -281,7 +281,6 @@ impl ChannelManager {
         jd_receiver: Receiver<JobDeclaration<'static>>,
         tp_sender: Sender<TemplateDistribution<'static>>,
         tp_receiver: Receiver<TemplateDistribution<'static>>,
-        downstream_sender: broadcast::Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         downstream_receiver: Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         coinbase_outputs: Vec<u8>,
         supported_extensions: Vec<u16>,
@@ -337,7 +336,7 @@ impl ChannelManager {
             jd_receiver,
             tp_sender,
             tp_receiver,
-            downstream_sender,
+            downstream_sender: Arc::new(Mutex::new(HashMap::new())),
             downstream_receiver,
         };
 
@@ -437,11 +436,6 @@ impl ChannelManager {
         fallback_coordinator: FallbackCoordinator,
         status_sender: Sender<Status>,
         channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-        channel_manager_receiver: broadcast::Sender<(
-            DownstreamId,
-            Mining<'static>,
-            Option<Vec<Tlv>>,
-        )>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
     ) -> JDCResult<(), error::ChannelManager> {
@@ -501,7 +495,6 @@ impl ChannelManager {
                                 let fallback_coordinator_inner = fallback_coordinator.clone();
                                 let status_sender_inner = status_sender.clone();
                                 let channel_manager_sender_inner = channel_manager_sender.clone();
-                                let channel_manager_receiver_inner = channel_manager_receiver.clone();
                                 let task_manager_inner = task_manager_clone.clone();
                                 let supported_extensions_inner = supported_extensions.clone();
                                 let required_extensions_inner = required_extensions.clone();
@@ -539,12 +532,14 @@ impl ChannelManager {
                                         }
                                     };
 
+                                    let (channel_manager_sender_downstream, channel_manager_receiver_downstream) = unbounded();
+
                                     let downstream = Downstream::new(
                                         downstream_id,
                                         channel_id_factory,
                                         group_channel,
                                         channel_manager_sender_inner,
-                                        channel_manager_receiver_inner,
+                                        channel_manager_receiver_downstream,
                                         noise_stream,
                                         cancellation_token_inner.clone(),
                                         fallback_coordinator_inner.clone(),
@@ -552,6 +547,8 @@ impl ChannelManager {
                                         supported_extensions_inner,
                                         required_extensions_inner,
                                     );
+
+                                    this.channel_manager_channel.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender_downstream));
 
                                     this.channel_manager_data.super_safe_lock(|data| {
                                         data.downstream.insert(downstream_id, downstream.clone());
@@ -696,6 +693,9 @@ impl ChannelManager {
                 .vardiff
                 .retain(|key, _| key.downstream_id != downstream_id);
         });
+        self.channel_manager_channel
+            .downstream_sender
+            .super_safe_lock(|map| map.remove(&downstream_id));
         Ok(())
     }
 
@@ -1196,7 +1196,12 @@ impl ChannelManager {
             });
 
         for message in messages {
-            let _ = message.forward(&self.channel_manager_channel).await;
+            // A send can only fail if the receiver side of the channel is closed.
+            // Since this is an unbounded channel, it cannot fail due to capacity
+            // limits (which would only apply to bounded channels).
+            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+                tracing::error!("Failed to forward message {e:?}");
+            }
         }
 
         info!("Vardiff update cycle complete");

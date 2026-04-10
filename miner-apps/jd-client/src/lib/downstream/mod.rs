@@ -24,7 +24,6 @@ use stratum_apps::{
 };
 
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
-use tokio::sync::broadcast;
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -72,7 +71,7 @@ pub struct DownstreamData {
 #[derive(Clone)]
 pub struct DownstreamChannel {
     channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-    channel_manager_receiver: broadcast::Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
+    channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
     downstream_sender: Sender<Sv2Frame>,
     downstream_receiver: Receiver<Sv2Frame>,
     /// Per-connection cancellation token (child of the global token).
@@ -98,11 +97,7 @@ impl Downstream {
         channel_id_factory: AtomicU32,
         group_channel: GroupChannel<'static, DefaultJobStore<ExtendedJob<'static>>>,
         channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-        channel_manager_receiver: broadcast::Sender<(
-            DownstreamId,
-            Mining<'static>,
-            Option<Vec<Tlv>>,
-        )>,
+        channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
         noise_stream: NoiseTcpStream<Message>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
@@ -183,7 +178,6 @@ impl Downstream {
             return;
         }
 
-        let mut receiver = self.downstream_channel.channel_manager_receiver.subscribe();
         task_manager.spawn(async move {
             let fallback_handler = fallback_coordinator.register();
             let fallback_token = fallback_coordinator.token();
@@ -209,7 +203,7 @@ impl Downstream {
                             }
                         }
                     }
-                    res = self_clone_2.handle_channel_manager_message(&mut receiver) => {
+                    res = self_clone_2.handle_channel_manager_message() => {
                         if let Err(e) = res {
                             error!(?e, "Error handling channel manager message for {downstream_id}");
                             if handle_error(&status_sender, e).await {
@@ -248,27 +242,25 @@ impl Downstream {
     }
 
     // Handles messages sent from the channel manager to this downstream.
-    async fn handle_channel_manager_message(
-        self,
-        receiver: &mut broadcast::Receiver<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
-    ) -> JDCResult<(), error::Downstream> {
-        let (downstream_id, message, _tlv_fields) = match receiver.recv().await {
+    async fn handle_channel_manager_message(self) -> JDCResult<(), error::Downstream> {
+        let (message, _tlv_fields) = match self
+            .downstream_channel
+            .channel_manager_receiver
+            .recv()
+            .await
+        {
             Ok(msg) => msg,
             Err(e) => {
-                warn!(?e, "Broadcast receive failed");
-                return Err(JDCError::shutdown(
-                    JDCErrorKind::BroadcastChannelErrorReceiver(e),
+                warn!(
+                    ?e,
+                    "Channel manager receiver closed - disconnecting downstream"
+                );
+                return Err(JDCError::disconnect(
+                    JDCErrorKind::ChannelErrorReceiver(e),
+                    self.downstream_id,
                 ));
             }
         };
-
-        if downstream_id != self.downstream_id {
-            debug!(
-                ?downstream_id,
-                "Message ignored for non-matching downstream"
-            );
-            return Ok(());
-        }
 
         let message = AnyMessage::Mining(message);
         let sv2_frame: Sv2Frame = message.try_into().map_err(JDCError::shutdown)?;
