@@ -800,7 +800,7 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
             if let Some(ref metric) = state.metrics.sv2_server_shares_accepted_total {
                 metric
                     .with_label_values(&[&channel_id, user])
-                    .set(channel.shares_accepted as f64);
+                    .set(channel.shares_acknowledged as f64);
             }
             if let (Some(ref metric), Some(hashrate)) = (
                 &state.metrics.sv2_server_channel_hashrate,
@@ -1015,9 +1015,10 @@ mod tests {
             nominal_hashrate: hashrate,
             target_hex: "00ff".into(),
             extranonce_prefix_hex: "bb".into(),
-            shares_accepted: 20,
-            share_work_sum: 200.0,
+            shares_acknowledged: 20,
             shares_submitted: 22,
+            shares_rejected: 1,
+            share_work_sum: 200.0,
             best_diff: 80.0,
             blocks_found: 0,
         }
