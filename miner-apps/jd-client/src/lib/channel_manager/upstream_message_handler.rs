@@ -24,7 +24,6 @@ use crate::{
         JDC_LOCAL_PREFIX_BYTES, JDC_MAX_CHANNELS,
     },
     error::{self, JDCError, JDCErrorKind},
-    jd_mode::{get_jd_mode, JdMode},
     utils::{create_close_channel_msg, validate_cached_share, UpstreamState},
 };
 
@@ -179,7 +178,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                     debug!("Applied last_new_prev_hash to new extended channel");
                 }
 
-                let set_custom_job = if get_jd_mode() == JdMode::CoinbaseOnly
+                let set_custom_job = if self.mode.is_coinbase_only()
                     && data.job_factory.is_some()
                     && data.last_future_template.is_some()
                     && data.last_new_prev_hash.is_some()
@@ -254,7 +253,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
             });
 
         if channel_state == UpstreamState::Connected {
-            if get_jd_mode() == JdMode::FullTemplate {
+            if self.mode.is_full_template() {
                 if let Some(template) = template {
                     let tx_data_request =
                         TemplateDistribution::RequestTransactionData(RequestTransactionData {
@@ -268,7 +267,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 }
             }
 
-            if get_jd_mode() == JdMode::CoinbaseOnly {
+            if self.mode.is_coinbase_only() {
                 if let Some(custom_job) = custom_job {
                     let set_custom_job = Mining::SetCustomMiningJob(custom_job);
                     let sv2_frame: Sv2Frame = AnyMessage::Mining(set_custom_job)
