@@ -99,8 +99,8 @@ impl RouteMessageTo<'_> {
     /// The routing is handled as follows:
     /// - [`RouteMessageTo::Downstream`] → Sends the mining message to the specified downstream
     ///   client.
-    /// - [`RouteMessageTo::Upstream`] → Sends the mining message upstream, unless in
-    ///   [`JdMode::SoloMining`].
+    /// - [`RouteMessageTo::Upstream`] → Forwards mining message upstream. In solo mode,
+    ///   upstream-directed messages should not be produced.
     /// - [`RouteMessageTo::JobDeclarator`] → Sends the job declaration message to the JDS.
     /// - [`RouteMessageTo::TemplateProvider`] → Sends the template distribution message to the
     ///   template provider.
