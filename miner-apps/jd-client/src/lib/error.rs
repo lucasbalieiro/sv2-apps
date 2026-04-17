@@ -22,6 +22,7 @@ use stratum_apps::{
         binary_sv2, bitcoin,
         channels_sv2::{
             client::error::ExtendedChannelError as ExtendedChannelClientError,
+            extranonce_manager::ExtranonceAllocatorError,
             server::error::{
                 ExtendedChannelError as ExtendedChannelServerError, GroupChannelError,
                 StandardChannelError,
@@ -29,7 +30,6 @@ use stratum_apps::{
         },
         framing_sv2,
         handlers_sv2::HandlerErrorType,
-        mining_sv2::ExtendedExtranonceError,
         noise_sv2,
         parsers_sv2::ParserError,
     },
@@ -144,7 +144,7 @@ where
 pub enum ChannelSv2Error {
     ExtendedChannelClientSide(ExtendedChannelClientError),
     ExtendedChannelServerSide(ExtendedChannelServerError),
-    ExtranonceError(ExtendedExtranonceError),
+    ExtranonceError(ExtranonceAllocatorError),
     StandardChannelServerSide(StandardChannelError),
     GroupChannelServerSide(GroupChannelError),
 }
@@ -217,7 +217,7 @@ pub enum JDCErrorKind {
     ///Channel Errors
     ChannelSv2(ChannelSv2Error),
     /// Extranonce prefix error
-    ExtranoncePrefixFactoryError(ExtendedExtranonceError),
+    ExtranoncePrefixFactoryError(ExtranonceAllocatorError),
     /// Invalid unsupported extensions sequence (exceeds maximum length)
     InvalidUnsupportedExtensionsSequence,
     /// Invalid required extensions sequence (exceeds maximum length)
@@ -493,8 +493,8 @@ impl From<StandardChannelError> for JDCErrorKind {
     }
 }
 
-impl From<ExtendedExtranonceError> for JDCErrorKind {
-    fn from(value: ExtendedExtranonceError) -> Self {
+impl From<ExtranonceAllocatorError> for JDCErrorKind {
+    fn from(value: ExtranonceAllocatorError) -> Self {
         JDCErrorKind::ChannelSv2(ChannelSv2Error::ExtranonceError(value))
     }
 }

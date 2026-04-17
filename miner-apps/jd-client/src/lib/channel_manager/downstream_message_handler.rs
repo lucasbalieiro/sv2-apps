@@ -31,7 +31,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::{
-        ChannelManager, ChannelManagerChannel, SharesOrderedByDiff, FULL_EXTRANONCE_SIZE,
+        ChannelManager, ChannelManagerChannel, SharesOrderedByDiff, SOLO_FULL_EXTRANONCE_SIZE,
     },
     error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
@@ -313,8 +313,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
 
                         let extranonce_prefix = match channel_manager_data
-                            .extranonce_prefix_factory_standard
-                            .next_prefix_standard()
+                            .extranonce_allocator
+                            .allocate_standard()
                         {
                             Ok(p) => p,
                             Err(e) => {
@@ -328,7 +328,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             match StandardChannel::new_for_job_declaration_client(
                                 standard_channel_id,
                                 user_identity.to_string(),
-                                extranonce_prefix.to_vec(),
+                                extranonce_prefix,
                                 requested_max_target,
                                 nominal_hash_rate,
                                 self.share_batch_size,
@@ -360,7 +360,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 target: standard_channel.get_target().to_le_bytes().into(),
                                 extranonce_prefix: standard_channel
                                     .get_extranonce_prefix()
-                                    .clone()
+                                    .to_vec()
                                     .try_into()
                                     .map_err(JDCError::shutdown)?,
                                 group_channel_id,
@@ -545,8 +545,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
 
                         let extranonce_prefix = match channel_manager_data
-                            .extranonce_prefix_factory_extended
-                            .next_prefix_extended(requested_min_rollable_extranonce_size.into())
+                            .extranonce_allocator
+                            .allocate_extended(requested_min_rollable_extranonce_size.into())
                         {
                             Ok(p) => p,
                             Err(e) => {
@@ -558,24 +558,24 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     .into()]);
                             }
                         };
-
                         let job_store = DefaultJobStore::new();
 
                         let full_extranonce_size = channel_manager_data
                             .upstream_channel
                             .as_ref()
                             .map(|channel| channel.get_full_extranonce_size())
-                            .unwrap_or(FULL_EXTRANONCE_SIZE); // Default to FULL_EXTRANONCE_SIZE if
-                                                              // upstream channel is not present (solo mining mode)
+                            // Default to SOLO_FULL_EXTRANONCE_SIZE if upstream channel is not
+                            // present (solo mining mode)
+                            .unwrap_or(SOLO_FULL_EXTRANONCE_SIZE as usize);
 
                         let rollable_extranonce_size =
-                            full_extranonce_size - extranonce_prefix.clone().to_vec().len();
+                            full_extranonce_size - extranonce_prefix.len();
 
                         let mut extended_channel =
                             match ExtendedChannel::new_for_job_declaration_client(
                                 extended_channel_id,
                                 user_identity.to_string(),
-                                extranonce_prefix.into(),
+                                extranonce_prefix,
                                 requested_max_target,
                                 nominal_hash_rate,
                                 true,
@@ -609,7 +609,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 target: extended_channel.get_target().to_le_bytes().into(),
                                 extranonce_prefix: extended_channel
                                     .get_extranonce_prefix()
-                                    .clone()
+                                    .to_vec()
                                     .try_into()
                                     .expect("valid extranonce prefix"),
                                 extranonce_size: extended_channel.get_rollable_extranonce_size(),
