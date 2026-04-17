@@ -10,8 +10,8 @@ use tracing::warn;
 
 use crate::utils::{fs_utils, http, tarball};
 
-const VERSION_SV2_TP: &str = "1.0.3";
-const VERSION_BITCOIN_CORE: &str = "30.2";
+const VERSION_SV2_TP: &str = "1.1.0";
+const VERSION_BITCOIN_CORE: &str = "31.0";
 
 fn get_sv2_tp_filename(os: &str, arch: &str) -> String {
     match (os, arch) {
@@ -58,7 +58,7 @@ pub enum DifficultyLevel {
     High,
 }
 
-/// Represents a Bitcoin Core v30.2+ node with IPC enabled.
+/// Represents a Bitcoin Core node with IPC enabled.
 #[derive(Debug)]
 pub struct BitcoinCore {
     bitcoind: Node,
@@ -132,7 +132,7 @@ impl BitcoinCore {
             }
         }
 
-        // Download and setup Bitcoin Core v30.2 with IPC support
+        // Download and setup Bitcoin Core with IPC support
         let os = env::consts::OS;
         let arch = env::consts::ARCH;
         let bitcoin_filename = get_bitcoin_core_filename(os, arch);
@@ -147,7 +147,7 @@ impl BitcoinCore {
                     warn!("Downloading Bitcoin Core {} for the testing session. This could take a while...", VERSION_BITCOIN_CORE);
                     let download_endpoint = env::var("BITCOIN_CORE_DOWNLOAD_ENDPOINT")
                         .unwrap_or_else(|_| {
-                            "https://bitcoincore.org/bin/bitcoin-core-30.2".to_owned()
+                            "https://bitcoincore.org/bin/bitcoin-core-31.0".to_owned()
                         });
                     let url = format!("{download_endpoint}/{bitcoin_filename}");
                     http::make_get_request(&url, 5)
@@ -285,10 +285,10 @@ impl BitcoinCore {
     }
 }
 
-/// Represents a template provider using Bitcoin Core v30.2+ with IPC and standalone sv2-tp.
+/// Represents a template provider using Bitcoin Core with IPC and standalone sv2-tp.
 ///
 /// This implementation launches two separate processes:
-/// 1. Bitcoin Core v30.2+ (bitcoin-node) with IPC enabled
+/// 1. Bitcoin Core (bitcoin-node) with IPC enabled
 /// 2. Standalone sv2-tp binary that connects to Bitcoin Core via IPC
 #[derive(Debug)]
 pub struct TemplateProvider {
@@ -298,7 +298,7 @@ pub struct TemplateProvider {
 }
 
 impl TemplateProvider {
-    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30.2+ and standalone sv2-tp.
+    /// Start a new [`TemplateProvider`] instance with Bitcoin Core and standalone sv2-tp.
     pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
         let bitcoin_core = BitcoinCore::start(port, difficulty_level);
 
@@ -355,7 +355,7 @@ impl TemplateProvider {
             .arg(network)
             .arg(format!("-datadir={}", datadir.display()))
             .arg(format!("-sv2port={}", port))
-            .arg(format!("-sv2interval={}", sv2_interval))
+            .arg(format!("-templateinterval={}", sv2_interval))
             .arg("-sv2feedelta=0")
             .arg("-debug=sv2")
             .arg("-loglevel=sv2:trace")
