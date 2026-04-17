@@ -528,6 +528,7 @@ impl ChannelManager {
             }
 
             warn!("Waiting for initial template and prevhash from Template Provider...");
+            warn!("Is the Bitcoin node undergoing IBD?");
             select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Channel Manager: received shutdown while waiting for templates");
@@ -537,7 +538,7 @@ impl ChannelManager {
                     info!("Channel Manager: received fallback while waiting for templates");
                     return Ok(());
                 }
-                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
             }
         }
 
