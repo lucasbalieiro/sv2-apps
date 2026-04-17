@@ -232,6 +232,12 @@ impl BitcoinCoreSv2TDP {
                                     );
                                     break;
                                 }
+                                Err(BitcoinCoreSv2TDPError::CreateNewBlockRequestInterrupted) => {
+                                    tracing::debug!(
+                                        "Initial createNewBlock request interrupted during shutdown"
+                                    );
+                                    return;
+                                }
                                 Err(e) => {
                                     tracing::error!(
                                         "Failed to bootstrap initial template IPC client: {:?}",
@@ -540,14 +546,20 @@ impl BitcoinCoreSv2TDP {
         template_ipc_client_request_options.set_use_mempool(true);
 
         tracing::debug!("Sending createNewBlock request to Bitcoin Core");
-        let template_ipc_client_response = template_ipc_client_request
-            .send()
-            .promise
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to send template IPC client request: {}", e);
-                e
-            })?;
+        let create_new_block_promise = template_ipc_client_request.send().promise;
+        let template_ipc_client_response = tokio::select! {
+            template_ipc_client_response = create_new_block_promise => {
+                template_ipc_client_response.map_err(|e| {
+                    tracing::error!("Failed to send template IPC client request: {}", e);
+                    e
+                })?
+            }
+            _ = self.global_cancellation_token.cancelled() => {
+                tracing::debug!("Interrupting createNewBlock request");
+                self.interrupt_create_new_block_request().await?;
+                return Err(BitcoinCoreSv2TDPError::CreateNewBlockRequestInterrupted);
+            }
+        };
 
         let template_ipc_client_result = template_ipc_client_response.get().map_err(|e| {
             tracing::error!("Failed to get template IPC client result: {}", e);
@@ -583,6 +595,16 @@ impl BitcoinCoreSv2TDP {
         if let Err(e) = interrupt_wait_request.send().promise.await {
             tracing::error!("Failed to send interrupt wait request: {}", e);
             return Err(BitcoinCoreSv2TDPError::FailedToSendInterruptWaitRequest);
+        }
+
+        Ok(())
+    }
+
+    async fn interrupt_create_new_block_request(&self) -> Result<(), BitcoinCoreSv2TDPError> {
+        let interrupt_request = self.mining_ipc_client.interrupt_request();
+        if let Err(e) = interrupt_request.send().promise.await {
+            tracing::error!("Failed to send interrupt createNewBlock request: {}", e);
+            return Err(BitcoinCoreSv2TDPError::FailedToSendInterruptCreateNewBlockRequest);
         }
 
         Ok(())
