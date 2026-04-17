@@ -36,6 +36,14 @@ The `fee_threshold` parameter (in satoshis) determines when a new template is di
 
 The `min_interval` parameter (in seconds) determines the minimum amount of time between two consecutive `NewTemplate` messages (with exception to Chain Tip updates, which are always sent immediately, followed by `SetNewPrevHash`).
 
+## Version Compatibility
+
+| `bitcoin_core_sv2` | Bitcoin Core |
+|--------------------|--------------|
+| v0.1.0             | v30.2        |
+| v0.1.1             | v30.2        |
+| v0.2.0             | v31.0        |
+
 ## License
 
 Licensed under either of:
