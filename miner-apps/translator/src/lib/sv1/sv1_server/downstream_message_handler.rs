@@ -1,5 +1,7 @@
 use stratum_apps::stratum_core::sv1_api::{
-    client_to_server, json_rpc,
+    client_to_server,
+    error::Error,
+    json_rpc,
     server_to_client::{self, Notify},
     utils::{Extranonce, HexU32Be},
     IsServer,
@@ -19,16 +21,16 @@ impl IsServer<'static> for Sv1Server {
         &mut self,
         client_id: Option<usize>,
         request: &client_to_server::Configure,
-    ) -> (Option<server_to_client::VersionRollingParams>, Option<bool>) {
+    ) -> Result<(Option<server_to_client::VersionRollingParams>, Option<bool>), Error<'static>>
+    {
         let downstream_id = client_id.expect("Downstream id should exist");
 
         info!("Received mining.configure from SV1 downstream");
         debug!("Downstream {downstream_id}: mining.configure = {}", request);
 
-        let downstream = self
-            .downstreams
-            .get(&downstream_id)
-            .expect("Downstream should exist");
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
 
         downstream.downstream_data.super_safe_lock(|data| {
             data.version_rolling_mask = request
@@ -51,7 +53,7 @@ impl IsServer<'static> for Sv1Server {
                  automatic mask selection is not supported",
             );
 
-            (Some(params), Some(false))
+            Ok((Some(params), Some(false)))
         })
     }
 
@@ -59,7 +61,7 @@ impl IsServer<'static> for Sv1Server {
         &self,
         client_id: Option<usize>,
         request: &client_to_server::Subscribe,
-    ) -> Vec<(String, String)> {
+    ) -> Result<Vec<(String, String)>, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
 
         info!("Received mining.subscribe from Sv1 downstream");
@@ -75,31 +77,30 @@ impl IsServer<'static> for Sv1Server {
             "ae6812eb4cd7735a302a8a9dd95cf71f".to_string(),
         );
 
-        vec![set_difficulty_sub, notify_sub]
+        Ok(vec![set_difficulty_sub, notify_sub])
     }
 
     fn handle_authorize(
         &self,
         client_id: Option<usize>,
         request: &client_to_server::Authorize,
-    ) -> bool {
+    ) -> Result<bool, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
         info!("Received mining.authorize from Sv1 downstream {downstream_id}");
         debug!("Down: Handling mining.authorize: {}", request);
-        true
+        Ok(true)
     }
 
     fn handle_submit(
         &self,
         client_id: Option<usize>,
         request: &client_to_server::Submit<'static>,
-    ) -> bool {
+    ) -> Result<bool, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
 
-        let downstream = self
-            .downstreams
-            .get(&downstream_id)
-            .expect("Downstream should exist");
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
 
         let job_id = &request.job_id;
 
@@ -107,7 +108,7 @@ impl IsServer<'static> for Sv1Server {
             .downstream_data
             .super_safe_lock(|data| data.channel_id)
         else {
-            return false;
+            return Ok(false);
         };
 
         let channel_id = if is_aggregated() {
@@ -125,7 +126,7 @@ impl IsServer<'static> for Sv1Server {
             .and_then(|jobs| find_job(jobs.as_ref()));
 
         let Some(job) = job else {
-            return false;
+            return Ok(false);
         };
 
         downstream.downstream_data.super_safe_lock(|data| {
@@ -136,7 +137,7 @@ impl IsServer<'static> for Sv1Server {
                         "Cannot submit share: channel_id is None \
                          (waiting for OpenExtendedMiningChannelSuccess)"
                     );
-                    return false;
+                    return Ok(false);
                 }
             };
 
@@ -156,7 +157,7 @@ impl IsServer<'static> for Sv1Server {
 
             if !is_valid {
                 error!("Invalid share for channel id: {}", channel_id);
-                return false;
+                return Ok(false);
             }
 
             data.pending_share = Some(SubmitShareWithChannelId {
@@ -169,34 +170,35 @@ impl IsServer<'static> for Sv1Server {
                 job_version: data.last_job_version_field,
             });
 
-            true
+            Ok(true)
         })
     }
 
     /// Indicates to the server that the client supports the mining.set_extranonce method.
-    fn handle_extranonce_subscribe(&self) {}
+    fn handle_extranonce_subscribe(&self) -> Result<(), Error<'static>> {
+        Ok(())
+    }
 
     /// Checks if a Downstream role is authorized.
-    fn is_authorized(&self, client_id: Option<usize>, name: &str) -> bool {
+    fn is_authorized(&self, client_id: Option<usize>, name: &str) -> Result<bool, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self
-            .downstreams
-            .get(&downstream_id)
-            .expect("Downstream should exist");
-        downstream
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
+        let is_authorized = downstream
             .downstream_data
-            .super_safe_lock(|data| data.authorized_worker_name == *name)
+            .super_safe_lock(|data| data.authorized_worker_name == *name);
+        Ok(is_authorized)
     }
 
     /// Authorizes a Downstream role.
-    fn authorize(&mut self, client_id: Option<usize>, name: &str) {
+    fn authorize(&mut self, client_id: Option<usize>, name: &str) -> Result<(), Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self
-            .downstreams
-            .get(&downstream_id)
-            .expect("Downstream should exist");
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
 
-        let is_authorized = self.is_authorized(client_id, name);
+        let is_authorized = self.is_authorized(client_id, name)?;
         downstream.downstream_data.super_safe_lock(|data| {
             if !is_authorized {
                 data.authorized_worker_name = name.to_string();
@@ -207,6 +209,7 @@ impl IsServer<'static> for Sv1Server {
                 data.user_identity, downstream_id
             );
         });
+        Ok(())
     }
 
     /// Sets the `extranonce1` field sent in the SV1 `mining.notify` message to the value specified
@@ -215,21 +218,25 @@ impl IsServer<'static> for Sv1Server {
         &mut self,
         client_id: Option<usize>,
         _extranonce1: Option<Extranonce<'static>>,
-    ) -> Extranonce<'static> {
+    ) -> Result<Extranonce<'static>, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self.downstreams.get(&downstream_id).unwrap();
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.extranonce1.clone())
+            .super_safe_lock(|data| Ok(data.extranonce1.clone()))
     }
 
     /// Returns the `Downstream`'s `extranonce1` value.
-    fn extranonce1(&self, client_id: Option<usize>) -> Extranonce<'static> {
+    fn extranonce1(&self, client_id: Option<usize>) -> Result<Extranonce<'static>, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self.downstreams.get(&downstream_id).unwrap();
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.extranonce1.clone())
+            .super_safe_lock(|data| Ok(data.extranonce1.clone()))
     }
 
     /// Sets the `extranonce2_size` field sent in the SV1 `mining.notify` message to the value
@@ -238,61 +245,76 @@ impl IsServer<'static> for Sv1Server {
         &mut self,
         client_id: Option<usize>,
         _extra_nonce2_size: Option<usize>,
-    ) -> usize {
+    ) -> Result<usize, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self.downstreams.get(&downstream_id).unwrap();
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.extranonce2_len)
+            .super_safe_lock(|data| Ok(data.extranonce2_len))
     }
 
     /// Returns the `Downstream`'s `extranonce2_size` value.
-    fn extranonce2_size(&self, client_id: Option<usize>) -> usize {
+    fn extranonce2_size(&self, client_id: Option<usize>) -> Result<usize, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self.downstreams.get(&downstream_id).unwrap();
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.extranonce2_len)
+            .super_safe_lock(|data| Ok(data.extranonce2_len))
     }
 
     /// Returns the version rolling mask.
-    fn version_rolling_mask(&self, client_id: Option<usize>) -> Option<HexU32Be> {
+    fn version_rolling_mask(
+        &self,
+        client_id: Option<usize>,
+    ) -> Result<Option<HexU32Be>, Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self.downstreams.get(&downstream_id)?;
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.version_rolling_mask.clone())
+            .super_safe_lock(|data| Ok(data.version_rolling_mask.clone()))
     }
 
     /// Sets the version rolling mask.
-    fn set_version_rolling_mask(&mut self, client_id: Option<usize>, mask: Option<HexU32Be>) {
+    fn set_version_rolling_mask(
+        &mut self,
+        client_id: Option<usize>,
+        mask: Option<HexU32Be>,
+    ) -> Result<(), Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self
-            .downstreams
-            .get(&downstream_id)
-            .expect("Downstream should exist");
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
 
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.version_rolling_mask = mask)
+            .super_safe_lock(|data| data.version_rolling_mask = mask);
+
+        Ok(())
     }
 
     /// Sets the minimum version rolling bit.
-    fn set_version_rolling_min_bit(&mut self, client_id: Option<usize>, mask: Option<HexU32Be>) {
+    fn set_version_rolling_min_bit(
+        &mut self,
+        client_id: Option<usize>,
+        mask: Option<HexU32Be>,
+    ) -> Result<(), Error<'static>> {
         let downstream_id = client_id.expect("Downstream id should exist");
-        let downstream = self
-            .downstreams
-            .get(&downstream_id)
-            .expect("Downstream should exist");
+        let Some(downstream) = self.downstreams.get(&downstream_id) else {
+            return Err(Error::UnknownID(downstream_id as u64));
+        };
         downstream
             .downstream_data
-            .super_safe_lock(|data| data.version_rolling_min_bit = mask)
+            .super_safe_lock(|data| data.version_rolling_min_bit = mask);
+        Ok(())
     }
 
-    fn notify(
-        &'_ mut self,
-        _client_id: Option<usize>,
-    ) -> Result<json_rpc::Message, stratum_apps::stratum_core::sv1_api::error::Error<'_>> {
+    fn notify(&'_ mut self, _client_id: Option<usize>) -> Result<json_rpc::Message, Error<'_>> {
         warn!("notify() called on Sv1Server - this method is not implemented for Sv1Server");
         Err(
             stratum_apps::stratum_core::sv1_api::error::Error::UnexpectedMessage(
