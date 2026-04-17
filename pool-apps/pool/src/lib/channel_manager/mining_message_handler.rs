@@ -168,12 +168,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                 let nominal_hash_rate = msg.nominal_hash_rate;
                 let requested_max_target = Target::from_le_bytes(msg.max_target.inner_as_ref().try_into().unwrap());
-                let extranonce_prefix = channel_manager_data.extranonce_prefix_factory_standard.next_prefix_standard().map_err(PoolError::shutdown)?;
+                let extranonce_prefix = channel_manager_data.extranonce_allocator.allocate_standard().map_err(PoolError::shutdown)?;
 
                 let channel_id = downstream_data.channel_id_factory.fetch_add(1, Ordering::SeqCst);
                 let job_store = DefaultJobStore::new();
 
-                let mut standard_channel = match StandardChannel::new_for_pool(channel_id, user_identity.to_string(), extranonce_prefix.to_vec(), requested_max_target, nominal_hash_rate, self.share_batch_size, self.shares_per_minute, job_store, self.pool_tag_string.clone()) {
+                let mut standard_channel = match StandardChannel::new_for_pool(channel_id, user_identity.to_string(), extranonce_prefix, requested_max_target, nominal_hash_rate, self.share_batch_size, self.shares_per_minute, job_store, self.pool_tag_string.clone()) {
                     Ok(channel) => channel,
                     Err(e) => match e {
                         StandardChannelError::InvalidNominalHashrate => {
@@ -201,7 +201,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     request_id: msg.request_id,
                     channel_id,
                     target: standard_channel.get_target().to_le_bytes().into(),
-                    extranonce_prefix: standard_channel.get_extranonce_prefix().clone().try_into().expect("Extranonce_prefix must be valid"),
+                    extranonce_prefix: standard_channel.get_extranonce_prefix().to_vec().try_into().expect("Extranonce_prefix must be valid"),
                     group_channel_id
                 }.into_static();
 
@@ -295,10 +295,10 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         let mut messages: Vec<RouteMessageTo> = Vec::new();
 
                         let extranonce_prefix = match channel_manager_data
-                            .extranonce_prefix_factory_extended
-                            .next_prefix_extended(requested_min_rollable_extranonce_size.into())
+                            .extranonce_allocator
+                            .allocate_extended(requested_min_rollable_extranonce_size.into())
                         {
-                            Ok(extranonce_prefix) => extranonce_prefix.to_vec(),
+                            Ok(prefix) => prefix,
                             Err(_) => {
                                 error!("OpenMiningChannelError: min-extranonce-size-too-large");
                                 let open_extended_mining_channel_error = OpenMiningChannelError {
@@ -349,7 +349,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         let mut extended_channel = match ExtendedChannel::new_for_pool(
                             channel_id,
                             user_identity.to_string(),
-                            extranonce_prefix.clone(),
+                            extranonce_prefix,
                             requested_max_target,
                             nominal_hash_rate,
                             true, // version rolling always allowed
@@ -360,7 +360,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             self.pool_tag_string.clone(),
                         ) {
                             Ok(channel) => channel,
-                            Err(e) => match e {
+                            Err(e) => {
+                                match e {
                                 ExtendedChannelError::InvalidNominalHashrate => {
                                     error!("OpenMiningChannelError: invalid-nominal-hashrate");
                                     let open_extended_mining_channel_error =
@@ -401,6 +402,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     error!("error in handle_open_extended_mining_channel: {:?}", e);
                                     return Err(PoolError::disconnect(e, downstream_id))?;
                                 }
+                                }
                             },
                         };
 
@@ -413,7 +415,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 target: extended_channel.get_target().to_le_bytes().into(),
                                 extranonce_prefix: extended_channel
                                     .get_extranonce_prefix()
-                                    .clone()
+                                    .to_vec()
                                     .try_into().map_err(PoolError::shutdown)?,
                                 extranonce_size: extended_channel.get_rollable_extranonce_size(),
                                 group_channel_id,
