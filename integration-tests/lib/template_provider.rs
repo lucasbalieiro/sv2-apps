@@ -52,6 +52,7 @@ fn get_bitcoin_core_filename(os: &str, arch: &str) -> String {
 /// (most of the time, a CPU should take a REALLY long time to find a block)
 ///
 /// Note: signet mode has signetchallenge=51, which means no signature is needed on the coinbase.
+#[derive(PartialEq, Clone)]
 pub enum DifficultyLevel {
     Low,
     Mid,
@@ -212,16 +213,25 @@ impl BitcoinCore {
     }
 
     /// Mine `n` blocks.
-    pub fn generate_blocks(&self, n: u64) {
+    pub fn generate_blocks(&self, n: usize) {
         let mining_address = self
             .bitcoind
             .client
             .new_address()
             .expect("Failed to get mining address");
-        self.bitcoind
+        let generated_blocks = self
+            .bitcoind
             .client
-            .generate_to_address(n as usize, &mining_address)
+            .generate_to_address(n, &mining_address)
             .expect("Failed to generate blocks");
+        // Bitcoin Core's generatetoaddress returns Ok(block_hashes) with an array of hashes of the
+        // generated blocks.
+        assert_eq!(
+            generated_blocks.0.len(),
+            n,
+            "Bitcoin Core generated {} of {n} requested blocks",
+            generated_blocks.0.len()
+        );
     }
 
     /// Return the node's RPC info.
@@ -375,7 +385,7 @@ impl TemplateProvider {
     }
 
     /// Mine `n` blocks.
-    pub fn generate_blocks(&self, n: u64) {
+    pub fn generate_blocks(&self, n: usize) {
         self.bitcoin_core.generate_blocks(n);
     }
 
