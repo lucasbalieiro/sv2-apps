@@ -182,7 +182,9 @@ pub fn start_template_provider(
     let template_provider =
         TemplateProvider::start(address.port(), sv2_interval, difficulty_level.clone());
     if difficulty_level == DifficultyLevel::Low {
-        template_provider.generate_blocks(1);
+        // template_provider.generate_blocks(1);
+        // generate 16 blocks as a workaround for https://github.com/bitcoin/bitcoin/issues/35126
+        template_provider.generate_blocks(16);
     }
     (template_provider, address)
 }
@@ -191,7 +193,9 @@ pub fn start_bitcoin_core(difficulty_level: DifficultyLevel) -> BitcoinCore {
     let address = get_available_address();
     let bitcoin_core = BitcoinCore::start(address.port(), difficulty_level.clone());
     if difficulty_level == DifficultyLevel::Low {
-        bitcoin_core.generate_blocks(1);
+        // template_provider.generate_blocks(1);
+        // generate 16 blocks as a workaround for https://github.com/bitcoin/bitcoin/issues/35126
+        bitcoin_core.generate_blocks(16);
     }
     bitcoin_core
 }
