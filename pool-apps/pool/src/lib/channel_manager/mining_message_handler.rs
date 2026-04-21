@@ -187,17 +187,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             };
                             return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_standard_mining_channel_error)).into()]);
                         }
-                        StandardChannelError::RequestedMaxTargetOutOfRange => {
-                            error!("OpenMiningChannelError: max-target-out-of-range");
-                            let open_standard_mining_channel_error = OpenMiningChannelError {
-                                request_id,
-                                error_code: "max-target-out-of-range"
-                                    .to_string()
-                                    .try_into()
-                                    .expect("error code must be valid string"),
-                            };
-                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(open_standard_mining_channel_error)).into()]);
-                        }
                         _ => {
                             error!("error in handle_open_standard_mining_channel: {:?}", e);
                             return Err(PoolError::disconnect(PoolErrorKind::ChannelErrorSender, downstream_id) );
@@ -378,24 +367,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                         OpenMiningChannelError {
                                             request_id,
                                             error_code: "invalid-nominal-hashrate"
-                                                .to_string()
-                                                .try_into()
-                                                .expect("error code must be valid string"),
-                                        };
-                                    return Ok(vec![(
-                                        downstream_id,
-                                        Mining::OpenMiningChannelError(
-                                            open_extended_mining_channel_error,
-                                        ),
-                                    )
-                                        .into()]);
-                                }
-                                ExtendedChannelError::RequestedMaxTargetOutOfRange => {
-                                    error!("OpenMiningChannelError: max-target-out-of-range");
-                                    let open_extended_mining_channel_error =
-                                        OpenMiningChannelError {
-                                            request_id,
-                                            error_code: "max-target-out-of-range"
                                                 .to_string()
                                                 .try_into()
                                                 .expect("error code must be valid string"),
@@ -969,17 +940,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     };
                                     messages.push((downstream_id, Mining::UpdateChannelError(update_channel_error)).into());
                                 }
-                                StandardChannelError::RequestedMaxTargetOutOfRange => {
-                                    error!("UpdateChannelError: requested-max-target-out-of-range");
-                                    let update_channel_error = UpdateChannelError {
-                                        channel_id,
-                                        error_code: "requested-max-target-out-of-range"
-                                            .to_string()
-                                            .try_into()
-                                            .expect("error code must be valid string"),
-                                    };
-                                    messages.push((downstream_id, Mining::UpdateChannelError(update_channel_error)).into());
-                                }
                                 // We don't care about other variants as they are not
                                 // associated to Update channel, and we will never
                                 // encounter it.
@@ -1006,17 +966,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     let update_channel_error = UpdateChannelError {
                                         channel_id,
                                         error_code: "invalid-nominal-hashrate"
-                                            .to_string()
-                                            .try_into()
-                                            .expect("error code must be valid string"),
-                                    };
-                                    messages.push((downstream_id, Mining::UpdateChannelError(update_channel_error)).into());
-                                }
-                                ExtendedChannelError::RequestedMaxTargetOutOfRange => {
-                                    error!("UpdateChannelError: max-target-out-of-range");
-                                    let update_channel_error = UpdateChannelError {
-                                        channel_id,
-                                        error_code: "max-target-out-of-range"
                                             .to_string()
                                             .try_into()
                                             .expect("error code must be valid string"),
