@@ -12,6 +12,17 @@ use crate::utils::{fs_utils, http, tarball};
 
 const VERSION_SV2_TP: &str = "1.1.0";
 const VERSION_BITCOIN_CORE: &str = "31.0";
+/// Allow static signet fixtures to leave IBD without freezing Bitcoin Core's
+/// clock, so mined blocks still use wall-clock timestamps.
+///
+/// Since Bitcoin Core v31, IPC `createNewBlock` waits while IBD is active, so
+/// `bitcoin_core_sv2` does not send templates before IBD is over.
+/// See https://github.com/bitcoin/bitcoin/issues/33994.
+///
+/// 100 years is intentionally far above the fixture age so these static chains
+/// remain usable without periodic timestamp refreshes. This only relaxes the
+/// stale-tip IBD threshold; it does not change Bitcoin Core's clock.
+const SIGNET_FIXTURE_MAX_TIP_AGE_SECS: u64 = 100 * 365 * 24 * 60 * 60;
 
 fn get_sv2_tp_filename(os: &str, arch: &str) -> String {
     match (os, arch) {
@@ -86,6 +97,7 @@ impl BitcoinCore {
         let staticdir = format!(".bitcoin-{port}");
         conf.staticdir = Some(data_dir.join(staticdir.clone()));
 
+        let max_tip_age_arg = format!("-maxtipage={SIGNET_FIXTURE_MAX_TIP_AGE_SECS}");
         match difficulty_level {
             DifficultyLevel::Low => {
                 // use default corepc-node settings, which means regtest mode
@@ -95,14 +107,24 @@ impl BitcoinCore {
                 // use signet mode with genesis difficulty
                 // (signetchallenge=51, no signature needed on the coinbase)
                 // most of the time, a CPU should find a block in a minute or less
-                conf.args = vec!["-signet", "-fallbackfee=0.0001", "-signetchallenge=51"];
+                conf.args = vec![
+                    "-signet",
+                    "-fallbackfee=0.0001",
+                    "-signetchallenge=51",
+                    max_tip_age_arg.as_str(),
+                ];
                 conf.network = "signet";
             }
             DifficultyLevel::High => {
                 // use signet mode with premined blocks raising difficulty to 77761.11
                 // (signetchallenge=51, no signature needed on the coinbase)
                 // most of the time, a CPU should take a REALLY long time to find a block
-                conf.args = vec!["-signet", "-fallbackfee=0.0001", "-signetchallenge=51"];
+                conf.args = vec![
+                    "-signet",
+                    "-fallbackfee=0.0001",
+                    "-signetchallenge=51",
+                    max_tip_age_arg.as_str(),
+                ];
                 conf.network = "signet";
 
                 // Create signet datadir
