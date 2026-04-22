@@ -562,11 +562,12 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         _tlv_fields: Option<&[Tlv]>,
     ) -> Result<(), Self::Error> {
         warn!("Received: {} ❌", msg);
+        let error_code = msg.error_code.as_utf8_or_hex();
 
         self.channel_manager_data.super_safe_lock(|data| {
             // if None, upstream is not currently available, so we skip accounting update
             if let Some(upstream_channel) = data.upstream_channel.as_mut() {
-                upstream_channel.on_share_rejection();
+                upstream_channel.on_share_rejection(error_code.clone());
             }
         });
 
