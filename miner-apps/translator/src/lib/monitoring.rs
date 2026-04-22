@@ -49,7 +49,8 @@ impl ServerMonitoring for ChannelManager {
                         shares_submitted: share_accounting.get_validated_shares(),
                         shares_rejected,
                         shares_rejected_by_reason,
-                        share_work_sum: share_accounting.get_share_work_sum(),
+                        acknowledged_work_sum: share_accounting.get_acknowledged_work_sum(),
+                        validated_work_sum: share_accounting.get_validated_work_sum(),
                         best_diff: share_accounting.get_best_diff(),
                         blocks_found: share_accounting.get_blocks_found(),
                     });
@@ -86,7 +87,8 @@ impl ServerMonitoring for ChannelManager {
                         shares_submitted: share_accounting.get_validated_shares(),
                         shares_rejected,
                         shares_rejected_by_reason,
-                        share_work_sum: share_accounting.get_share_work_sum(),
+                        acknowledged_work_sum: share_accounting.get_acknowledged_work_sum(),
+                        validated_work_sum: share_accounting.get_validated_work_sum(),
                         best_diff: share_accounting.get_best_diff(),
                         blocks_found: share_accounting.get_blocks_found(),
                     });
@@ -158,12 +160,12 @@ mod tests {
             .extended_channels
             .get_mut(&AGGREGATED_CHANNEL_ID)
             .unwrap()
-            .on_share_acknowledgement(2, 10.0);
+            .on_share_acknowledgement(2, 10);
         manager
             .extended_channels
             .get_mut(&7)
             .unwrap()
-            .on_share_acknowledgement(5, 25.0);
+            .on_share_acknowledgement(5, 25);
 
         let server = manager.get_server();
         let aggregated = server.extended_channels.first().unwrap();
@@ -171,6 +173,7 @@ mod tests {
         assert_eq!(server.extended_channels.len(), 1);
         assert_eq!(aggregated.channel_id, 42);
         assert_eq!(aggregated.shares_acknowledged, 2);
-        assert_eq!(aggregated.share_work_sum, 10.0);
+        assert_eq!(aggregated.acknowledged_work_sum, 10);
+        assert_eq!(aggregated.validated_work_sum, 0.0);
     }
 }

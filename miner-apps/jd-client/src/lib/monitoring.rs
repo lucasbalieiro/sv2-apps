@@ -42,7 +42,8 @@ impl ServerMonitoring for ChannelManager {
                         shares_submitted: share_accounting.get_validated_shares(),
                         shares_rejected,
                         shares_rejected_by_reason,
-                        share_work_sum: share_accounting.get_share_work_sum(),
+                        acknowledged_work_sum: share_accounting.get_acknowledged_work_sum(),
+                        validated_work_sum: share_accounting.get_validated_work_sum(),
                         best_diff: share_accounting.get_best_diff(),
                         blocks_found: share_accounting.get_blocks_found(),
                     });

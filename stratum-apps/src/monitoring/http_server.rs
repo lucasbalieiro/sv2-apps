@@ -811,7 +811,7 @@ mod tests {
             last_share_sequence_number: 5,
             best_diff: 50.0,
             last_batch_accepted: 3,
-            last_batch_work_sum: 30.0,
+            last_batch_work_sum: 30,
             share_batch_size: 10,
             blocks_found: 0,
         }
@@ -835,7 +835,7 @@ mod tests {
             last_share_sequence_number: 8,
             best_diff: 80.0,
             last_batch_accepted: 5,
-            last_batch_work_sum: 50.0,
+            last_batch_work_sum: 50,
             share_batch_size: 20,
             blocks_found: 0,
         }
@@ -857,7 +857,8 @@ mod tests {
             shares_acknowledged: 10,
             shares_rejected: 0,
             shares_rejected_by_reason: HashMap::new(),
-            share_work_sum: 100.0,
+            acknowledged_work_sum: 100,
+            validated_work_sum: 100.0,
             shares_submitted: 12,
             best_diff: 50.0,
             blocks_found: 0,
@@ -878,7 +879,8 @@ mod tests {
             shares_submitted: 22,
             shares_rejected: 1,
             shares_rejected_by_reason: HashMap::from([("duplicate-share".to_string(), 1)]),
-            share_work_sum: 200.0,
+            acknowledged_work_sum: 200,
+            validated_work_sum: 200.0,
             best_diff: 80.0,
             blocks_found: 0,
         }

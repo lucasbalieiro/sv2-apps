@@ -24,7 +24,7 @@ pub struct ExtendedChannelInfo {
     pub last_share_sequence_number: u32,
     pub best_diff: f64,
     pub last_batch_accepted: u32,
-    pub last_batch_work_sum: f64,
+    pub last_batch_work_sum: u64,
     pub share_batch_size: usize,
     pub blocks_found: u32,
 }
@@ -45,7 +45,7 @@ pub struct StandardChannelInfo {
     pub last_share_sequence_number: u32,
     pub best_diff: f64,
     pub last_batch_accepted: u32,
-    pub last_batch_work_sum: f64,
+    pub last_batch_work_sum: u64,
     pub share_batch_size: usize,
     pub blocks_found: u32,
 }
@@ -161,7 +161,7 @@ mod tests {
             last_share_sequence_number: 5,
             best_diff: 50.0,
             last_batch_accepted: 3,
-            last_batch_work_sum: 30.0,
+            last_batch_work_sum: 30,
             share_batch_size: 10,
             blocks_found: 0,
         }
@@ -182,7 +182,7 @@ mod tests {
             last_share_sequence_number: 8,
             best_diff: 80.0,
             last_batch_accepted: 5,
-            last_batch_work_sum: 50.0,
+            last_batch_work_sum: 50,
             share_batch_size: 20,
             blocks_found: 0,
         }
