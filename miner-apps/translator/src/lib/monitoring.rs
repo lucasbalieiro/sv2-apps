@@ -27,7 +27,7 @@ impl ServerMonitoring for ChannelManager {
                     let channel_id = aggregated_extended_channel.get_channel_id();
                     let target = *aggregated_extended_channel.get_target();
                     let extranonce_prefix =
-                        aggregated_extended_channel.get_extranonce_prefix().clone();
+                        aggregated_extended_channel.get_extranonce_prefix().to_vec();
                     let user_identity = aggregated_extended_channel.get_user_identity().clone();
                     let full_extranonce_size =
                         aggregated_extended_channel.get_full_extranonce_size();
