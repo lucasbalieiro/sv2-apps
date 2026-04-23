@@ -1178,7 +1178,7 @@ async fn non_aggregated_translator_correctly_deals_with_close_channel_message() 
                     .try_into()
                     .unwrap(),
                     // full extranonce has a total of 8 bytes
-                    extranonce_size: 4,
+                    extranonce_size: open_extended_mining_channel.min_extranonce_size,
                     extranonce_prefix: vec![0x00, 0x01, 0x00, i as u8].try_into().unwrap(),
                     group_channel_id: GROUP_CHANNEL_ID,
                 },
