@@ -22,9 +22,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::ConfigJDCMode,
-    error::{self, JDCError, JDCErrorKind, JDCResult},
+    error::{self, Action, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
-    status::{handle_error, Status, StatusSender},
     utils::{get_setup_connection_message_jds, UpstreamEntry},
 };
 
@@ -139,24 +138,46 @@ impl JobDeclarator {
         mut self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
-        let status_sender = StatusSender::JobDeclarator(status_sender);
+        // we just spawned a new task that's relevant to fallback coordination
+        // so register it with the fallback coordinator
+        let fallback_handler = fallback_coordinator.register();
 
+        // get the cancellation token that signals fallback
+        let fallback_token = fallback_coordinator.token();
         if let Err(e) = self.setup_connection().await {
-            handle_error(&status_sender, e).await;
+            match e.action {
+                Action::Log => {
+                    warn!(error_kind = ?e.kind, "Job Declarator setup returned a log-only error");
+                }
+                Action::Fallback => {
+                    warn!(
+                        error_kind = ?e.kind,
+                        "Job Declarator setup requested fallback; cancelling fallback token"
+                    );
+                    fallback_token.cancel();
+                }
+                Action::Shutdown => {
+                    warn!(
+                        error_kind = ?e.kind,
+                        "Job Declarator setup requested shutdown; cancelling global token"
+                    );
+                    cancellation_token.cancel();
+                }
+                other => {
+                    warn!(
+                        action = ?other,
+                        error_kind = ?e.kind,
+                        "Job Declarator setup returned an unhandled action"
+                    );
+                }
+            };
+            fallback_handler.done();
             return;
         }
 
         task_manager.spawn(async move {
-            // we just spawned a new task that's relevant to fallback coordination
-            // so register it with the fallback coordinator
-            let fallback_handler = fallback_coordinator.register();
-
-            // get the cancellation token that signals fallback
-            let fallback_token = fallback_coordinator.token();
-
             loop {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
@@ -172,17 +193,73 @@ impl JobDeclarator {
                     res = self_clone_1.handle_job_declarator_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Job Declarator message handling failed");
-                            if handle_error(&status_sender, e).await {
-                                break;
-                            }
+                            match e.action {
+                                Action::Log => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Job Declarator message handler returned a log-only error"
+                                    );
+                                },
+                                Action::Fallback => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Job Declarator message handler requested fallback"
+                                    );
+                                    fallback_token.cancel();
+                                    break;
+                                },
+                                Action::Shutdown => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Job Declarator message handler requested shutdown"
+                                    );
+                                    cancellation_token.cancel();
+                                    break;
+                                }
+                                other => {
+                                    warn!(
+                                        action = ?other,
+                                        error_kind = ?e.kind,
+                                        "Job Declarator message handler returned an unhandled action"
+                                    );
+                                }
+                            };
                         }
                     }
                     res = self_clone_2.handle_channel_manager_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Channel Manager message handling failed");
-                            if handle_error(&status_sender, e).await {
-                                break;
-                            }
+                            match e.action {
+                                Action::Log => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Job Declarator channel-manager handler returned a log-only error"
+                                    );
+                                },
+                                Action::Fallback => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Job Declarator channel-manager handler requested fallback"
+                                    );
+                                    fallback_token.cancel();
+                                    break;
+                                },
+                                Action::Shutdown => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Job Declarator channel-manager handler requested shutdown"
+                                    );
+                                    cancellation_token.cancel();
+                                    break;
+                                }
+                                other => {
+                                    warn!(
+                                        action = ?other,
+                                        error_kind = ?e.kind,
+                                        "Job Declarator channel-manager handler returned an unhandled action"
+                                    );
+                                }
+                            };
                         }
                     },
                 }

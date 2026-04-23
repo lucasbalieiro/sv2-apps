@@ -35,9 +35,8 @@ use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    error::{self, JDCError, JDCErrorKind, JDCResult},
+    error::{self, Action, JDCError, JDCErrorKind, JDCResult},
     io_task::spawn_io_tasks,
-    status::{handle_error, Status, StatusSender},
     utils::get_setup_connection_message_tp,
 };
 
@@ -190,11 +189,8 @@ impl Sv2Tp {
         mut self,
         socket_address: String,
         cancellation_token: CancellationToken,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
-        let status_sender = StatusSender::TemplateReceiver(status_sender);
-
         info!("Initialized state for starting template receiver");
         _ = self.setup_connection(socket_address).await;
 
@@ -211,16 +207,56 @@ impl Sv2Tp {
                     res = self_clone_1.handle_template_provider_message() => {
                         if let Err(e) = res {
                             error!("TemplateReceiver template provider handler failed: {e:?}");
-                            if handle_error(&status_sender, e).await {
-                                break;
+                            match e.action {
+                                Action::Log => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Template receiver provider handler returned a log-only error"
+                                    );
+                                },
+                                Action::Shutdown => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Template receiver provider handler requested shutdown"
+                                    );
+                                    cancellation_token.cancel();
+                                    break;
+                                }
+                                other => {
+                                    warn!(
+                                        action = ?other,
+                                        error_kind = ?e.kind,
+                                        "Template receiver provider handler returned an unhandled action"
+                                    );
+                                }
                             }
                         }
                     }
                     res = self_clone_2.handle_channel_manager_message() => {
                         if let Err(e) = res {
                             error!("TemplateReceiver channel manager handler failed: {e:?}");
-                            if handle_error(&status_sender, e).await {
-                                break;
+                            match e.action {
+                                Action::Log => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Template receiver channel-manager handler returned a log-only error"
+                                    );
+                                },
+                                Action::Shutdown => {
+                                    warn!(
+                                        error_kind = ?e.kind,
+                                        "Template receiver channel-manager handler requested shutdown"
+                                    );
+                                    cancellation_token.cancel();
+                                    break;
+                                }
+                                other => {
+                                    warn!(
+                                        action = ?other,
+                                        error_kind = ?e.kind,
+                                        "Template receiver channel-manager handler returned an unhandled action"
+                                    );
+                                }
                             }
                         }
                     },
