@@ -34,7 +34,6 @@ use crate::{
         ChannelManager, ChannelManagerChannel, SharesOrderedByDiff, SOLO_FULL_EXTRANONCE_SIZE,
     },
     error::{self, JDCError, JDCErrorKind},
-    jd_mode::{get_jd_mode, JdMode},
     utils::{add_share_to_cache, create_close_channel_msg},
 };
 
@@ -100,8 +99,8 @@ impl RouteMessageTo<'_> {
     /// The routing is handled as follows:
     /// - [`RouteMessageTo::Downstream`] → Sends the mining message to the specified downstream
     ///   client.
-    /// - [`RouteMessageTo::Upstream`] → Sends the mining message upstream, unless in
-    ///   [`JdMode::SoloMining`].
+    /// - [`RouteMessageTo::Upstream`] → Forwards mining message upstream. In solo mode,
+    ///   upstream-directed messages should not be produced.
     /// - [`RouteMessageTo::JobDeclarator`] → Sends the job declaration message to the JDS.
     /// - [`RouteMessageTo::TemplateProvider`] → Sends the template distribution message to the
     ///   template provider.
@@ -121,14 +120,12 @@ impl RouteMessageTo<'_> {
                 }
             }
             RouteMessageTo::Upstream(message) => {
-                if get_jd_mode() != JdMode::SoloMining {
-                    let message_static = message.into_static();
-                    let sv2_frame: Sv2Frame = AnyMessage::Mining(message_static).try_into()?;
-                    channel_manager_channel
-                        .upstream_sender
-                        .send(sv2_frame)
-                        .await?;
-                }
+                let message_static = message.into_static();
+                let sv2_frame: Sv2Frame = AnyMessage::Mining(message_static).try_into()?;
+                channel_manager_channel
+                    .upstream_sender
+                    .send(sv2_frame)
+                    .await?;
             }
             RouteMessageTo::JobDeclarator(message) => {
                 channel_manager_channel

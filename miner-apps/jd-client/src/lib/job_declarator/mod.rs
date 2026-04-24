@@ -21,9 +21,9 @@ use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::ConfigJDCMode,
     error::{self, Action, JDCError, JDCErrorKind, JDCResult, LoopControl},
     io_task::spawn_io_tasks,
+    jd_mode::JDMode,
     utils::{get_setup_connection_message_jds, UpstreamEntry},
 };
 
@@ -52,7 +52,7 @@ pub struct JobDeclarator {
     /// Socket address of the Job Declarator server.
     socket_address: SocketAddr,
     /// Config JDC mode
-    mode: ConfigJDCMode,
+    mode: JDMode,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -110,7 +110,7 @@ impl JobDeclarator {
         channel_manager_receiver: Receiver<JobDeclaration<'static>>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        mode: ConfigJDCMode,
+        mode: JDMode,
         task_manager: Arc<TaskManager>,
     ) -> JDCResult<Self, error::JobDeclarator> {
         let addr = resolve_host(&upstream_entry.jds_host, upstream_entry.jds_port)

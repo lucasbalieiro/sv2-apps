@@ -61,6 +61,7 @@ use crate::{
     config::JobDeclaratorClientConfig,
     downstream::Downstream,
     error::{self, Action, JDCError, JDCErrorKind, JDCResult, LoopControl},
+    jd_mode::JDMode,
     utils::{
         AtomicUpstreamState, DownstreamChannelJobId, DownstreamMessage, PendingChannelRequest,
         SharesOrderedByDiff, UpstreamState,
@@ -284,6 +285,7 @@ pub struct ChannelManager {
     /// 3. Connected: An upstream channel is successfully established.
     /// 4. SoloMining: No upstream is available; the JDC operates in solo mining mode. case.
     pub upstream_state: AtomicUpstreamState,
+    pub mode: JDMode,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -345,6 +347,7 @@ impl ChannelManager {
         coinbase_outputs: Vec<u8>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
+        mode: JDMode,
     ) -> JDCResult<Self, error::ChannelManager> {
         // Start with a solo-mining allocator (no upstream prefix). Once the
         // upstream channel is opened in `handle_open_extended_mining_channel_success`
@@ -399,6 +402,7 @@ impl ChannelManager {
             reserved_downstream_rollable_extranonce_size: config
                 .reserved_downstream_rollable_extranonce_size(),
             upstream_state: AtomicUpstreamState::new(UpstreamState::SoloMining),
+            mode,
         };
 
         Ok(channel_manager)

@@ -21,9 +21,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::ChannelManager,
-    config::{ConfigJDCMode, JobDeclaratorClientConfig},
+    config::JobDeclaratorClientConfig,
     error::JDCErrorKind,
-    jd_mode::{set_jd_mode, JdMode},
+    jd_mode::JDMode,
     job_declarator::JobDeclarator,
     template_receiver::{
         bitcoin_core::{connect_to_bitcoin_core, BitcoinCoreSv2TDPConfig},
@@ -76,6 +76,7 @@ impl JobDeclaratorClient {
 
         let miner_coinbase_outputs = vec![self.config.get_txout()];
         let mut encoded_outputs = vec![];
+        let mode = JDMode::new(self.config.mode);
 
         miner_coinbase_outputs
             .consensus_encode(&mut encoded_outputs)
@@ -112,6 +113,7 @@ impl JobDeclaratorClient {
             encoded_outputs.clone(),
             self.config.supported_extensions().to_vec(),
             self.config.required_extensions().to_vec(),
+            mode.clone(),
         )
         .await
         .unwrap();
@@ -266,7 +268,7 @@ impl JobDeclaratorClient {
                 );
             }
             info!("Starting in solo mining mode");
-            set_jd_mode(jd_mode::JdMode::SoloMining);
+            mode.set_solo_mining();
         } else if upstream_addresses.is_empty() {
             error!(
                 "No upstreams configured for {:?} mode - at least one upstream is required",
@@ -285,7 +287,7 @@ impl JobDeclaratorClient {
                     jd_to_channel_manager_sender.clone(),
                     self.cancellation_token.clone(),
                     fallback_coordinator.clone(),
-                    self.config.mode.clone(),
+                    mode.clone(),
                     task_manager.clone(),
                 )
                 .await
@@ -316,7 +318,7 @@ impl JobDeclaratorClient {
                 }
                 Err(e) => {
                     tracing::error!("Failed to initialize upstream: {:?}", e);
-                    set_jd_mode(jd_mode::JdMode::SoloMining);
+                    mode.set_solo_mining();
                 }
             };
         }
@@ -357,7 +359,7 @@ impl JobDeclaratorClient {
                     fallback_coordinator.trigger_fallback_and_wait().await;
                     info!("All components finished fallback cleanup");
 
-                    set_jd_mode(JdMode::SoloMining);
+                    mode.set_solo_mining();
                     info!("Existing Upstream or JD instance taken out. Preparing fallback.");
 
                     // Create a fresh FallbackCoordinator for the reconnection attempt
@@ -388,6 +390,7 @@ impl JobDeclaratorClient {
                         encoded_outputs.clone(),
                         self.config.supported_extensions().to_vec(),
                         self.config.required_extensions().to_vec(),
+                                    mode.clone()
                     )
                     .await
                     .unwrap();
@@ -414,7 +417,7 @@ impl JobDeclaratorClient {
                             jd_to_channel_manager_sender_new.clone(),
                             self.cancellation_token.clone(),
                             fallback_coordinator.clone(),
-                            self.config.mode.clone(),
+                            mode.clone(),
                             task_manager.clone(),
                         )
                         .await
@@ -449,7 +452,7 @@ impl JobDeclaratorClient {
                             channel_manager_clone
                                 .upstream_state
                                 .set(UpstreamState::SoloMining);
-                            set_jd_mode(jd_mode::JdMode::SoloMining);
+                            mode.set_solo_mining();
                             info!("Fallback to solo mining mode");
                         }
                     };
@@ -578,7 +581,7 @@ impl JobDeclaratorClient {
         jd_to_channel_manager_sender: Sender<JobDeclaration<'static>>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        mode: ConfigJDCMode,
+        mode: JDMode,
         task_manager: Arc<TaskManager>,
     ) -> Result<(Upstream, JobDeclarator), JDCErrorKind> {
         const MAX_RETRIES: usize = 3;
@@ -689,7 +692,7 @@ async fn try_initialize_single(
     channel_manager_to_jd_receiver: Receiver<JobDeclaration<'static>>,
     cancellation_token: CancellationToken,
     fallback_coordinator: FallbackCoordinator,
-    mode: ConfigJDCMode,
+    mode: JDMode,
     task_manager: Arc<TaskManager>,
     config: &JobDeclaratorClientConfig,
 ) -> Result<(Upstream, JobDeclarator), JDCErrorKind> {
