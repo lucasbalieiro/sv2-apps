@@ -25,7 +25,6 @@ use crate::{
     error::JDCErrorKind,
     jd_mode::{set_jd_mode, JdMode},
     job_declarator::JobDeclarator,
-    status::{State, Status},
     template_receiver::{
         bitcoin_core::{connect_to_bitcoin_core, BitcoinCoreSv2TDPConfig},
         sv2_tp::Sv2Tp,
@@ -43,7 +42,6 @@ pub mod jd_mode;
 mod job_declarator;
 #[cfg(feature = "monitoring")]
 pub mod monitoring;
-mod status;
 mod template_receiver;
 mod upstream;
 pub mod utils;
@@ -85,8 +83,6 @@ impl JobDeclaratorClient {
 
         let mut fallback_coordinator = FallbackCoordinator::new();
         let task_manager = Arc::new(TaskManager::new());
-
-        let (status_sender, status_receiver) = async_channel::unbounded::<Status>();
 
         let (channel_manager_to_upstream_sender, channel_manager_to_upstream_receiver) =
             unbounded();
@@ -168,7 +164,7 @@ impl JobDeclaratorClient {
             });
         }
 
-        let channel_manager_clone = channel_manager.clone();
+        let mut channel_manager_clone = channel_manager.clone();
         let mut bitcoin_core_sv2_join_handle: Option<JoinHandle<()>> = None;
 
         match self.config.template_provider_type().clone() {
@@ -189,16 +185,10 @@ impl JobDeclaratorClient {
                 .unwrap();
 
                 let cancellation_token_tp = self.cancellation_token.clone();
-                let status_sender_cl = status_sender.clone();
                 let task_manager_cl = task_manager.clone();
 
                 template_receiver
-                    .start(
-                        address,
-                        cancellation_token_tp,
-                        status_sender_cl,
-                        task_manager_cl,
-                    )
+                    .start(address, cancellation_token_tp, task_manager_cl)
                     .await;
 
                 info!("Sv2 Template Provider setup done");
@@ -239,7 +229,6 @@ impl JobDeclaratorClient {
                         bitcoin_core_config,
                         self.cancellation_token.clone(),
                         task_manager.clone(),
-                        status_sender.clone(),
                     )
                     .await,
                 );
@@ -265,7 +254,6 @@ impl JobDeclaratorClient {
             .start(
                 self.cancellation_token.clone(),
                 fallback_coordinator.clone(),
-                status_sender.clone(),
                 task_manager.clone(),
                 miner_coinbase_outputs.clone(),
             )
@@ -309,7 +297,6 @@ impl JobDeclaratorClient {
                             self.config.max_supported_version(),
                             self.cancellation_token.clone(),
                             fallback_coordinator.clone(),
-                            status_sender.clone(),
                             task_manager.clone(),
                         )
                         .await;
@@ -318,7 +305,6 @@ impl JobDeclaratorClient {
                         .start(
                             self.cancellation_token.clone(),
                             fallback_coordinator.clone(),
-                            status_sender.clone(),
                             task_manager.clone(),
                         )
                         .await;
@@ -345,7 +331,6 @@ impl JobDeclaratorClient {
                 task_manager.clone(),
                 self.cancellation_token.clone(),
                 fallback_coordinator.clone(),
-                status_sender.clone(),
                 downstream_to_channel_manager_sender.clone(),
                 self.config.supported_extensions().to_vec(),
                 self.config.required_extensions().to_vec(),
@@ -353,6 +338,7 @@ impl JobDeclaratorClient {
             .await;
 
         info!("Spawning status listener task...");
+        let mut fallback_token = fallback_coordinator.token();
 
         loop {
             tokio::select! {
@@ -364,198 +350,171 @@ impl JobDeclaratorClient {
                 _ = self.cancellation_token.cancelled() => {
                     break;
                 }
-                message = status_receiver.recv() => {
-                    if let Ok(status) = message {
-                        match status.state {
-                            State::DownstreamShutdown{downstream_id,..} => {
-                                warn!("Downstream {downstream_id:?} disconnected — cleaning up channel manager.");
-                                // Clean up channel manager state
-                                if let Err(e) = channel_manager.remove_downstream(downstream_id) {
-                                    error!("Failed to remove downstream {downstream_id:?}: {e:?}... initiating full shutdown.");
-                                    self.cancellation_token.cancel();
-                                    break;
-                                }
-                            }
-                            State::TemplateReceiverShutdown(_) => {
-                                warn!("Template Receiver shutdown requested — initiating full shutdown.");
-                                self.cancellation_token.cancel();
-                                break;
-                            }
-                            State::ChannelManagerShutdown(_) => {
-                                warn!("Channel Manager shutdown requested — initiating full shutdown.");
-                                self.cancellation_token.cancel();
-                                break;
-                            }
-                            State::UpstreamShutdownFallback(_) | State::JobDeclaratorShutdownFallback(_) => {
-                                warn!("Upstream/Job Declarator connection dropped — attempting reconnection...");
+                _ = fallback_token.cancelled() => {
+                    warn!("Upstream/Job Declarator connection dropped — attempting reconnection...");
 
-                                // trigger fallback and wait for all components to finish cleanup
-                                fallback_coordinator.trigger_fallback_and_wait().await;
-                                info!("All components finished fallback cleanup");
+                    // trigger fallback and wait for all components to finish cleanup
+                    fallback_coordinator.trigger_fallback_and_wait().await;
+                    info!("All components finished fallback cleanup");
 
-                                // Drain any buffered status messages from old components
-                                while let Ok(old_status) = status_receiver.try_recv() {
-                                    debug!("Draining buffered status message: {:?}", old_status.state);
-                                }
+                    set_jd_mode(JdMode::SoloMining);
+                    info!("Existing Upstream or JD instance taken out. Preparing fallback.");
 
-                                set_jd_mode(JdMode::SoloMining);
-                                info!("Existing Upstream or JD instance taken out. Preparing fallback.");
+                    // Create a fresh FallbackCoordinator for the reconnection attempt
+                    fallback_coordinator = FallbackCoordinator::new();
+                    fallback_token = fallback_coordinator.token();
 
-                                // Create a fresh FallbackCoordinator for the reconnection attempt
-                                fallback_coordinator = FallbackCoordinator::new();
+                    // Recreate channels (old ones were closed during fallback)
+                    let (channel_manager_to_upstream_sender_new, channel_manager_to_upstream_receiver_new) =
+                        unbounded();
+                    let (upstream_to_channel_manager_sender_new, upstream_to_channel_manager_receiver_new) =
+                        unbounded();
+                    let (channel_manager_to_jd_sender_new, channel_manager_to_jd_receiver_new) = unbounded();
+                    let (jd_to_channel_manager_sender_new, jd_to_channel_manager_receiver_new) = unbounded();
 
-                                // Recreate channels (old ones were closed during fallback)
-                                let (channel_manager_to_upstream_sender_new, channel_manager_to_upstream_receiver_new) =
-                                    unbounded();
-                                let (upstream_to_channel_manager_sender_new, upstream_to_channel_manager_receiver_new) =
-                                    unbounded();
-                                let (channel_manager_to_jd_sender_new, channel_manager_to_jd_receiver_new) = unbounded();
-                                let (jd_to_channel_manager_sender_new, jd_to_channel_manager_receiver_new) = unbounded();
+                    let (downstream_to_channel_manager_sender_new, downstream_to_channel_manager_receiver_new) =
+                        unbounded();
 
-                                let (downstream_to_channel_manager_sender_new, downstream_to_channel_manager_receiver_new) =
-                                    unbounded();
+                    // Create a fresh channel_manager with new channels
+                    channel_manager = ChannelManager::new(
+                        self.config.clone(),
+                        channel_manager_to_upstream_sender_new.clone(),
+                        upstream_to_channel_manager_receiver_new.clone(),
+                        channel_manager_to_jd_sender_new.clone(),
+                        jd_to_channel_manager_receiver_new.clone(),
+                        channel_manager_to_tp_sender.clone(),
+                        tp_to_channel_manager_receiver.clone(),
+                        downstream_to_channel_manager_receiver_new.clone(),
+                        encoded_outputs.clone(),
+                        self.config.supported_extensions().to_vec(),
+                        self.config.required_extensions().to_vec(),
+                    )
+                    .await
+                    .unwrap();
+                    channel_manager_clone = channel_manager.clone();
 
-                                // Create a fresh channel_manager with new channels
-                                channel_manager = ChannelManager::new(
-                                    self.config.clone(),
-                                    channel_manager_to_upstream_sender_new.clone(),
-                                    upstream_to_channel_manager_receiver_new.clone(),
-                                    channel_manager_to_jd_sender_new.clone(),
-                                    jd_to_channel_manager_receiver_new.clone(),
-                                    channel_manager_to_tp_sender.clone(),
-                                    tp_to_channel_manager_receiver.clone(),
-                                    downstream_to_channel_manager_receiver_new.clone(),
-                                    encoded_outputs.clone(),
-                                    self.config.supported_extensions().to_vec(),
-                                    self.config.required_extensions().to_vec(),
+                    channel_manager
+                        .clone()
+                        .start(
+                            self.cancellation_token.clone(),
+                            fallback_coordinator.clone(),
+                            task_manager.clone(),
+                            miner_coinbase_outputs.clone(),
+                        )
+                        .await;
+
+                    info!("Attempting to initialize Jd and upstream...");
+
+                    match self
+                        .initialize_jd(
+                            &mut upstream_addresses,
+                            channel_manager_to_upstream_receiver_new.clone(),
+                            upstream_to_channel_manager_sender_new.clone(),
+                            channel_manager_to_jd_receiver_new.clone(),
+                            jd_to_channel_manager_sender_new.clone(),
+                            self.cancellation_token.clone(),
+                            fallback_coordinator.clone(),
+                            self.config.mode.clone(),
+                            task_manager.clone(),
+                        )
+                        .await
+                    {
+                        Ok((upstream, job_declarator)) => {
+                            upstream
+                                .start(
+                                    self.config.min_supported_version(),
+                                    self.config.max_supported_version(),
+                                    self.cancellation_token.clone(),
+                                    fallback_coordinator.clone(),
+                                    task_manager.clone(),
                                 )
-                                .await
-                                .unwrap();
+                                .await;
 
-                                channel_manager
-                                    .clone()
-                                    .start(
-                                        self.cancellation_token.clone(),
-                                        fallback_coordinator.clone(),
-                                        status_sender.clone(),
-                                        task_manager.clone(),
-                                        miner_coinbase_outputs.clone(),
-                                    )
-                                    .await;
+                            job_declarator
+                                .start(
+                                    self.cancellation_token.clone(),
+                                    fallback_coordinator.clone(),
+                                    task_manager.clone(),
+                                )
+                                .await;
 
-                                info!("Attempting to initialize Jd and upstream...");
+                            channel_manager_clone
+                                .upstream_state
+                                .set(UpstreamState::NoChannel);
 
-                                match self
-                                    .initialize_jd(
-                                        &mut upstream_addresses,
-                                        channel_manager_to_upstream_receiver_new.clone(),
-                                        upstream_to_channel_manager_sender_new.clone(),
-                                        channel_manager_to_jd_receiver_new.clone(),
-                                        jd_to_channel_manager_sender_new.clone(),
-                                        self.cancellation_token.clone(),
-                                        fallback_coordinator.clone(),
-                                        self.config.mode.clone(),
-                                        task_manager.clone(),
-                                    )
-                                    .await
-                                {
-                                    Ok((upstream, job_declarator)) => {
-                                        upstream
-                                            .start(
-                                                self.config.min_supported_version(),
-                                                self.config.max_supported_version(),
-                                                self.cancellation_token.clone(),
-                                                fallback_coordinator.clone(),
-                                                status_sender.clone(),
-                                                task_manager.clone(),
-                                            )
-                                            .await;
-
-                                        job_declarator
-                                            .start(
-                                                self.cancellation_token.clone(),
-                                                fallback_coordinator.clone(),
-                                                status_sender.clone(),
-                                                task_manager.clone(),
-                                            )
-                                            .await;
-
-                                        channel_manager_clone.upstream_state.set(UpstreamState::NoChannel);
-
-                                        _ = channel_manager_clone.allocate_tokens(2).await;
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to initialize upstream: {:?}", e);
-                                        channel_manager_clone.upstream_state.set(UpstreamState::SoloMining);
-                                        set_jd_mode(jd_mode::JdMode::SoloMining);
-                                        info!("Fallback to solo mining mode");
-                                    }
-                                };
-
-                                // Reinitialize monitoring server if configured
-                                #[cfg(feature = "monitoring")]
-                                if let Some(monitoring_addr) = self.config.monitoring_address() {
-                                    info!(
-                                        "Reinitializing monitoring server on http://{}",
-                                        monitoring_addr
-                                    );
-
-                                    let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
-                                        monitoring_addr,
-                                        Some(Arc::new(channel_manager_clone.clone())),
-                                        Some(Arc::new(channel_manager_clone.clone())),
-                                        std::time::Duration::from_secs(self.config.monitoring_cache_refresh_secs().unwrap_or(15)),
-                                    )
-                                    .expect("Failed to initialize monitoring server");
-
-                                    let cancellation_token_clone = self.cancellation_token.clone();
-                                    let fallback_coordinator_token = fallback_coordinator.token();
-                                    let shutdown_signal = async move {
-                                        tokio::select! {
-                                            _ = cancellation_token_clone.cancelled() => {
-                                                info!("Monitoring server: received shutdown signal.");
-                                            }
-                                            _ = fallback_coordinator_token.cancelled() => {
-                                                info!("Monitoring server: fallback triggered.");
-                                            }
-                                        }
-                                    };
-
-                                    let fallback_coordinator_clone = fallback_coordinator.clone();
-                                    task_manager.spawn(async move {
-                                        // we just spawned a new task that's relevant to fallback coordination
-                                        // so register it with the fallback coordinator
-                                        let fallback_handler = fallback_coordinator_clone.register();
-
-                                        if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                                            error!("Monitoring server error: {:?}", e);
-                                        }
-
-                                        // signal that this task has completed its cleanup
-                                        // (no-op during normal shutdown, only matters during fallback)
-                                        fallback_handler.done();
-                                        info!("Monitoring server task exited and signaled fallback coordinator");
-                                    });
-                                }
-
-                                _ = channel_manager_clone.clone()
-                                    .start_downstream_server(
-                                        *self.config.authority_public_key(),
-                                        *self.config.authority_secret_key(),
-                                        self.config.cert_validity_sec(),
-                                        *self.config.listening_address(),
-                                        task_manager.clone(),
-                                        self.cancellation_token.clone(),
-                                        fallback_coordinator.clone(),
-                                        status_sender.clone(),
-                                        downstream_to_channel_manager_sender_new.clone(),
-                                        self.config.supported_extensions().to_vec(),
-                                        self.config.required_extensions().to_vec(),
-                                    )
-                                    .await;
-                                }
+                            _ = channel_manager_clone.allocate_tokens(2).await;
                         }
+                        Err(e) => {
+                            tracing::error!("Failed to initialize upstream: {:?}", e);
+                            channel_manager_clone
+                                .upstream_state
+                                .set(UpstreamState::SoloMining);
+                            set_jd_mode(jd_mode::JdMode::SoloMining);
+                            info!("Fallback to solo mining mode");
+                        }
+                    };
+
+                    // Reinitialize monitoring server if configured
+                    #[cfg(feature = "monitoring")]
+                    if let Some(monitoring_addr) = self.config.monitoring_address() {
+                        info!(
+                            "Reinitializing monitoring server on http://{}",
+                            monitoring_addr
+                        );
+
+                        let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
+                            monitoring_addr,
+                            Some(Arc::new(channel_manager_clone.clone())),
+                            Some(Arc::new(channel_manager_clone.clone())),
+                            std::time::Duration::from_secs(self.config.monitoring_cache_refresh_secs().unwrap_or(15)),
+                        )
+                        .expect("Failed to initialize monitoring server");
+
+                        let cancellation_token_clone = self.cancellation_token.clone();
+                        let fallback_coordinator_token = fallback_coordinator.token();
+                        let shutdown_signal = async move {
+                            tokio::select! {
+                                _ = cancellation_token_clone.cancelled() => {
+                                    info!("Monitoring server: received shutdown signal.");
+                                }
+                                _ = fallback_coordinator_token.cancelled() => {
+                                    info!("Monitoring server: fallback triggered.");
+                                }
+                            }
+                        };
+
+                        let fallback_coordinator_clone = fallback_coordinator.clone();
+                        task_manager.spawn(async move {
+                            // we just spawned a new task that's relevant to fallback coordination
+                            // so register it with the fallback coordinator
+                            let fallback_handler = fallback_coordinator_clone.register();
+
+                            if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                                error!("Monitoring server error: {:?}", e);
+                            }
+
+                            // signal that this task has completed its cleanup
+                            // (no-op during normal shutdown, only matters during fallback)
+                            fallback_handler.done();
+                            info!("Monitoring server task exited and signaled fallback coordinator");
+                        });
                     }
+
+                    _ = channel_manager_clone
+                        .clone()
+                        .start_downstream_server(
+                            *self.config.authority_public_key(),
+                            *self.config.authority_secret_key(),
+                            self.config.cert_validity_sec(),
+                            *self.config.listening_address(),
+                            task_manager.clone(),
+                            self.cancellation_token.clone(),
+                            fallback_coordinator.clone(),
+                            downstream_to_channel_manager_sender_new.clone(),
+                            self.config.supported_extensions().to_vec(),
+                            self.config.required_extensions().to_vec(),
+                        )
+                        .await;
                 }
             }
         }

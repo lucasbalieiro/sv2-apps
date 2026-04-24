@@ -22,9 +22,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::ConfigJDCMode,
-    error::{self, JDCError, JDCErrorKind, JDCResult},
+    error::{self, Action, JDCError, JDCErrorKind, JDCResult, LoopControl},
     io_task::spawn_io_tasks,
-    status::{handle_error, Status, StatusSender},
     utils::{get_setup_connection_message_jds, UpstreamEntry},
 };
 
@@ -58,6 +57,47 @@ pub struct JobDeclarator {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl JobDeclarator {
+    fn handle_error_action(
+        context: &str,
+        e: &JDCError<error::JobDeclarator>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            other => {
+                warn!(
+                    action = ?other,
+                    error_kind = ?e.kind,
+                    "{context} returned an unhandled action"
+                );
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Creates a new JobDeclarator instance by connecting and performing a Noise handshake.
     ///
     /// - Resolves hostname to IP address via DNS (if not already an IP)
@@ -139,24 +179,26 @@ impl JobDeclarator {
         mut self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
-        let status_sender = StatusSender::JobDeclarator(status_sender);
+        // we just spawned a new task that's relevant to fallback coordination
+        // so register it with the fallback coordinator
+        let fallback_handler = fallback_coordinator.register();
 
+        // get the cancellation token that signals fallback
+        let fallback_token = fallback_coordinator.token();
         if let Err(e) = self.setup_connection().await {
-            handle_error(&status_sender, e).await;
+            _ = Self::handle_error_action(
+                "JobDeclarator::setup_connection",
+                &e,
+                &cancellation_token,
+                &fallback_token,
+            );
+            fallback_handler.done();
             return;
         }
 
         task_manager.spawn(async move {
-            // we just spawned a new task that's relevant to fallback coordination
-            // so register it with the fallback coordinator
-            let fallback_handler = fallback_coordinator.register();
-
-            // get the cancellation token that signals fallback
-            let fallback_token = fallback_coordinator.token();
-
             loop {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
@@ -172,7 +214,12 @@ impl JobDeclarator {
                     res = self_clone_1.handle_job_declarator_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Job Declarator message handling failed");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "JobDeclarator::handle_job_declarator_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -180,7 +227,12 @@ impl JobDeclarator {
                     res = self_clone_2.handle_channel_manager_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Channel Manager message handling failed");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "JobDeclarator::handle_channel_manager_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }

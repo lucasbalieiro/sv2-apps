@@ -31,9 +31,8 @@ use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    error::{self, JDCError, JDCErrorKind, JDCResult},
+    error::{self, Action, JDCError, JDCErrorKind, JDCResult, LoopControl},
     io_task::spawn_io_tasks,
-    status::{handle_error, Status, StatusSender},
     utils::{get_setup_connection_message, UpstreamEntry},
 };
 
@@ -72,6 +71,47 @@ pub struct Upstream {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Upstream {
+    fn handle_error_action(
+        context: &str,
+        e: &JDCError<error::Upstream>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            other => {
+                warn!(
+                    action = ?other,
+                    error_kind = ?e.kind,
+                    "{context} returned an unhandled action"
+                );
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Create a new [`Upstream`] connection to the given address.
     ///
     /// - Resolves hostname to IP address via DNS (if not already an IP)
@@ -261,13 +301,19 @@ impl Upstream {
         max_version: u16,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
-        let status_sender = StatusSender::Upstream(status_sender);
-
+        let setup_fallback_token = fallback_coordinator.token();
         if let Err(e) = self.setup_connection(min_version, max_version).await {
             error!(error = ?e, "Upstream: connection setup failed.");
+            if let LoopControl::Break = Self::handle_error_action(
+                "Upstream::setup_connection",
+                &e,
+                &cancellation_token,
+                &setup_fallback_token,
+            ) {
+                return;
+            }
             return;
         }
 
@@ -294,7 +340,12 @@ impl Upstream {
                     res = self_clone_1.handle_pool_message_frame() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Upstream: error handling pool message.");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "Upstream::handle_pool_message_frame",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -302,7 +353,12 @@ impl Upstream {
                     res = self_clone_2.handle_channel_manager_message_frame() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Upstream: error handling channel manager message.");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "Upstream::handle_channel_manager_message_frame",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }

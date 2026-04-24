@@ -62,8 +62,7 @@ use crate::{
     channel_manager::downstream_message_handler::RouteMessageTo,
     config::JobDeclaratorClientConfig,
     downstream::Downstream,
-    error::{self, JDCError, JDCErrorKind, JDCResult},
-    status::{handle_error, Status, StatusSender},
+    error::{self, Action, JDCError, JDCErrorKind, JDCResult, LoopControl},
     utils::{
         AtomicUpstreamState, DownstreamChannelJobId, DownstreamMessage, PendingChannelRequest,
         SharesOrderedByDiff, UpstreamState,
@@ -271,6 +270,49 @@ pub struct ChannelManager {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl ChannelManager {
+    fn handle_error_action(
+        &self,
+        context: &str,
+        e: &JDCError<error::ChannelManager>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            Action::Disconnect(downstream_id) => {
+                warn!(
+                    downstream_id,
+                    error_kind = ?e.kind,
+                    "{context} requested downstream disconnect"
+                );
+                self.remove_downstream(downstream_id);
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Constructor method used to instantiate the Channel Manager
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
@@ -434,7 +476,6 @@ impl ChannelManager {
         task_manager: Arc<TaskManager>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
@@ -493,7 +534,6 @@ impl ChannelManager {
                                 let this = Arc::clone(&this);
                                 let cancellation_token_inner = cancellation_token.clone();
                                 let fallback_coordinator_inner = fallback_coordinator.clone();
-                                let status_sender_inner = status_sender.clone();
                                 let channel_manager_sender_inner = channel_manager_sender.clone();
                                 let task_manager_inner = task_manager_clone.clone();
                                 let supported_extensions_inner = supported_extensions.clone();
@@ -526,8 +566,7 @@ impl ChannelManager {
                                         Some(group_channel) => group_channel,
                                         None => {
                                             error!("Failed to bootstrap group channel - disconnecting downstream {downstream_id}");
-                                            let error = JDCError::<error::ChannelManager>::shutdown(JDCErrorKind::CouldNotInitiateSystem);
-                                            handle_error(&StatusSender::ChannelManager(status_sender_inner), error).await;
+                                            cancellation_token_inner.cancel();
                                             return;
                                         }
                                     };
@@ -558,8 +597,8 @@ impl ChannelManager {
                                         .start(
                                             cancellation_token_inner,
                                             fallback_coordinator_inner,
-                                            status_sender_inner,
                                             task_manager_inner,
+                                            move |downstream_id| this.remove_downstream(downstream_id)
                                         )
                                         .await;
                                 });
@@ -587,19 +626,22 @@ impl ChannelManager {
         self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
         coinbase_outputs: Vec<TxOut>,
     ) {
-        let status_sender = StatusSender::ChannelManager(status_sender);
-
         // Serialize coinbase outputs before moving into async block
         // todo: should we really be serializing here?
         let serialized_coinbase_outputs = consensus::serialize(&coinbase_outputs);
 
         if let Err(e) = self.coinbase_output_constraints(coinbase_outputs).await {
             error!(error = ?e, "Failed to send CoinbaseOutputConstraints message to TP");
-            handle_error(&status_sender, e).await;
+            if let Action::Shutdown = e.action {
+                warn!(
+                    error_kind = ?e.kind,
+                    "CoinbaseOutputConstraints requested shutdown; cancelling global token"
+                );
+                cancellation_token.cancel();
+            }
             return;
         }
 
@@ -610,7 +652,6 @@ impl ChannelManager {
 
             // get the cancellation token that signals fallback
             let fallback_token = fallback_coordinator.token();
-
             let cm = self.clone();
             let vd = self.clone();
             let vardiff_future = vd.run_vardiff_loop();
@@ -638,7 +679,12 @@ impl ChannelManager {
                     res = cm_jds.handle_jds_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling JDS message");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = cm.handle_error_action(
+                                "ChannelManager::handle_jds_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -646,7 +692,12 @@ impl ChannelManager {
                     res = cm_pool.handle_pool_message_frame() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling Pool message");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = cm.handle_error_action(
+                                "ChannelManager::handle_pool_message_frame",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -654,7 +705,12 @@ impl ChannelManager {
                     res = cm_template.handle_template_provider_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling Template Receiver message");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = cm.handle_error_action(
+                                "ChannelManager::handle_template_provider_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -662,7 +718,12 @@ impl ChannelManager {
                     res = cm_downstreams.handle_downstream_message() => {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling Downstreams message");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = cm.handle_error_action(
+                                "ChannelManager::handle_downstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -680,12 +741,11 @@ impl ChannelManager {
     // Given a `downstream_id`, this method:
     // 1. Removes the corresponding downstream from the `downstream` map.
     #[allow(clippy::result_large_err)]
-    pub fn remove_downstream(
-        &mut self,
-        downstream_id: DownstreamId,
-    ) -> JDCResult<(), error::ChannelManager> {
+    pub fn remove_downstream(&self, downstream_id: DownstreamId) {
         self.channel_manager_data.super_safe_lock(|cm_data| {
-            cm_data.downstream.remove(&downstream_id);
+            if let Some(downstream) = cm_data.downstream.remove(&downstream_id) {
+                downstream.downstream_cancellation_token.cancel();
+            }
             cm_data
                 .downstream_channel_id_and_job_id_to_template_id
                 .retain(|key, _| key.downstream_id != downstream_id);
@@ -696,7 +756,6 @@ impl ChannelManager {
         self.channel_manager_channel
             .downstream_sender
             .super_safe_lock(|map| map.remove(&downstream_id));
-        Ok(())
     }
 
     /// Handles messages received from the JDS subsystem.  
