@@ -59,6 +59,21 @@ pub struct JobDeclaratorClientConfig {
     monitoring_address: Option<SocketAddr>,
     #[serde(default)]
     monitoring_cache_refresh_secs: Option<u64>,
+    /// Minimum rollable extranonce bytes JDC reserves for future extended downstreams on its
+    /// single upstream channel (fixed at first open). Defaults to
+    /// [`DEFAULT_RESERVED_DOWNSTREAM_ROLLABLE_EXTRANONCE_SIZE`] (8) when omitted; set higher if
+    /// downstreams may request more.
+    #[serde(default = "default_reserved_downstream_rollable_extranonce_size")]
+    reserved_downstream_rollable_extranonce_size: u8,
+}
+
+/// Default value used by
+/// [`JobDeclaratorClientConfig::reserved_downstream_rollable_extranonce_size`]
+/// when the config file does not specify one.
+pub const DEFAULT_RESERVED_DOWNSTREAM_ROLLABLE_EXTRANONCE_SIZE: u8 = 8;
+
+fn default_reserved_downstream_rollable_extranonce_size() -> u8 {
+    DEFAULT_RESERVED_DOWNSTREAM_ROLLABLE_EXTRANONCE_SIZE
 }
 
 impl JobDeclaratorClientConfig {
@@ -79,6 +94,7 @@ impl JobDeclaratorClientConfig {
         required_extensions: Vec<u16>,
         monitoring_address: Option<SocketAddr>,
         monitoring_cache_refresh_secs: Option<u64>,
+        reserved_downstream_rollable_extranonce_size: Option<u8>,
     ) -> Self {
         Self {
             listening_address,
@@ -100,6 +116,9 @@ impl JobDeclaratorClientConfig {
             required_extensions,
             monitoring_address,
             monitoring_cache_refresh_secs,
+            reserved_downstream_rollable_extranonce_size:
+                reserved_downstream_rollable_extranonce_size
+                    .unwrap_or(DEFAULT_RESERVED_DOWNSTREAM_ROLLABLE_EXTRANONCE_SIZE),
         }
     }
 
@@ -195,6 +214,12 @@ impl JobDeclaratorClientConfig {
     /// Returns the required extensions.
     pub fn required_extensions(&self) -> &[u16] {
         &self.required_extensions
+    }
+
+    /// Rollable extranonce bytes reserved for future extended downstreams (same as the config
+    /// field).
+    pub fn reserved_downstream_rollable_extranonce_size(&self) -> u8 {
+        self.reserved_downstream_rollable_extranonce_size
     }
 }
 

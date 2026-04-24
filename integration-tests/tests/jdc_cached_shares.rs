@@ -71,7 +71,7 @@ async fn jdc_cached_shares_relayed_on_set_custom_job_success() {
             // to guarantee the miner can easily generate valid shares.
             // This helps ensure the first received share is valid.
             target: [0xff_u8; 32].to_vec().try_into().unwrap(),
-            extranonce_size: 8,
+            extranonce_size: open_channel_msg.min_extranonce_size,
             extranonce_prefix: vec![0x00, 0x00, 0x00, 0x00].try_into().unwrap(),
             group_channel_id: 1,
         },

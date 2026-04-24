@@ -1,20 +1,28 @@
 use crate::{
     error::{self, TproxyError, TproxyErrorKind},
     is_aggregated,
-    sv2::ChannelManager,
-    utils::{proxy_extranonce_prefix_len, AggregatedState, AGGREGATED_CHANNEL_ID},
+    sv2::{
+        channel_manager::channel_manager::{
+            AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES, AGGREGATED_TPROXY_MAX_CHANNELS,
+            NON_AGGREGATED_TPROXY_MAX_CHANNELS,
+        },
+        ChannelManager,
+    },
+    utils::{AggregatedState, AGGREGATED_CHANNEL_ID},
 };
 use stratum_apps::{
     stratum_core::{
         bitcoin::Target,
-        channels_sv2::client::{extended::ExtendedChannel, group::GroupChannel},
+        channels_sv2::{
+            client::{extended::ExtendedChannel, group::GroupChannel},
+            extranonce_manager::{bytes_needed, ExtranonceAllocator, ExtranoncePrefix},
+        },
         handlers_sv2::{HandleMiningMessagesFromServerAsync, SupportedChannelTypes},
         mining_sv2::{
-            CloseChannel, ExtendedExtranonce, Extranonce, NewExtendedMiningJob, NewMiningJob,
-            OpenExtendedMiningChannelSuccess, OpenMiningChannelError,
-            OpenStandardMiningChannelSuccess, SetCustomMiningJobError, SetCustomMiningJobSuccess,
-            SetExtranoncePrefix, SetGroupChannel, SetNewPrevHash, SetTarget, SubmitSharesError,
-            SubmitSharesSuccess, UpdateChannelError,
+            CloseChannel, NewExtendedMiningJob, NewMiningJob, OpenExtendedMiningChannelSuccess,
+            OpenMiningChannelError, OpenStandardMiningChannelSuccess, SetCustomMiningJobError,
+            SetCustomMiningJobSuccess, SetExtranoncePrefix, SetGroupChannel, SetNewPrevHash,
+            SetTarget, SubmitSharesError, SubmitSharesSuccess, UpdateChannelError,
             MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
             MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
         },
@@ -22,7 +30,7 @@ use stratum_apps::{
     },
     utils::types::{DownstreamId, Hashrate},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleMiningMessagesFromServerAsync for ChannelManager {
@@ -111,79 +119,116 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 }
             }
 
-            let extranonce_prefix = m.extranonce_prefix.clone().into_static().to_vec();
+            let upstream_prefix_bytes = m.extranonce_prefix.clone().into_static().to_vec();
             let target = Target::from_le_bytes(m.target.clone().inner_as_ref().try_into().unwrap());
             let version_rolling = true; // we assume this is always true on extended channels
-            let extended_channel = ExtendedChannel::new(
-                m.channel_id,
-                user_identity.clone(),
-                extranonce_prefix.clone(),
-                target,
-                nominal_hashrate,
-                version_rolling,
-                m.extranonce_size,
-            );
 
-            // If we are in aggregated mode, we need to create a new extranonce prefix and
-            // insert the extended channel into the map
             if is_aggregated() {
-                // Store the upstream extended channel under AGGREGATED_CHANNEL_ID
-                self.extended_channels
-                    .insert(AGGREGATED_CHANNEL_ID, extended_channel.clone());
-
-                let upstream_extranonce_prefix: Extranonce = m.extranonce_prefix.clone().into();
-                let translator_proxy_extranonce_prefix_len = proxy_extranonce_prefix_len(
-                    m.extranonce_size.into(),
-                    downstream_extranonce_len,
-                );
-
-                // range 0 is the extranonce_prefix from upstream
-                // range 1 is the extranonce_prefix added by the tproxy
-                // range 2 is the extranonce_size used by the miner for rolling
-                let range_0 = 0..extranonce_prefix.len();
-                let range1 = range_0.end..range_0.end + translator_proxy_extranonce_prefix_len;
-                let range2 = range1.end..range1.end + downstream_extranonce_len;
-                debug!(
-                    "\n\nrange_0: {:?}, range1: {:?}, range2: {:?}\n\n",
-                    range_0, range1, range2
-                );
-                let extended_extranonce_factory = ExtendedExtranonce::from_upstream_extranonce(
-                    upstream_extranonce_prefix,
-                    range_0,
-                    range1,
-                    range2,
+                // Aggregated: we asked upstream for `downstream_extranonce_len
+                // + AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES` so the allocator's
+                // `local_index` has room to uniquely address each multiplexed
+                // downstream. Build the allocator with `max_channels =
+                // AGGREGATED_TPROXY_MAX_CHANNELS` (2-byte index) and absorb
+                // any extra slack upstream granted on top as zero-padding in
+                // `local_prefix_bytes`.
+                //
+                // Resulting layout:
+                //   [ upstream_prefix ][ local_prefix (padding) ][ local_index ][ rollable ]
+                //        upstream              caller                 allocator     miner
+                if (m.extranonce_size as usize)
+                    < AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES as usize + downstream_extranonce_len
+                {
+                    error!(
+                        "Upstream-granted rollable size ({} bytes) is smaller than minimum required ({} bytes) in aggregated mode",
+                        m.extranonce_size,
+                        AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES as usize + downstream_extranonce_len,
+                    );
+                    return Err(TproxyError::fallback(
+                        TproxyErrorKind::OpenMiningChannelError,
+                    ));
+                }
+                let full_extranonce_size =
+                    upstream_prefix_bytes.len() as u8 + m.extranonce_size as u8;
+                let local_index_bytes = bytes_needed(AGGREGATED_TPROXY_MAX_CHANNELS) as usize;
+                let local_prefix_padding_len =
+                    (m.extranonce_size as usize) - local_index_bytes - downstream_extranonce_len;
+                let mut allocator = ExtranonceAllocator::from_upstream_prefix(
+                    upstream_prefix_bytes,
+                    vec![0u8; local_prefix_padding_len],
+                    full_extranonce_size,
+                    AGGREGATED_TPROXY_MAX_CHANNELS,
                 )
-                .expect("Failed to create ExtendedExtranonce from upstream extranonce");
-                self.extranonce_factories
-                    .insert(AGGREGATED_CHANNEL_ID, extended_extranonce_factory);
+                .map_err(|e| {
+                    error!(
+                        "Failed to create ExtranonceAllocator from upstream: {:?}",
+                        e
+                    );
+                    TproxyError::fallback(TproxyErrorKind::OpenMiningChannelError)
+                })?;
+                let new_extranonce_prefix = allocator
+                    .allocate_extended(downstream_extranonce_len)
+                    .map_err(|e| {
+                        error!("Failed to allocate extended extranonce prefix: {:?}", e);
+                        TproxyError::fallback(TproxyErrorKind::OpenMiningChannelError)
+                    })?;
+                let downstream_extranonce_prefix_bytes: Vec<u8> =
+                    new_extranonce_prefix.as_bytes().to_vec();
 
-                let mut factory = self
-                    .extranonce_factories
-                    .get_mut(&AGGREGATED_CHANNEL_ID)
-                    .expect("extranonce_prefix_factory should be set after creation");
-                let new_extranonce_size = factory.get_range2_len() as u16;
-                let new_extranonce_prefix = factory
-                    .next_prefix_extended(new_extranonce_size as usize)
-                    .expect("next_prefix_extended should return a value for valid input")
-                    .into_b032();
+                // Store the upstream extended channel under AGGREGATED_CHANNEL_ID.
+                // Other parts of the translator (job forwarding, target
+                // updates, etc.) look up the upstream channel via this key.
+                //
+                // `expect` is safe: `allocator.upstream_prefix()` is bounded
+                // by the allocator's `total_extranonce_len`, which is in
+                // turn bounded by `MAX_EXTRANONCE_LEN` (checked at
+                // allocator construction).
+                let upstream_extranonce_prefix =
+                    ExtranoncePrefix::from_wire(allocator.upstream_prefix().to_vec())
+                        .expect("allocator upstream prefix is bounded by MAX_EXTRANONCE_LEN");
+                let upstream_channel = ExtendedChannel::new(
+                    m.channel_id,
+                    user_identity.clone(),
+                    upstream_extranonce_prefix,
+                    target,
+                    nominal_hashrate,
+                    version_rolling,
+                    m.extranonce_size,
+                );
+                self.extended_channels
+                    .insert(AGGREGATED_CHANNEL_ID, upstream_channel);
+
+                // Hand the allocator-minted prefix to the downstream channel
+                // directly — its RAII release frees the bitmap slot on
+                // channel drop. Widen `AllocatedExtranoncePrefix` to the
+                // loose `ExtranoncePrefix` expected by the client-side
+                // channel constructor; the allocation record (including
+                // the bitmap back-reference) is preserved.
                 let new_downstream_extended_channel = ExtendedChannel::new(
                     1,
                     user_identity.clone(),
-                    new_extranonce_prefix.clone().into_static().to_vec(),
+                    new_extranonce_prefix.into(),
                     target,
                     nominal_hashrate,
                     true,
-                    new_extranonce_size,
+                    downstream_extranonce_len as u16,
                 );
                 self.extended_channels
                     .insert(1, new_downstream_extended_channel);
+                // Keep the allocator alive; subsequent downstream channels in
+                // this aggregated upstream draw from the same allocator and
+                // share rewriting reads `upstream_prefix_len()` from it.
+                self.aggregated_extranonce_allocator
+                    .super_safe_lock(|slot| *slot = Some(allocator));
                 self.aggregated_channel_state
                     .set(AggregatedState::Connected);
+
                 let new_open_extended_mining_channel_success = OpenExtendedMiningChannelSuccess {
                     request_id: m.request_id,
                     channel_id: 1,
-                    extranonce_prefix: new_extranonce_prefix,
-                    extranonce_size: new_extranonce_size,
+                    extranonce_prefix: downstream_extranonce_prefix_bytes
+                        .try_into()
+                        .map_err(TproxyError::shutdown)?,
+                    extranonce_size: downstream_extranonce_len as u16,
                     target: m.target.clone(),
                     group_channel_id: m.group_channel_id,
                 };
@@ -191,72 +236,128 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                     new_open_extended_mining_channel_success.into_static(),
                 )
             } else {
-                // Non-aggregated mode: check if we need to adjust extranonce size
-                if m.extranonce_size as usize != downstream_extranonce_len {
-                    // We need to create an extranonce factory to ensure proper extranonce2_size
-                    let upstream_extranonce_prefix: Extranonce = m.extranonce_prefix.clone().into();
-                    let translator_proxy_extranonce_prefix_len = proxy_extranonce_prefix_len(
-                        m.extranonce_size.into(),
-                        downstream_extranonce_len,
+                // Non-aggregated: we asked upstream for exactly
+                // `downstream_extranonce_len` (no widening, since each
+                // downstream has its own upstream channel and there is
+                // nothing to multiplex).
+                //
+                // If upstream granted exactly what we asked
+                // (`m.extranonce_size == downstream_extranonce_len`), there
+                // is no slack to absorb: skip the allocator entirely, use the
+                // upstream prefix verbatim as the downstream's extranonce1,
+                // and let share rewriting be a no-op (the miner's
+                // `extranonce2` already matches what upstream expects).
+                //
+                // If upstream granted more, build a `max_channels = 1`
+                // allocator and absorb the slack as zero-padding so the miner
+                // still rolls exactly `downstream_extranonce_len` bytes.
+                if (m.extranonce_size as usize) < downstream_extranonce_len {
+                    error!(
+                        "Upstream-granted rollable size ({} bytes) is smaller than requested ({} bytes) in non-aggregated mode",
+                        m.extranonce_size, downstream_extranonce_len,
                     );
-
-                    // range 0 is the extranonce1 from upstream
-                    // range 1 is the extranonce1 added by the tproxy
-                    // range 2 is the extranonce2 used by the miner for rolling
-                    let range_0 = 0..extranonce_prefix.len();
-                    let range1 = range_0.end..range_0.end + translator_proxy_extranonce_prefix_len;
-                    let range2 = range1.end..range1.end + downstream_extranonce_len;
-                    debug!(
-                        "\n\nrange_0: {:?}, range1: {:?}, range2: {:?}\n\n",
-                        range_0, range1, range2
-                    );
-                    // Create the factory - this should succeed if configuration is valid
-                    let extended_extranonce_factory = ExtendedExtranonce::from_upstream_extranonce(
-                            upstream_extranonce_prefix,
-                            range_0,
-                            range1,
-                            range2,
-                        )
-                        .expect("Failed to create ExtendedExtranonce factory - likely extranonce size configuration issue");
-                    // Store the factory for this specific channel
-                    let mut factory = extended_extranonce_factory;
-                    let new_extranonce_prefix = factory
-                        .next_prefix_extended(downstream_extranonce_len)
-                        .expect("Failed to generate extranonce prefix")
-                        .into_b032();
-                    // Create channel with the configured extranonce size
-                    let new_downstream_extended_channel = ExtendedChannel::new(
-                        m.channel_id,
-                        user_identity.clone(),
-                        new_extranonce_prefix.clone().into_static().to_vec(),
-                        target,
-                        nominal_hashrate,
-                        true,
-                        downstream_extranonce_len as u16,
-                    );
-                    self.extended_channels
-                        .insert(m.channel_id, new_downstream_extended_channel);
-
-                    self.extranonce_factories.insert(m.channel_id, factory);
-
-                    let new_open_extended_mining_channel_success =
-                        OpenExtendedMiningChannelSuccess {
-                            request_id: m.request_id,
-                            channel_id: m.channel_id,
-                            extranonce_prefix: new_extranonce_prefix,
-                            extranonce_size: downstream_extranonce_len as u16,
-                            target: m.target.clone(),
-                            group_channel_id: m.group_channel_id,
-                        };
-                    Ok::<OpenExtendedMiningChannelSuccess<'static>, Self::Error>(
-                        new_open_extended_mining_channel_success.into_static(),
-                    )
-                } else {
-                    // Extranonce size matches, use as-is
-                    self.extended_channels
-                        .insert(m.channel_id, extended_channel);
-                    Ok::<OpenExtendedMiningChannelSuccess<'static>, Self::Error>(m.into_static())
+                    return Err(TproxyError::fallback(
+                        TproxyErrorKind::OpenMiningChannelError,
+                    ));
                 }
+
+                let (downstream_prefix, downstream_prefix_bytes_for_success) = if (m.extranonce_size
+                    as usize)
+                    == downstream_extranonce_len
+                {
+                    // No slack: forward upstream's prefix directly to the
+                    // downstream. No allocator is stored for this channel,
+                    // which the share-rewrite path treats as "no
+                    // rewriting needed" — `channel.upstream_prefix_len()`
+                    // returns `None` for a wire-sourced prefix and the
+                    // rewrite branch is skipped.
+                    let prefix = ExtranoncePrefix::from_wire(upstream_prefix_bytes.clone())
+                        .map_err(|e| {
+                            error!("Upstream extranonce prefix rejected by from_wire: {:?}", e);
+                            TproxyError::shutdown(TproxyErrorKind::OpenMiningChannelError)
+                        })?;
+                    (prefix, upstream_prefix_bytes)
+                } else {
+                    let local_index_bytes =
+                        bytes_needed(NON_AGGREGATED_TPROXY_MAX_CHANNELS) as usize;
+                    if (m.extranonce_size as usize) < local_index_bytes + downstream_extranonce_len
+                    {
+                        error!(
+                                "Upstream-granted rollable size ({} bytes) leaves no room for allocator local_index in non-aggregated mode",
+                                m.extranonce_size,
+                            );
+                        return Err(TproxyError::fallback(
+                            TproxyErrorKind::OpenMiningChannelError,
+                        ));
+                    }
+                    let full_extranonce_size =
+                        upstream_prefix_bytes.len() as u8 + m.extranonce_size as u8;
+                    let local_prefix_padding_len = (m.extranonce_size as usize)
+                        - local_index_bytes
+                        - downstream_extranonce_len;
+                    // The allocator is a throwaway:
+                    // `max_channels = NON_AGGREGATED_TPROXY_MAX_CHANNELS` (== 1),
+                    // so it mints exactly one prefix and then becomes
+                    // useless. Drop it right after `allocate_extended`.
+                    // The prefix carries its own `upstream_prefix_len`
+                    // (recorded at allocation time), which share rewriting
+                    // reads back via `channel.upstream_prefix_len()` on the
+                    // hot path, so no per-channel allocator state needs to
+                    // persist.
+                    let mut allocator = ExtranonceAllocator::from_upstream_prefix(
+                        upstream_prefix_bytes,
+                        vec![0u8; local_prefix_padding_len],
+                        full_extranonce_size,
+                        NON_AGGREGATED_TPROXY_MAX_CHANNELS,
+                    )
+                    .map_err(|e| {
+                        error!(
+                            "Failed to create ExtranonceAllocator from upstream: {:?}",
+                            e
+                        );
+                        TproxyError::fallback(TproxyErrorKind::OpenMiningChannelError)
+                    })?;
+                    let prefix = allocator
+                        .allocate_extended(downstream_extranonce_len)
+                        .map_err(|e| {
+                            error!("Failed to allocate extended extranonce prefix: {:?}", e);
+                            TproxyError::fallback(TproxyErrorKind::OpenMiningChannelError)
+                        })?;
+                    let wire_bytes = prefix.as_bytes().to_vec();
+                    // Widen the allocator-minted prefix to match the
+                    // wire-sourced branch's `ExtranoncePrefix`; the
+                    // `AllocatedExtranoncePrefix`'s allocation record is
+                    // preserved through the conversion so the Drop-based
+                    // bitmap release still fires (as a no-op here, since
+                    // the throwaway allocator is dropped immediately).
+                    (prefix.into(), wire_bytes)
+                };
+
+                let new_downstream_extended_channel = ExtendedChannel::new(
+                    m.channel_id,
+                    user_identity.clone(),
+                    downstream_prefix,
+                    target,
+                    nominal_hashrate,
+                    version_rolling,
+                    downstream_extranonce_len as u16,
+                );
+                self.extended_channels
+                    .insert(m.channel_id, new_downstream_extended_channel);
+
+                let new_open_extended_mining_channel_success = OpenExtendedMiningChannelSuccess {
+                    request_id: m.request_id,
+                    channel_id: m.channel_id,
+                    extranonce_prefix: downstream_prefix_bytes_for_success
+                        .try_into()
+                        .map_err(TproxyError::shutdown)?,
+                    extranonce_size: downstream_extranonce_len as u16,
+                    target: m.target.clone(),
+                    group_channel_id: m.group_channel_id,
+                };
+                Ok::<OpenExtendedMiningChannelSuccess<'static>, Self::Error>(
+                    new_open_extended_mining_channel_success.into_static(),
+                )
             }
         }?;
 

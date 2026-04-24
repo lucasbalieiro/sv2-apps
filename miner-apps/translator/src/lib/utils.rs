@@ -123,25 +123,6 @@ pub fn validate_sv1_share(
     Ok(false)
 }
 
-/// Calculates the required length of the proxy's extranonce prefix.
-///
-/// This function determines how many bytes the proxy needs to reserve for its own
-/// extranonce prefix, based on the difference between the channel's rollable extranonce
-/// size and the downstream miner's rollable extranonce size.
-///
-/// # Arguments
-/// * `channel_rollable_extranonce_size` - Size of the rollable extranonce from the channel
-/// * `downstream_rollable_extranonce_size` - Size of the rollable extranonce for downstream
-///
-/// # Returns
-/// The number of bytes needed for the proxy's extranonce prefix
-pub fn proxy_extranonce_prefix_len(
-    channel_rollable_extranonce_size: usize,
-    downstream_rollable_extranonce_size: usize,
-) -> usize {
-    channel_rollable_extranonce_size - downstream_rollable_extranonce_size
-}
-
 /// Tracks the state of the single upstream extended channel in aggregated mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggregatedState {
@@ -187,16 +168,4 @@ pub struct UpstreamEntry {
     pub port: u16,
     pub authority_pubkey: Secp256k1PublicKey,
     pub tried_or_flagged: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_proxy_extranonce_prefix_len() {
-        assert_eq!(proxy_extranonce_prefix_len(8, 4), 4);
-        assert_eq!(proxy_extranonce_prefix_len(10, 6), 4);
-        assert_eq!(proxy_extranonce_prefix_len(4, 4), 0);
-    }
 }

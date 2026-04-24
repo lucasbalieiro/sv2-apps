@@ -19,6 +19,7 @@ use stratum_apps::{
     stratum_core::{
         bitcoin::{Amount, TxOut},
         channels_sv2::{
+            extranonce_manager::{bytes_needed, ExtranonceAllocator},
             server::{
                 extended::ExtendedChannel,
                 group::GroupChannel,
@@ -30,7 +31,7 @@ use stratum_apps::{
         handlers_sv2::{
             HandleMiningMessagesFromClientAsync, HandleTemplateDistributionMessagesFromServerAsync,
         },
-        mining_sv2::{ExtendedExtranonce, SetTarget},
+        mining_sv2::SetTarget,
         parsers_sv2::{Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash},
     },
@@ -52,20 +53,28 @@ use crate::{
 mod mining_message_handler;
 mod template_distribution_message_handler;
 
-const POOL_ALLOCATION_BYTES: usize = 4;
-const CLIENT_SEARCH_SPACE_BYTES: usize = 16;
-pub const FULL_EXTRANONCE_SIZE: usize = POOL_ALLOCATION_BYTES + CLIENT_SEARCH_SPACE_BYTES;
+// Size of the static identifier for this pool server, placed at the start of the pool's
+// extranonce allocation. One byte covers up to 256 distinct pool servers.
+const POOL_SERVER_BYTES: u8 = 1;
+// Maximum number of concurrent channels the pool can allocate. Determines
+// [`POOL_LOCAL_PREFIX_BYTES`] via [`bytes_needed`]. The internal allocation
+// bitmap uses `POOL_MAX_CHANNELS / 8` bytes of RAM.
+const POOL_MAX_CHANNELS: u32 = 16_777_216;
+// Bytes consumed by the per-channel `local_index`. Derived from
+// [`POOL_MAX_CHANNELS`] so the two stay in sync.
+const POOL_LOCAL_PREFIX_BYTES: u8 = bytes_needed(POOL_MAX_CHANNELS);
+const POOL_ALLOCATION_BYTES: u8 = POOL_SERVER_BYTES + POOL_LOCAL_PREFIX_BYTES;
+const CLIENT_SEARCH_SPACE_BYTES: u8 = 16;
+pub const FULL_EXTRANONCE_SIZE: u8 = POOL_ALLOCATION_BYTES + CLIENT_SEARCH_SPACE_BYTES;
 
 pub struct ChannelManagerData {
     // Mapping of `downstream_id` → `Downstream` object,
     // used by the channel manager to locate and interact with downstream clients.
     pub(crate) downstream: HashMap<DownstreamId, Downstream>,
-    // Extranonce prefix factory for **extended downstream channels**.
-    // Each new extended downstream receives a unique extranonce prefix.
-    extranonce_prefix_factory_extended: ExtendedExtranonce,
-    // Extranonce prefix factory for **standard downstream channels**.
-    // Each new standard downstream receives a unique extranonce prefix.
-    extranonce_prefix_factory_standard: ExtendedExtranonce,
+    // Unified extranonce prefix allocator, shared by standard and extended
+    // downstream channels. The allocated [`ExtranoncePrefix`] is stored on the
+    // channel itself, so dropping the channel automatically releases the slot.
+    extranonce_allocator: ExtranonceAllocator,
     // Factory that assigns a unique ID to each new **downstream connection**.
     downstream_id_factory: AtomicUsize,
     // Mapping of `(downstream_id, channel_id)` → vardiff controller.
@@ -146,32 +155,18 @@ impl ChannelManager {
         coinbase_outputs: Vec<u8>,
         job_declarator: Option<JobDeclarator>,
     ) -> PoolResult<Self, error::ChannelManager> {
-        let range_0 = 0..0;
-        let range_1 = 0..POOL_ALLOCATION_BYTES;
-        let range_2 = POOL_ALLOCATION_BYTES..POOL_ALLOCATION_BYTES + CLIENT_SEARCH_SPACE_BYTES;
+        // Simulating a scenario where there are multiple mining servers,
+        // `server_id` is used as `local_prefix_bytes` so each pool instance
+        // allocates extranonce prefixes in its own distinct namespace.
+        let local_prefix_bytes = config.server_id().to_be_bytes().to_vec();
 
-        let make_extranonce_factory = || {
-            // simulating a scenario where there are multiple mining servers
-            // this static prefix allows unique extranonce_prefix allocation
-            // for this mining server
-            let static_prefix = config.server_id().to_be_bytes().to_vec();
-
-            ExtendedExtranonce::new(
-                range_0.clone(),
-                range_1.clone(),
-                range_2.clone(),
-                Some(static_prefix),
-            )
-            .expect("Failed to create ExtendedExtranonce with valid ranges")
-        };
-
-        let extranonce_prefix_factory_extended = make_extranonce_factory();
-        let extranonce_prefix_factory_standard = make_extranonce_factory();
+        let extranonce_allocator =
+            ExtranonceAllocator::new(local_prefix_bytes, FULL_EXTRANONCE_SIZE, POOL_MAX_CHANNELS)
+                .map_err(PoolError::shutdown)?;
 
         let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData {
             downstream: HashMap::new(),
-            extranonce_prefix_factory_extended,
-            extranonce_prefix_factory_standard,
+            extranonce_allocator,
             downstream_id_factory: AtomicUsize::new(1),
             vardiff: HashMap::new(),
             coinbase_outputs,
@@ -223,7 +218,7 @@ impl ChannelManager {
         let mut group_channel = match GroupChannel::new_for_pool(
             channel_id,
             DefaultJobStore::new(),
-            FULL_EXTRANONCE_SIZE,
+            FULL_EXTRANONCE_SIZE as usize,
             self.pool_tag_string.clone(),
         ) {
             Ok(channel) => channel,

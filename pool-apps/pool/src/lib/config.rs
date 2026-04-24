@@ -39,7 +39,7 @@ pub struct PoolConfig {
     #[serde(default, deserialize_with = "opt_path_from_toml")]
     log_file: Option<PathBuf>,
     #[serde(default)]
-    server_id: u16,
+    server_id: u8,
     #[serde(default)]
     supported_extensions: Vec<u16>,
     #[serde(default)]
@@ -66,7 +66,7 @@ impl PoolConfig {
         coinbase_reward_script: CoinbaseRewardScript,
         shares_per_minute: SharesPerMinute,
         share_batch_size: SharesBatchSize,
-        server_id: u16,
+        server_id: u8,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
         monitoring_address: Option<SocketAddr>,
@@ -165,7 +165,7 @@ impl PoolConfig {
     }
 
     /// Returns the server id.
-    pub fn server_id(&self) -> u16 {
+    pub fn server_id(&self) -> u8 {
         self.server_id
     }
 

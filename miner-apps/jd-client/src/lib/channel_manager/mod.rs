@@ -19,6 +19,7 @@ use stratum_apps::{
         bitcoin::{consensus, Amount, Target, TxOut},
         channels_sv2::{
             client::extended::ExtendedChannel,
+            extranonce_manager::{bytes_needed, ExtranonceAllocator},
             outputs::deserialize_outputs,
             server::{
                 group::GroupChannel,
@@ -39,10 +40,7 @@ use stratum_apps::{
         job_declaration_sv2::{
             AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
         },
-        mining_sv2::{
-            ExtendedExtranonce, OpenExtendedMiningChannel, SetCustomMiningJob, SetTarget,
-            UpdateChannel,
-        },
+        mining_sv2::{OpenExtendedMiningChannel, SetCustomMiningJob, SetTarget, UpdateChannel},
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashTdp},
     },
@@ -74,17 +72,43 @@ mod jd_message_handler;
 mod template_message_handler;
 mod upstream_message_handler;
 
-pub const JDC_SEARCH_SPACE_BYTES: usize = 4;
-// These are only used for solo-mining, very similar to pool
-const CLIENT_SEARCH_SPACE_BYTES: usize = 16;
-pub const FULL_EXTRANONCE_SIZE: usize = JDC_SEARCH_SPACE_BYTES + CLIENT_SEARCH_SPACE_BYTES;
-// some extra bytes guaranteed for standard channels
-// allows for 65,536 standard channels on worst case
-// where worst-case means: OpenExtendedMiningChannel.Success.extranonce_size ==
-// OpenExtendedMiningChannel.min_extranonce_size
-const STANDARD_CHANNEL_ALLOCATION_BYTES: usize = 2;
-// for OpenExtendedMiningChannel.min_extranonce_size
-const MIN_EXTRANONCE_SIZE: usize = JDC_SEARCH_SPACE_BYTES + STANDARD_CHANNEL_ALLOCATION_BYTES;
+// ============================================================================
+// JDC extranonce layout
+// ============================================================================
+//
+// JDC multiplexes many downstream channels (standard + extended) over a
+// **single** upstream extended channel whose `extranonce_size` is fixed at
+// opening time — JDC cannot grow it later. Every SV2 extranonce JDC
+// produces is therefore laid out as:
+//
+//     | upstream_prefix | local_index | downstream rollable |
+//
+// * `upstream_prefix`: pool-assigned (empty in solo mining).
+// * `local_index`: JDC's per-channel slot; width = [`JDC_LOCAL_PREFIX_BYTES`].
+// * `downstream rollable`: what an extended downstream rolls (absent for standard downstreams).
+//
+// The size JDC asks the pool for at open time must cover **every** future
+// downstream, not just the one that triggered the open. The floor on the
+// rollable region is configured by
+// [`JobDeclaratorClientConfig::reserved_downstream_rollable_extranonce_size`];
+// see `handle_downstream_message` for the exact formula.
+
+/// Maximum number of concurrent downstream channels JDC can allocate.
+/// Determines [`JDC_LOCAL_PREFIX_BYTES`] via [`bytes_needed`].
+const JDC_MAX_CHANNELS: u32 = 65_536;
+
+/// Bytes consumed by JDC's per-channel `local_index`. Derived from
+/// [`JDC_MAX_CHANNELS`] so the two stay in sync.
+const JDC_LOCAL_PREFIX_BYTES: u8 = bytes_needed(JDC_MAX_CHANNELS);
+
+/// Total extranonce length used by JDC in **solo mining** mode (no upstream
+/// pool). Mirrors the Pool's layout so both modes produce consistent shapes.
+///
+/// ```text
+/// | local_index (2) | downstream rollable (18) |
+/// |<----- SOLO_FULL_EXTRANONCE_SIZE = 20 ---------->|
+/// ```
+pub const SOLO_FULL_EXTRANONCE_SIZE: u8 = 20;
 
 /// A `DeclaredJob` encapsulates all the relevant data associated with a single
 /// job declaration, including its template, optional messages, coinbase output,
@@ -116,12 +140,12 @@ pub struct ChannelManagerData {
     // Mapping of `downstream_id` → `Downstream` object,
     // used by the channel manager to locate and interact with downstream clients.
     pub downstream: HashMap<DownstreamId, Downstream>,
-    // Extranonce prefix factory for **extended downstream channels**.
-    // Each new extended downstream receives a unique extranonce prefix.
-    extranonce_prefix_factory_extended: ExtendedExtranonce,
-    // Extranonce prefix factory for **standard downstream channels**.
-    // Each new standard downstream receives a unique extranonce prefix.
-    extranonce_prefix_factory_standard: ExtendedExtranonce,
+    // Unified extranonce prefix allocator shared by standard and extended
+    // downstream channels. Rebuilt with the upstream-assigned prefix whenever
+    // the upstream connection is (re)negotiated or `SetExtranoncePrefix` is
+    // received. The allocated [`ExtranoncePrefix`] is stored on the channel
+    // itself, so dropping the channel automatically releases the slot.
+    extranonce_allocator: ExtranonceAllocator,
     // Factory that generates **monotonically increasing request IDs**
     // for messages sent from the JDC.
     request_id_factory: AtomicU32,
@@ -189,19 +213,12 @@ impl ChannelManagerData {
         self.downstream_id_factory = AtomicUsize::new(0);
         self.request_id_factory = AtomicU32::new(0);
 
-        let (range_0, range_1, range_2) = {
-            let range_1 = 0..JDC_SEARCH_SPACE_BYTES;
-            (
-                0..range_1.start,
-                range_1.clone(),
-                range_1.end..FULL_EXTRANONCE_SIZE,
-            )
-        };
-        self.extranonce_prefix_factory_extended =
-            ExtendedExtranonce::new(range_0.clone(), range_1.clone(), range_2.clone(), None)
-                .expect("valid ranges");
-        self.extranonce_prefix_factory_standard =
-            ExtendedExtranonce::new(range_0, range_1, range_2, None).expect("valid ranges");
+        // Reset the allocator to its solo-mining default. When upstream
+        // reconnects with a new extranonce prefix it will be rebuilt via
+        // [`ExtranonceAllocator::from_upstream_prefix`] in the upstream handler.
+        self.extranonce_allocator =
+            ExtranonceAllocator::new(Vec::new(), SOLO_FULL_EXTRANONCE_SIZE, JDC_MAX_CHANNELS)
+                .expect("Failed to create ExtranonceAllocator with valid parameters");
 
         self.allocate_tokens.clear();
         self.upstream_channel = None;
@@ -260,6 +277,7 @@ pub struct ChannelManager {
     share_batch_size: SharesBatchSize,
     shares_per_minute: SharesPerMinute,
     user_identity: String,
+    reserved_downstream_rollable_extranonce_size: u8,
     /// This represent the current state of Upstream channel
     /// 1. NoChannel: No active upstream connection.
     /// 2. Pending: A channel request has been sent, awaiting response.
@@ -328,27 +346,16 @@ impl ChannelManager {
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
     ) -> JDCResult<Self, error::ChannelManager> {
-        let (range_0, range_1, range_2) = {
-            let range_1 = 0..JDC_SEARCH_SPACE_BYTES;
-            (
-                0..range_1.start,
-                range_1.clone(),
-                range_1.end..FULL_EXTRANONCE_SIZE,
-            )
-        };
-
-        let make_extranonce_factory = || {
-            ExtendedExtranonce::new(range_0.clone(), range_1.clone(), range_2.clone(), None)
-                .expect("Failed to create ExtendedExtranonce with valid ranges")
-        };
-
-        let extranonce_prefix_factory_extended = make_extranonce_factory();
-        let extranonce_prefix_factory_standard = make_extranonce_factory();
+        // Start with a solo-mining allocator (no upstream prefix). Once the
+        // upstream channel is opened in `handle_open_extended_mining_channel_success`
+        // this allocator is replaced with one built from the upstream prefix.
+        let extranonce_allocator =
+            ExtranonceAllocator::new(Vec::new(), SOLO_FULL_EXTRANONCE_SIZE, JDC_MAX_CHANNELS)
+                .map_err(JDCError::<error::ChannelManager>::shutdown)?;
 
         let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData {
             downstream: HashMap::new(),
-            extranonce_prefix_factory_extended,
-            extranonce_prefix_factory_standard,
+            extranonce_allocator,
             downstream_id_factory: AtomicUsize::new(0),
             request_id_factory: AtomicU32::new(0),
             sequence_number_factory: AtomicU32::new(1),
@@ -389,6 +396,8 @@ impl ChannelManager {
             shares_per_minute: config.shares_per_minute(),
             miner_tag_string: config.jdc_signature().to_string(),
             user_identity: config.user_identity().to_string(),
+            reserved_downstream_rollable_extranonce_size: config
+                .reserved_downstream_rollable_extranonce_size(),
             upstream_state: AtomicUpstreamState::new(UpstreamState::SoloMining),
         };
 
@@ -409,9 +418,12 @@ impl ChannelManager {
                     data.upstream_channel
                         .as_ref()
                         .map(|channel| channel.get_full_extranonce_size())
-                        .unwrap_or(FULL_EXTRANONCE_SIZE), /* Default to FULL_EXTRANONCE_SIZE if
-                                                           * upstream channel is not present
-                                                           * (solo mining mode) */
+                        .unwrap_or(SOLO_FULL_EXTRANONCE_SIZE as usize), /* Default to
+                                                                         * SOLO_FULL_EXTRANONCE_SIZE if
+                                                                         * upstream channel is
+                                                                         * not
+                                                                         * present
+                                                                         * (solo mining mode) */
                     data.pool_tag_string.clone(),
                     data.last_future_template
                         .clone()
@@ -885,7 +897,23 @@ impl ChannelManager {
                                     .try_into()
                                     .map_err(JDCError::shutdown)?;
                                 upstream_message.request_id = 1;
-                                upstream_message.min_extranonce_size += MIN_EXTRANONCE_SIZE as u16;
+                                // The upstream extended channel is opened once and its
+                                // `extranonce_size` is fixed. Size its rollable region to fit:
+                                //   - JDC's own `local_index` (JDC_LOCAL_PREFIX_BYTES), plus
+                                //   - the larger of the downstream's request `M` and JDC's
+                                //     retroactive commitment to future downstreams
+                                //     (`reserved_downstream_rollable_extranonce_size`).
+                                // Equivalently:
+                                //   JDC_LOCAL_PREFIX_BYTES +
+                                //     max(reserved_downstream_rollable, M).
+                                let reserved_downstream_rollable =
+                                    self.reserved_downstream_rollable_extranonce_size as usize;
+                                let downstream_min = upstream_message.min_extranonce_size as usize;
+                                let upstream_min =
+                                    (JDC_LOCAL_PREFIX_BYTES as usize).saturating_add(
+                                        std::cmp::max(reserved_downstream_rollable, downstream_min),
+                                    );
+                                upstream_message.min_extranonce_size = upstream_min as u16;
                                 let upstream_message =
                                     Mining::OpenExtendedMiningChannel(upstream_message)
                                         .into_static();
@@ -940,12 +968,20 @@ impl ChannelManager {
                                 .compare_and_set(UpstreamState::NoChannel, UpstreamState::Pending)
                                 .is_ok()
                             {
+                                // The first downstream is a standard channel, which doesn't
+                                // roll the extranonce itself. Ask the pool for
+                                // JDC_LOCAL_PREFIX_BYTES +
+                                // `reserved_downstream_rollable_extranonce_size` so we
+                                // still honor our retroactive commitment to any later
+                                // extended downstream that attaches to this upstream.
+                                let upstream_min_extranonce_size = (JDC_LOCAL_PREFIX_BYTES as u16)
+                                    + self.reserved_downstream_rollable_extranonce_size as u16;
                                 let upstream_open = OpenExtendedMiningChannel {
                                     user_identity: self.user_identity.clone().try_into().unwrap(),
                                     request_id: 1,
                                     nominal_hash_rate: downstream_channel_request.nominal_hash_rate,
                                     max_target: downstream_channel_request.max_target,
-                                    min_extranonce_size: MIN_EXTRANONCE_SIZE as u16,
+                                    min_extranonce_size: upstream_min_extranonce_size,
                                 };
 
                                 let message =

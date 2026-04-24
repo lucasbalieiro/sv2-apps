@@ -919,22 +919,26 @@ impl Sv1Server {
             if let Some(channel_id) = channel_id {
                 self.channel_id_to_downstream_id
                     .super_safe_lock(|map| map.remove(&channel_id));
-                if !self.config.aggregate_channels {
-                    info!("Sending CloseChannel message: {channel_id} for downstream: {downstream_id}");
-                    let reason_code =
-                        Str0255::try_from("downstream disconnected".to_string()).unwrap();
-                    _ = self
-                        .sv1_server_channel_state
-                        .channel_manager_sender
-                        .send((
-                            Mining::CloseChannel(CloseChannel {
-                                channel_id,
-                                reason_code,
-                            }),
-                            None,
-                        ))
-                        .await;
-                }
+                // Send `CloseChannel` to the channel manager in both modes so
+                // it can free the per-downstream `ExtendedChannel` (and, in
+                // aggregated mode, the allocator-minted `ExtranoncePrefix`
+                // bitmap slot owned by that channel). The ChannelManager
+                // only forwards the `CloseChannel` upstream in non-aggregated mode;
+                // in aggregated mode the upstream channel is shared across
+                // all downstreams and must stay open.
+                info!("Sending CloseChannel message: {channel_id} for downstream: {downstream_id}");
+                let reason_code = Str0255::try_from("downstream disconnected".to_string()).unwrap();
+                _ = self
+                    .sv1_server_channel_state
+                    .channel_manager_sender
+                    .send((
+                        Mining::CloseChannel(CloseChannel {
+                            channel_id,
+                            reason_code,
+                        }),
+                        None,
+                    ))
+                    .await;
             }
         }
     }
