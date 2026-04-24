@@ -24,6 +24,9 @@ shares_per_minute = 6.0
 # How many shares do we want to acknowledge in a batch
 share_batch_size = 10
 
+# Number of rollable extranonce bytes reserved for extended downstreams (default 8)
+# reserved_downstream_rollable_extranonce_size = 8
+
 # JDC mode: FULLTEMPLATE, COINBASEONLY, or SOLOMINING
 mode = "SOLOMINING"
 

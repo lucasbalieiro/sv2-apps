@@ -261,6 +261,7 @@ pub fn start_jdc(
         required_extensions,
         monitoring_address,
         monitoring_cache_refresh_secs,
+        None,
     );
     let ret = jd_client_sv2::JobDeclaratorClient::new(jd_client_proxy);
     let ret_clone = ret.clone();

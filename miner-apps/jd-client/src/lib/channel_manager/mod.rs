@@ -88,8 +88,10 @@ mod upstream_message_handler;
 // * `downstream rollable`: what an extended downstream rolls (absent for standard downstreams).
 //
 // The size JDC asks the pool for at open time must cover **every** future
-// downstream, not just the one that triggered the open. See
-// [`MIN_EXTRANONCE_SIZE`] and `handle_downstream_message` for the formula.
+// downstream, not just the one that triggered the open. The floor on the
+// rollable region is configured by
+// [`JobDeclaratorClientConfig::reserved_downstream_rollable_extranonce_size`];
+// see `handle_downstream_message` for the exact formula.
 
 /// Maximum number of concurrent downstream channels JDC can allocate.
 /// Determines [`JDC_LOCAL_PREFIX_BYTES`] via [`bytes_needed`].
@@ -98,27 +100,6 @@ const JDC_MAX_CHANNELS: u32 = 65_536;
 /// Bytes consumed by JDC's per-channel `local_index`. Derived from
 /// [`JDC_MAX_CHANNELS`] so the two stay in sync.
 const JDC_LOCAL_PREFIX_BYTES: u8 = bytes_needed(JDC_MAX_CHANNELS);
-
-/// Retroactive `extranonce_size` commitment JDC honors for extended
-/// downstreams that attach *after* the upstream channel is already open
-/// (e.g. when the first downstream was standard). Downstreams asking for
-/// more than this are only satisfiable if they arrive first — see
-/// [`MIN_EXTRANONCE_SIZE`] and `handle_downstream_message`.
-///
-/// `8` comfortably covers the common SV1 `extranonce2_size = 4` case and
-/// is easily granted by any reasonable pool.
-const MIN_DOWNSTREAM_ROLLABLE_BYTES: u8 = 8;
-
-/// Lower bound on the `min_extranonce_size` JDC sends in
-/// `OpenExtendedMiningChannel` to the pool. The actual value sent is
-/// `max(MIN_EXTRANONCE_SIZE, JDC_LOCAL_PREFIX_BYTES + M)` where `M` is the
-/// first downstream's request (or `0` for a standard first downstream).
-///
-/// ```text
-/// | local_index (2) | downstream rollable (8) |
-/// |<----- MIN_EXTRANONCE_SIZE = 10 ---------->|
-/// ```
-const MIN_EXTRANONCE_SIZE: u8 = JDC_LOCAL_PREFIX_BYTES + MIN_DOWNSTREAM_ROLLABLE_BYTES;
 
 /// Total extranonce length used by JDC in **solo mining** mode (no upstream
 /// pool). Mirrors the Pool's layout so both modes produce consistent shapes.
@@ -296,6 +277,7 @@ pub struct ChannelManager {
     share_batch_size: SharesBatchSize,
     shares_per_minute: SharesPerMinute,
     user_identity: String,
+    reserved_downstream_rollable_extranonce_size: u8,
     /// This represent the current state of Upstream channel
     /// 1. NoChannel: No active upstream connection.
     /// 2. Pending: A channel request has been sent, awaiting response.
@@ -414,6 +396,8 @@ impl ChannelManager {
             shares_per_minute: config.shares_per_minute(),
             miner_tag_string: config.jdc_signature().to_string(),
             user_identity: config.user_identity().to_string(),
+            reserved_downstream_rollable_extranonce_size: config
+                .reserved_downstream_rollable_extranonce_size(),
             upstream_state: AtomicUpstreamState::new(UpstreamState::SoloMining),
         };
 
@@ -918,16 +902,17 @@ impl ChannelManager {
                                 //   - JDC's own `local_index` (JDC_LOCAL_PREFIX_BYTES), plus
                                 //   - the larger of the downstream's request `M` and JDC's
                                 //     retroactive commitment to future downstreams
-                                //     (MIN_DOWNSTREAM_ROLLABLE_BYTES) — i.e. never fall below
-                                //     MIN_EXTRANONCE_SIZE.
-                                // Equivalently: max(MIN_EXTRANONCE_SIZE,
-                                //                   JDC_LOCAL_PREFIX_BYTES + M).
+                                //     (`reserved_downstream_rollable_extranonce_size`).
+                                // Equivalently:
+                                //   JDC_LOCAL_PREFIX_BYTES +
+                                //     max(reserved_downstream_rollable, M).
+                                let reserved_downstream_rollable =
+                                    self.reserved_downstream_rollable_extranonce_size as usize;
                                 let downstream_min = upstream_message.min_extranonce_size as usize;
-                                let upstream_min = std::cmp::max(
-                                    MIN_EXTRANONCE_SIZE as usize,
-                                    (JDC_LOCAL_PREFIX_BYTES as usize)
-                                        .saturating_add(downstream_min),
-                                );
+                                let upstream_min =
+                                    (JDC_LOCAL_PREFIX_BYTES as usize).saturating_add(
+                                        std::cmp::max(reserved_downstream_rollable, downstream_min),
+                                    );
                                 upstream_message.min_extranonce_size = upstream_min as u16;
                                 let upstream_message =
                                     Mining::OpenExtendedMiningChannel(upstream_message)
@@ -984,16 +969,19 @@ impl ChannelManager {
                                 .is_ok()
                             {
                                 // The first downstream is a standard channel, which doesn't
-                                // roll the extranonce itself. Ask the pool for exactly
-                                // MIN_EXTRANONCE_SIZE so we still honor our retroactive
-                                // commitment (MIN_DOWNSTREAM_ROLLABLE_BYTES) to any later
+                                // roll the extranonce itself. Ask the pool for
+                                // JDC_LOCAL_PREFIX_BYTES +
+                                // `reserved_downstream_rollable_extranonce_size` so we
+                                // still honor our retroactive commitment to any later
                                 // extended downstream that attaches to this upstream.
+                                let upstream_min_extranonce_size = (JDC_LOCAL_PREFIX_BYTES as u16)
+                                    + self.reserved_downstream_rollable_extranonce_size as u16;
                                 let upstream_open = OpenExtendedMiningChannel {
                                     user_identity: self.user_identity.clone().try_into().unwrap(),
                                     request_id: 1,
                                     nominal_hash_rate: downstream_channel_request.nominal_hash_rate,
                                     max_target: downstream_channel_request.max_target,
-                                    min_extranonce_size: MIN_EXTRANONCE_SIZE as u16,
+                                    min_extranonce_size: upstream_min_extranonce_size,
                                 };
 
                                 let message =

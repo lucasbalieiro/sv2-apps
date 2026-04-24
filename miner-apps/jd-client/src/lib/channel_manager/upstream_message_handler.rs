@@ -21,8 +21,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     channel_manager::{
         downstream_message_handler::RouteMessageTo, ChannelManager, DeclaredJob,
-        JDC_LOCAL_PREFIX_BYTES, JDC_MAX_CHANNELS, MIN_DOWNSTREAM_ROLLABLE_BYTES,
-        MIN_EXTRANONCE_SIZE,
+        JDC_LOCAL_PREFIX_BYTES, JDC_MAX_CHANNELS,
     },
     error::{self, JDCError, JDCErrorKind},
     jd_mode::{get_jd_mode, JdMode},
@@ -98,14 +97,18 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         let outputs = deserialize_outputs(coinbase_outputs)
             .map_err(|_| JDCError::shutdown(JDCErrorKind::DeclaredJobHasBadCoinbaseOutputs))?;
 
-        if msg.extranonce_size < MIN_EXTRANONCE_SIZE as u16 {
+        let reserved_downstream_rollable = self.reserved_downstream_rollable_extranonce_size;
+        let min_extranonce_size =
+            JDC_LOCAL_PREFIX_BYTES as u16 + reserved_downstream_rollable as u16;
+        if msg.extranonce_size < min_extranonce_size {
             warn!(
-                "Pool granted extranonce_size={} but JDC requires at least MIN_EXTRANONCE_SIZE={} \
-                 ({} bytes for its prefix + {} rollable bytes for downstream), preparing fallback.",
+                "Pool granted extranonce_size={} but JDC requires at least {} \
+                 ({} bytes for its prefix + {} reserved rollable bytes for downstream), \
+                 preparing fallback.",
                 msg.extranonce_size,
-                MIN_EXTRANONCE_SIZE,
+                min_extranonce_size,
                 JDC_LOCAL_PREFIX_BYTES,
-                MIN_DOWNSTREAM_ROLLABLE_BYTES,
+                reserved_downstream_rollable,
             );
             return Err(JDCError::fallback(JDCErrorKind::ExtranonceSizeTooSmall));
         }
