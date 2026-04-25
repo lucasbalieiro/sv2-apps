@@ -13,5 +13,5 @@
 
 mod downstream;
 mod sv1_server;
-pub use sv1_server::Sv1Server;
 pub use downstream::Downstream;
+pub use sv1_server::Sv1Server;

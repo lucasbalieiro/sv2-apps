@@ -1366,7 +1366,6 @@ impl Sv1Server {
 pub struct PendingTargetUpdate {
     pub downstream_id: DownstreamId,
     pub new_target: Target,
-    pub new_hashrate: Hashrate,
 }
 
 #[cfg(test)]

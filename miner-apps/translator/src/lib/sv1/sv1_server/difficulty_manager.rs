@@ -128,7 +128,6 @@ impl Sv1Server {
                                 data.push(PendingTargetUpdate {
                                     downstream_id: *downstream_id,
                                     new_target,
-                                    new_hashrate,
                                 })
                             });
                         }
