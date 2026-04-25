@@ -1,7 +1,7 @@
 use crate::{
     error::{self, TproxyError, TproxyErrorKind, TproxyResult},
     status::{handle_error, StatusSender},
-    sv1::downstream::SubmitShareWithChannelId,
+    utils::SubmitShareWithChannelId,
 };
 use async_channel::{Receiver, Sender};
 use std::{

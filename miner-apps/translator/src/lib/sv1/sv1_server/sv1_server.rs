@@ -3,12 +3,12 @@ use crate::{
     error::{self, TproxyError, TproxyErrorKind, TproxyResult},
     status::{handle_error, Status, StatusSender},
     sv1::{
-        downstream::{downstream::Downstream, SubmitShareWithChannelId},
+        downstream::downstream::Downstream,
         sv1_server::{
             channel::Sv1ServerChannelState, is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER,
         },
     },
-    utils::{TproxyMode, AGGREGATED_CHANNEL_ID},
+    utils::{SubmitShareWithChannelId, TproxyMode, AGGREGATED_CHANNEL_ID},
 };
 use async_channel::{Receiver, Sender};
 use dashmap::DashMap;
