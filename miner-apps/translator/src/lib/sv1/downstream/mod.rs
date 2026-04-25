@@ -1,4 +1,3 @@
-pub(super) mod data;
 pub mod downstream;
 
 use stratum_apps::{
