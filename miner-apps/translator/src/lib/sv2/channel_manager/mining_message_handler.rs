@@ -1,11 +1,8 @@
 use crate::{
     error::{self, TproxyError, TproxyErrorKind},
-    sv2::{
-        channel_manager::channel_manager::{
-            AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES, AGGREGATED_TPROXY_MAX_CHANNELS,
-            NON_AGGREGATED_TPROXY_MAX_CHANNELS,
-        },
-        ChannelManager,
+    sv2::channel_manager::{
+        ChannelManager, AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES, AGGREGATED_TPROXY_MAX_CHANNELS,
+        NON_AGGREGATED_TPROXY_MAX_CHANNELS,
     },
     utils::{AggregatedState, AGGREGATED_CHANNEL_ID},
 };
