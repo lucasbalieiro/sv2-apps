@@ -65,12 +65,11 @@ pub(crate) const AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES: u8 =
 pub(crate) const NON_AGGREGATED_TPROXY_MAX_CHANNELS: u32 = 1;
 
 #[derive(Clone, Debug)]
-pub struct ChannelState {
-    pub upstream_sender: Sender<Sv2Frame>,
-    pub upstream_receiver: Receiver<Sv2Frame>,
-    pub sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
-    pub sv1_server_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
-    pub status_sender: Sender<Status>,
+struct ChannelState {
+    upstream_sender: Sender<Sv2Frame>,
+    upstream_receiver: Receiver<Sv2Frame>,
+    sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
+    sv1_server_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -80,14 +79,12 @@ impl ChannelState {
         upstream_receiver: Receiver<Sv2Frame>,
         sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
         sv1_server_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
-        status_sender: Sender<Status>,
     ) -> Self {
         Self {
             upstream_sender,
             upstream_receiver,
             sv1_server_sender,
             sv1_server_receiver,
-            status_sender,
         }
     }
 
@@ -124,7 +121,7 @@ impl ChannelState {
 /// connections while maintaining proper isolation and state management.
 #[derive(Debug, Clone)]
 pub struct ChannelManager {
-    pub channel_state: ChannelState,
+    channel_state: ChannelState,
     /// Extensions that the translator supports (will request if required by server)
     pub supported_extensions: Vec<u16>,
     /// Extensions that the translator requires (must be supported by server)
@@ -197,7 +194,6 @@ impl ChannelManager {
         upstream_receiver: Receiver<Sv2Frame>,
         sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
         sv1_server_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
-        status_sender: Sender<Status>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
         tproxy_mode: TproxyMode,
@@ -208,7 +204,6 @@ impl ChannelManager {
             upstream_receiver,
             sv1_server_sender,
             sv1_server_receiver,
-            status_sender,
         );
 
         Self {
@@ -932,14 +927,12 @@ mod tests {
         let (_upstream_sender2, upstream_receiver) = unbounded();
         let (sv1_server_sender, _sv1_server_receiver) = unbounded();
         let (_sv1_server_sender2, sv1_server_receiver) = unbounded();
-        let (status_sender, _) = unbounded();
 
         ChannelManager::new(
             upstream_sender,
             upstream_receiver,
             sv1_server_sender,
             sv1_server_receiver,
-            status_sender,
             vec![],
             vec![],
             TproxyMode::from(true),
