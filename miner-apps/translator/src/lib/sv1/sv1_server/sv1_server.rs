@@ -2,11 +2,11 @@ use crate::{
     config::TranslatorConfig,
     error::{self, TproxyError, TproxyErrorKind, TproxyResult},
     status::{handle_error, Status, StatusSender},
-    sv1::{
-        downstream::Downstream,
-        sv1_server::{is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER},
+    sv1::downstream::Downstream,
+    utils::{
+        is_mining_authorize, SubmitShareWithChannelId, TproxyMode, AGGREGATED_CHANNEL_ID,
+        KEEPALIVE_JOB_ID_DELIMITER,
     },
-    utils::{SubmitShareWithChannelId, TproxyMode, AGGREGATED_CHANNEL_ID},
 };
 use async_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
