@@ -11,6 +11,7 @@
 //! - [`diff_management`]: (Declared here, likely contains downstream difficulty logic)
 //! - [`downstream`]: Defines the core [`Downstream`] struct and its functionalities.
 
-pub mod downstream;
-pub mod sv1_server;
+mod downstream;
+mod sv1_server;
 pub use sv1_server::Sv1Server;
+pub use downstream::Downstream;

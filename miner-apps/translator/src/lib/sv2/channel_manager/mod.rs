@@ -1,5 +1,5 @@
-pub mod extensions_message_handler;
-pub mod mining_message_handler;
+mod extensions_message_handler;
+mod mining_message_handler;
 
 use crate::{
     error::{self, TproxyError, TproxyErrorKind, TproxyResult},
