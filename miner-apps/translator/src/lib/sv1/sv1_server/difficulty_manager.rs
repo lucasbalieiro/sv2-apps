@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::sv1::sv1_server::sv1_server::PendingTargetUpdate;
+use crate::sv1::sv1_server::PendingTargetUpdate;
 
 use stratum_apps::{
     stratum_core::{
