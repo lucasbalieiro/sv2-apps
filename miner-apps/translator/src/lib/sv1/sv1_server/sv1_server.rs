@@ -3,7 +3,7 @@ use crate::{
     error::{self, TproxyError, TproxyErrorKind, TproxyResult},
     status::{handle_error, Status, StatusSender},
     sv1::{
-        downstream::downstream::Downstream,
+        downstream::Downstream,
         sv1_server::{
             channel::Sv1ServerChannelState, is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER,
         },
