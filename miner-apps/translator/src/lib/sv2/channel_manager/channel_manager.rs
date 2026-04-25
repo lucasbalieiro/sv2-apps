@@ -1,7 +1,6 @@
 use crate::{
     error::{self, TproxyError, TproxyErrorKind, TproxyResult},
     status::{handle_error, Status, StatusSender},
-    sv2::channel_manager::channel::ChannelState,
     utils::{AggregatedState, AtomicAggregatedState, AGGREGATED_CHANNEL_ID},
     TproxyMode,
 };
@@ -61,6 +60,42 @@ pub(crate) const AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES: u8 =
 /// If upstream grants exactly what was requested, no allocator is built
 /// and share rewriting is a no-op.
 pub(crate) const NON_AGGREGATED_TPROXY_MAX_CHANNELS: u32 = 1;
+
+#[derive(Clone, Debug)]
+pub struct ChannelState {
+    pub upstream_sender: Sender<Sv2Frame>,
+    pub upstream_receiver: Receiver<Sv2Frame>,
+    pub sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
+    pub sv1_server_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
+    pub status_sender: Sender<Status>,
+}
+
+#[cfg_attr(not(test), hotpath::measure_all)]
+impl ChannelState {
+    fn new(
+        upstream_sender: Sender<Sv2Frame>,
+        upstream_receiver: Receiver<Sv2Frame>,
+        sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
+        sv1_server_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
+        status_sender: Sender<Status>,
+    ) -> Self {
+        Self {
+            upstream_sender,
+            upstream_receiver,
+            sv1_server_sender,
+            sv1_server_receiver,
+            status_sender,
+        }
+    }
+
+    fn drop(&self) {
+        debug!("Dropping channel manager channels");
+        self.upstream_receiver.close();
+        self.upstream_sender.close();
+        self.sv1_server_receiver.close();
+        self.sv1_server_sender.close();
+    }
+}
 
 // In both modes, whenever an allocator is used, it mints prefixes with
 // layout `[upstream_prefix][local_prefix (padding)][local_index]` whose
