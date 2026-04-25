@@ -42,7 +42,7 @@ pub struct DownstreamChannelState {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl DownstreamChannelState {
-    pub fn new(
+    fn new(
         downstream_sv1_sender: Sender<json_rpc::Message>,
         downstream_sv1_receiver: Receiver<json_rpc::Message>,
         sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
@@ -58,7 +58,7 @@ impl DownstreamChannelState {
         }
     }
 
-    pub fn drop(&self) {
+    fn drop(&self) {
         debug!("Dropping downstream channel state");
         self.connection_token.cancel();
         self.downstream_sv1_receiver.close();
@@ -204,7 +204,7 @@ impl Downstream {
     /// The task will continue running until a cancellation signal is received or
     /// an unrecoverable error occurs. It ensures graceful cleanup of resources
     /// and proper error reporting.
-    pub fn run_downstream_tasks(
+    pub(super) fn run_downstream_tasks(
         self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
@@ -282,7 +282,7 @@ impl Downstream {
     ///   complete
     /// - On handshake completion: sends cached messages in correct order (set_difficulty first,
     ///   then notify)
-    pub async fn handle_sv1_server_message(&self) -> TproxyResult<(), error::Downstream> {
+    async fn handle_sv1_server_message(&self) -> TproxyResult<(), error::Downstream> {
         match self
             .downstream_channel_state
             .sv1_server_receiver
@@ -444,7 +444,7 @@ impl Downstream {
     /// which implements the SV1 protocol logic and generates appropriate responses.
     /// Responses are sent back to the miner, while share submissions are forwarded
     /// to the SV1 server for upstream processing.
-    pub async fn handle_downstream_message(&self) -> TproxyResult<(), error::Downstream> {
+    async fn handle_downstream_message(&self) -> TproxyResult<(), error::Downstream> {
         let downstream_id = self.downstream_id;
         let message = match self
             .downstream_channel_state
@@ -473,7 +473,9 @@ impl Downstream {
     /// This method is called when the downstream completes the SV1 handshake
     /// (subscribe + authorize). It sends any cached messages in the correct order:
     /// set_difficulty first, then notify.
-    pub async fn handle_sv1_handshake_completion(&self) -> TproxyResult<(), error::Downstream> {
+    pub(super) async fn handle_sv1_handshake_completion(
+        &self,
+    ) -> TproxyResult<(), error::Downstream> {
         let (cached_set_difficulty, cached_notify, downstream_id) =
             self.downstream_data.super_safe_lock(|d| {
                 self.sv1_handshake_complete
