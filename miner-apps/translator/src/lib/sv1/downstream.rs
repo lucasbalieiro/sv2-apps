@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Debug)]
-pub struct DownstreamChannelState {
+pub struct DownstreamIo {
     pub downstream_sv1_sender: Sender<json_rpc::Message>,
     downstream_sv1_receiver: Receiver<json_rpc::Message>,
     sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
@@ -41,7 +41,7 @@ pub struct DownstreamChannelState {
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
-impl DownstreamChannelState {
+impl DownstreamIo {
     fn new(
         downstream_sv1_sender: Sender<json_rpc::Message>,
         downstream_sv1_receiver: Receiver<json_rpc::Message>,
@@ -158,7 +158,7 @@ impl DownstreamData {
 pub struct Downstream {
     pub downstream_id: DownstreamId,
     pub downstream_data: Arc<Mutex<DownstreamData>>,
-    pub downstream_channel_state: DownstreamChannelState,
+    pub downstream_io: DownstreamIo,
     // Flag to track if SV1 handshake is complete (subscribe + authorize)
     pub sv1_handshake_complete: Arc<AtomicBool>,
 }
@@ -178,7 +178,7 @@ impl Downstream {
         connection_token: CancellationToken,
     ) -> Self {
         let downstream_data = Arc::new(Mutex::new(DownstreamData::new(hashrate, target)));
-        let downstream_channel_state = DownstreamChannelState::new(
+        let downstream_channel_io = DownstreamIo::new(
             downstream_sv1_sender,
             downstream_sv1_receiver,
             sv1_server_sender,
@@ -188,7 +188,7 @@ impl Downstream {
         Self {
             downstream_id,
             downstream_data,
-            downstream_channel_state,
+            downstream_io: downstream_channel_io,
             sv1_handshake_complete: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -259,7 +259,7 @@ impl Downstream {
             }
 
             warn!("Downstream {downstream_id}: unified task shutting down");
-            self.downstream_channel_state.drop();
+            self.downstream_io.drop();
 
             // signal fallback coordinator that this task has completed its cleanup
             fallback_handler.done();
@@ -283,12 +283,7 @@ impl Downstream {
     /// - On handshake completion: sends cached messages in correct order (set_difficulty first,
     ///   then notify)
     async fn handle_sv1_server_message(&self) -> TproxyResult<(), error::Downstream> {
-        match self
-            .downstream_channel_state
-            .sv1_server_receiver
-            .recv()
-            .await
-        {
+        match self.downstream_io.sv1_server_receiver.recv().await {
             Ok(message) => {
                 let downstream_id = self.downstream_id;
                 let handshake_complete = self.sv1_handshake_complete.load(Ordering::SeqCst);
@@ -345,7 +340,7 @@ impl Downstream {
 
                                 if let Some(set_difficulty_msg) = &pending_set_difficulty {
                                     debug!("Down: Sending pending mining.set_difficulty before mining.notify");
-                                    self.downstream_channel_state
+                                    self.downstream_io
                                         .downstream_sv1_sender
                                         .send(set_difficulty_msg.clone())
                                         .await
@@ -360,7 +355,7 @@ impl Downstream {
 
                                 if let Some(notify) = notify_opt {
                                     debug!("Down: Sending mining.notify");
-                                    self.downstream_channel_state
+                                    self.downstream_io
                                         .downstream_sv1_sender
                                         .send(notify.into())
                                         .await
@@ -373,7 +368,7 @@ impl Downstream {
                             }
                             _ => {
                                 // Other notifications - forward if handshake complete
-                                self.downstream_channel_state
+                                self.downstream_io
                                     .downstream_sv1_sender
                                     .send(message.clone())
                                     .await
@@ -446,12 +441,7 @@ impl Downstream {
     /// to the SV1 server for upstream processing.
     async fn handle_downstream_message(&self) -> TproxyResult<(), error::Downstream> {
         let downstream_id = self.downstream_id;
-        let message = match self
-            .downstream_channel_state
-            .downstream_sv1_receiver
-            .recv()
-            .await
-        {
+        let message = match self.downstream_io.downstream_sv1_receiver.recv().await {
             Ok(msg) => msg,
             Err(e) => {
                 error!("Error receiving downstream message: {:?}", e);
@@ -459,7 +449,7 @@ impl Downstream {
             }
         };
 
-        self.downstream_channel_state
+        self.downstream_io
             .sv1_server_sender
             .send((downstream_id, message))
             .await
@@ -491,7 +481,7 @@ impl Downstream {
         // Send cached messages in correct order: set_difficulty first, then notify
         if let Some(set_difficulty_msg) = cached_set_difficulty {
             debug!("Down: Sending cached mining.set_difficulty after handshake completion");
-            self.downstream_channel_state
+            self.downstream_io
                 .downstream_sv1_sender
                 .send(set_difficulty_msg)
                 .await
@@ -516,7 +506,7 @@ impl Downstream {
 
         if let Some(notify_msg) = cached_notify {
             debug!("Down: Sending cached mining.notify after handshake completion");
-            self.downstream_channel_state
+            self.downstream_io
                 .downstream_sv1_sender
                 .send(notify_msg)
                 .await

@@ -53,7 +53,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Clone)]
-struct Sv1ServerChannelState {
+struct Sv1ServerIo {
     sv1_server_to_downstream_sender: Arc<Mutex<HashMap<DownstreamId, Sender<json_rpc::Message>>>>,
     downstream_to_sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
     downstream_to_sv1_server_receiver: Receiver<(DownstreamId, json_rpc::Message)>,
@@ -62,7 +62,7 @@ struct Sv1ServerChannelState {
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
-impl Sv1ServerChannelState {
+impl Sv1ServerIo {
     fn new(
         channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
         channel_manager_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
@@ -98,7 +98,7 @@ impl Sv1ServerChannelState {
 /// variable difficulty adjustment based on share submission rates.
 #[derive(Clone)]
 pub struct Sv1Server {
-    sv1_server_channel_state: Sv1ServerChannelState,
+    sv1_server_io: Sv1ServerIo,
     pub(crate) shares_per_minute: SharesPerMinute,
     pub(crate) listener_addr: SocketAddr,
     pub(crate) config: TranslatorConfig,
@@ -136,7 +136,7 @@ impl Sv1Server {
     ) {
         if channel_id == AGGREGATED_CHANNEL_ID {
             let downstream_senders = self
-                .sv1_server_channel_state
+                .sv1_server_io
                 .sv1_server_to_downstream_sender
                 .super_safe_lock(|downstream_channels| downstream_channels.clone());
             // Broadcast to every connected downstream.
@@ -159,7 +159,7 @@ impl Sv1Server {
             };
 
             let sender = self
-                .sv1_server_channel_state
+                .sv1_server_io
                 .sv1_server_to_downstream_sender
                 .super_safe_lock(|ch| ch.get(&downstream_id).cloned());
 
@@ -188,7 +188,7 @@ impl Sv1Server {
         self.pending_target_updates
             .safe_lock(|updates| updates.clear())
             .ok();
-        self.sv1_server_channel_state.drop();
+        self.sv1_server_io.drop();
     }
 
     /// Creates a new SV1 server instance.
@@ -209,10 +209,9 @@ impl Sv1Server {
         mode: TproxyMode,
     ) -> Self {
         let shares_per_minute = config.downstream_difficulty_config.shares_per_minute;
-        let sv1_server_channel_state =
-            Sv1ServerChannelState::new(channel_manager_receiver, channel_manager_sender);
+        let sv1_server_io = Sv1ServerIo::new(channel_manager_receiver, channel_manager_sender);
         Self {
-            sv1_server_channel_state,
+            sv1_server_io,
             config,
             listener_addr,
             shares_per_minute,
@@ -327,13 +326,13 @@ impl Sv1Server {
                                 ).await;
                                 let downstream_id = self.downstream_id_factory.fetch_add(1, Ordering::Relaxed);
                                 let (sv1_server_sender, sv1_server_receiver) = async_channel::unbounded();
-                                self.sv1_server_channel_state.sv1_server_to_downstream_sender.super_safe_lock(|map| map.insert(downstream_id, sv1_server_sender));
+                                self.sv1_server_io.sv1_server_to_downstream_sender.super_safe_lock(|map| map.insert(downstream_id, sv1_server_sender));
 
                                 let downstream = Downstream::new(
                                     downstream_id,
                                     connection.sender().clone(),
                                     connection.receiver().clone(),
-                                    self.sv1_server_channel_state.downstream_to_sv1_server_sender.clone(),
+                                    self.sv1_server_io.downstream_to_sv1_server_sender.clone(),
                                     sv1_server_receiver,
                                     first_target,
                                     Some(self.config.downstream_difficulty_config.min_individual_miner_hashrate),
@@ -411,7 +410,7 @@ impl Sv1Server {
     /// * `Err(TproxyError)` - Error processing the message
     async fn handle_downstream_message(&self) -> TproxyResult<(), error::Sv1Server> {
         let (downstream_id, downstream_message) = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .downstream_to_sv1_server_receiver
             .recv()
             .await
@@ -457,7 +456,7 @@ impl Sv1Server {
             Ok(Some(response_msg)) => {
                 debug!("Down: Sending Sv1 message to downstream: {}", response_msg);
                 downstream
-                    .downstream_channel_state
+                    .downstream_io
                     .downstream_sv1_sender
                     .send(response_msg.into())
                     .await
@@ -578,7 +577,7 @@ impl Sv1Server {
             None
         };
 
-        self.sv1_server_channel_state
+        self.sv1_server_io
             .channel_manager_sender
             .send((
                 Mining::SubmitSharesExtended(submit_share_extended),
@@ -640,7 +639,7 @@ impl Sv1Server {
         first_target: Target,
     ) -> TproxyResult<(), error::Sv1Server> {
         let (message, _tlv_fields) = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .channel_manager_receiver
             .recv()
             .await
@@ -694,10 +693,8 @@ impl Sv1Server {
                                 downstream_id
                             );
 
-                            let downstream_sv1_sender = downstream
-                                .downstream_channel_state
-                                .downstream_sv1_sender
-                                .clone();
+                            let downstream_sv1_sender =
+                                downstream.downstream_io.downstream_sv1_sender.clone();
 
                             for message in queued_messages {
                                 let is_authorize = is_mining_authorize(&message);
@@ -751,7 +748,7 @@ impl Sv1Server {
                         })?;
                     // send the set_difficulty message to the downstream
                     if let Some(sender) = self
-                        .sv1_server_channel_state
+                        .sv1_server_io
                         .sv1_server_to_downstream_sender
                         .super_safe_lock(|map| map.get(&downstream_id).cloned())
                     {
@@ -899,7 +896,7 @@ impl Sv1Server {
             max_target,
             min_extranonce_size,
         ) {
-            self.sv1_server_channel_state
+            self.sv1_server_io
                 .channel_manager_sender
                 .send((Mining::OpenExtendedMiningChannel(open_channel_msg), None))
                 .await
@@ -927,7 +924,7 @@ impl Sv1Server {
             // Only remove from vardiff map if vardiff is enabled
             self.vardiff.remove(&downstream_id);
         }
-        self.sv1_server_channel_state
+        self.sv1_server_io
             .sv1_server_to_downstream_sender
             .super_safe_lock(|map| map.remove(&downstream_id));
 
@@ -955,7 +952,7 @@ impl Sv1Server {
                 info!("Sending CloseChannel message: {channel_id} for downstream: {downstream_id}");
                 let reason_code = Str0255::try_from("downstream disconnected".to_string()).unwrap();
                 _ = self
-                    .sv1_server_channel_state
+                    .sv1_server_io
                     .channel_manager_sender
                     .send((
                         Mining::CloseChannel(CloseChannel {
@@ -1055,7 +1052,7 @@ impl Sv1Server {
                     return None;
                 }
                 let sender = self
-                    .sv1_server_channel_state
+                    .sv1_server_io
                     .sv1_server_to_downstream_sender
                     .super_safe_lock(|map| map.get(&downstream_id).cloned())?;
                 Some((downstream_id, sender))
@@ -1108,7 +1105,7 @@ impl Sv1Server {
             );
             info!("Sending CloseChannel message: Channel id {channel_id}");
             let reason_code = Str0255::try_from("downstream disconnected".to_string()).unwrap();
-            self.sv1_server_channel_state
+            self.sv1_server_io
                 .channel_manager_sender
                 .send((
                     Mining::CloseChannel(CloseChannel {
@@ -1148,7 +1145,7 @@ impl Sv1Server {
         };
 
         let sender = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .sv1_server_to_downstream_sender
             .super_safe_lock(|map| map.get(&downstream_id).cloned());
 
@@ -1280,7 +1277,7 @@ impl Sv1Server {
                     );
 
                     let sent = match self
-                        .sv1_server_channel_state
+                        .sv1_server_io
                         .sv1_server_to_downstream_sender
                         .super_safe_lock(|map| map.get(&downstream_id).cloned())
                     {

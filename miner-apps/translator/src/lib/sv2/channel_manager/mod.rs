@@ -65,7 +65,7 @@ pub(crate) const AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES: u8 =
 pub(crate) const NON_AGGREGATED_TPROXY_MAX_CHANNELS: u32 = 1;
 
 #[derive(Clone, Debug)]
-struct ChannelState {
+struct ChannelManagerIo {
     upstream_sender: Sender<Sv2Frame>,
     upstream_receiver: Receiver<Sv2Frame>,
     sv1_server_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
@@ -73,7 +73,7 @@ struct ChannelState {
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
-impl ChannelState {
+impl ChannelManagerIo {
     fn new(
         upstream_sender: Sender<Sv2Frame>,
         upstream_receiver: Receiver<Sv2Frame>,
@@ -121,7 +121,7 @@ impl ChannelState {
 /// connections while maintaining proper isolation and state management.
 #[derive(Debug, Clone)]
 pub struct ChannelManager {
-    channel_state: ChannelState,
+    channel_manager_io: ChannelManagerIo,
     /// Extensions that the translator supports (will request if required by server)
     pub supported_extensions: Vec<u16>,
     /// Extensions that the translator requires (must be supported by server)
@@ -199,7 +199,7 @@ impl ChannelManager {
         tproxy_mode: TproxyMode,
         #[cfg(feature = "monitoring")] report_hashrate: bool,
     ) -> Self {
-        let channel_state = ChannelState::new(
+        let channel_manager_io = ChannelManagerIo::new(
             upstream_sender,
             upstream_receiver,
             sv1_server_sender,
@@ -207,7 +207,7 @@ impl ChannelManager {
         );
 
         Self {
-            channel_state,
+            channel_manager_io,
             supported_extensions,
             required_extensions,
             pending_downstream_channels: Arc::new(DashMap::new()),
@@ -296,7 +296,7 @@ impl ChannelManager {
                 }
             }
 
-            self.channel_state.drop();
+            self.channel_manager_io.drop();
             warn!("ChannelManager: unified message loop exited.");
 
             // signal fallback coordinator that this task has completed its cleanup
@@ -320,7 +320,7 @@ impl ChannelManager {
     /// * `Err(TproxyError)` - Error processing the message
     async fn handle_upstream_frame(self: Arc<Self>) -> TproxyResult<(), error::ChannelManager> {
         let mut sv2_frame = self
-            .channel_state
+            .channel_manager_io
             .upstream_receiver
             .recv()
             .await
@@ -376,7 +376,7 @@ impl ChannelManager {
     /// * `Err(TproxyError)` - Error processing the message
     async fn handle_downstream_message(self: Arc<Self>) -> TproxyResult<(), error::ChannelManager> {
         let (message, tlv_fields) = self
-            .channel_state
+            .channel_manager_io
             .sv1_server_receiver
             .recv()
             .await
@@ -467,7 +467,7 @@ impl ChannelManager {
                 let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
                     .try_into()
                     .map_err(TproxyError::shutdown)?;
-                self.channel_state
+                self.channel_manager_io
                     .upstream_sender
                     .send(sv2_frame)
                     .await
@@ -624,7 +624,7 @@ impl ChannelManager {
                                     );
                                     TproxyError::shutdown(framing_sv2::Error::ExpectedSv2Frame)
                                 })?;
-                            self.channel_state.upstream_sender.send(sv2_frame).await.map_err(|e| {
+                            self.channel_manager_io.upstream_sender.send(sv2_frame).await.map_err(|e| {
                                 error!("Failed to send submit shares extended message to upstream: {:?}", e);
                                 TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
                             })?;
@@ -637,7 +637,7 @@ impl ChannelManager {
                         let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
                             .try_into()
                             .map_err(TproxyError::shutdown)?;
-                        self.channel_state.upstream_sender.send(sv2_frame).await.map_err(|e| {
+                        self.channel_manager_io.upstream_sender.send(sv2_frame).await.map_err(|e| {
                             error!("Failed to send submit shares extended message to upstream: {:?}", e);
                             TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
                         })?;
@@ -674,7 +674,7 @@ impl ChannelManager {
                     .try_into()
                     .map_err(TproxyError::shutdown)?;
 
-                self.channel_state
+                self.channel_manager_io
                     .upstream_sender
                     .send(sv2_frame)
                     .await
@@ -733,7 +733,7 @@ impl ChannelManager {
                         .try_into()
                         .map_err(TproxyError::shutdown)?;
 
-                    self.channel_state
+                    self.channel_manager_io
                         .upstream_sender
                         .send(sv2_frame)
                         .await
@@ -827,7 +827,7 @@ impl ChannelManager {
                                               * matter for the Sv1 server */
                     });
 
-                self.channel_state
+                self.channel_manager_io
                     .sv1_server_sender
                     .send((success_message, None))
                     .await
@@ -883,7 +883,7 @@ impl ChannelManager {
                 };
 
                 if let Some(job) = active_job_for_sv1_server() {
-                    self.channel_state
+                    self.channel_manager_io
                         .sv1_server_sender
                         .send((Mining::NewExtendedMiningJob(job), None))
                         .await

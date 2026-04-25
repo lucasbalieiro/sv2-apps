@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
-struct UpstreamChannelState {
+struct UpstreamIo {
     /// Receiver for the SV2 Upstream role
     upstream_receiver: Receiver<Sv2Frame>,
     /// Sender for the SV2 Upstream role
@@ -42,7 +42,7 @@ struct UpstreamChannelState {
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
-impl UpstreamChannelState {
+impl UpstreamIo {
     fn new(
         upstream_receiver: Receiver<Sv2Frame>,
         upstream_sender: Sender<Sv2Frame>,
@@ -79,7 +79,7 @@ impl UpstreamChannelState {
 /// establishment.
 #[derive(Debug, Clone)]
 pub struct Upstream {
-    upstream_channel_state: UpstreamChannelState,
+    upstream_io: UpstreamIo,
     /// Extensions that the translator requires (must be supported by server)
     required_extensions: Vec<u16>,
     address: SocketAddr,
@@ -162,7 +162,7 @@ impl Upstream {
                                     fallback_coordinator.clone(),
                                 );
 
-                                let upstream_channel_state = UpstreamChannelState::new(
+                                let upstream_io = UpstreamIo::new(
                                     inbound_rx,
                                     outbound_tx,
                                     channel_manager_sender,
@@ -174,7 +174,7 @@ impl Upstream {
                                 );
 
                                 return Ok(Self {
-                                    upstream_channel_state,
+                                    upstream_io,
                                     required_extensions: required_extensions.clone(),
                                     address: resolved_addr,
                                 });
@@ -280,7 +280,7 @@ impl Upstream {
                 })?;
 
         // Send SetupConnection message to upstream
-        self.upstream_channel_state
+        self.upstream_io
             .upstream_sender
             .send(sv2_frame)
             .await
@@ -289,17 +289,16 @@ impl Upstream {
                 TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
             })?;
 
-        let mut incoming: Sv2Frame =
-            match self.upstream_channel_state.upstream_receiver.recv().await {
-                Ok(frame) => {
-                    debug!("Received handshake response from upstream.");
-                    frame
-                }
-                Err(e) => {
-                    error!("Failed to receive handshake response from upstream: {}", e);
-                    return Err(TproxyError::fallback(e));
-                }
-            };
+        let mut incoming: Sv2Frame = match self.upstream_io.upstream_receiver.recv().await {
+            Ok(frame) => {
+                debug!("Received handshake response from upstream.");
+                frame
+            }
+            Err(e) => {
+                error!("Failed to receive handshake response from upstream: {}", e);
+                return Err(TproxyError::fallback(e));
+            }
+        };
 
         let header = incoming.get_header().ok_or_else(|| {
             error!("Expected handshake frame but no header found.");
@@ -329,7 +328,7 @@ impl Upstream {
                     .try_into()
                     .map_err(TproxyError::shutdown)?;
 
-            self.upstream_channel_state
+            self.upstream_io
                 .upstream_sender
                 .send(sv2_frame)
                 .await
@@ -371,7 +370,7 @@ impl Upstream {
                     .await?;
             }
             MessageType::Mining | MessageType::Extensions => {
-                self.upstream_channel_state
+                self.upstream_io
                     .channel_manager_sender
                     .send(sv2_frame)
                     .await
@@ -427,7 +426,7 @@ impl Upstream {
                     }
 
                     // Handle incoming SV2 messages from upstream
-                    result = self.upstream_channel_state.upstream_receiver.recv() => {
+                    result = self.upstream_io.upstream_receiver.recv() => {
                         match result {
                             Ok(frame) => {
                                 debug!("Upstream: received frame.");
@@ -445,12 +444,12 @@ impl Upstream {
                     }
 
                     // Handle messages from channel manager to send upstream
-                    result = self.upstream_channel_state.channel_manager_receiver.recv() => {
+                    result = self.upstream_io.channel_manager_receiver.recv() => {
                         match result {
                             Ok(sv2_frame) => {
                                 debug!("Upstream: sending sv2 frame from channel manager: {:?}", sv2_frame);
                                 if let Err(e) = self
-                                    .upstream_channel_state
+                                    .upstream_io
                                     .upstream_sender
                                     .send(sv2_frame)
                                     .await
@@ -472,7 +471,7 @@ impl Upstream {
                 }
             }
 
-            self.upstream_channel_state.drop();
+            self.upstream_io.drop();
             warn!("Upstream: task shutting down cleanly.");
 
             // signal fallback coordinator that this task has completed its cleanup

@@ -139,7 +139,7 @@ impl HandleExtensionsFromServerAsync for ChannelManager {
                     .try_into()
                     .map_err(TproxyError::shutdown)?;
 
-            self.channel_state
+            self.channel_manager_io
                 .upstream_sender
                 .send(sv2_frame)
                 .await

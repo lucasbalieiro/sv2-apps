@@ -155,7 +155,7 @@ impl Sv1Server {
             if let Ok(set_difficulty_msg) = build_sv1_set_difficulty_from_sv2_target(target) {
                 let downstream_id = downstream_id.unwrap_or(0);
                 if let Some(sender) = self
-                    .sv1_server_channel_state
+                    .sv1_server_io
                     .sv1_server_to_downstream_sender
                     .super_safe_lock(|downstream| downstream.get(&downstream_id).cloned())
                 {
@@ -250,7 +250,7 @@ impl Sv1Server {
         );
 
         if let Err(e) = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .channel_manager_sender
             .send((Mining::UpdateChannel(update_channel), None))
             .await
@@ -276,7 +276,7 @@ impl Sv1Server {
             );
 
             if let Err(e) = self
-                .sv1_server_channel_state
+                .sv1_server_io
                 .channel_manager_sender
                 .send((Mining::UpdateChannel(update_channel), None))
                 .await
@@ -437,7 +437,7 @@ impl Sv1Server {
                 };
 
             if let Some(sender) = self
-                .sv1_server_channel_state
+                .sv1_server_io
                 .sv1_server_to_downstream_sender
                 .super_safe_lock(|downstream| downstream.get(&update.downstream_id).cloned())
             {
@@ -511,7 +511,7 @@ impl Sv1Server {
         };
 
         if let Err(e) = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .channel_manager_sender
             .send((Mining::UpdateChannel(update), None))
             .await
