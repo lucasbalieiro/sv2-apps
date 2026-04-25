@@ -53,18 +53,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Clone)]
-pub struct Sv1ServerChannelState {
-    pub sv1_server_to_downstream_sender:
-        Arc<Mutex<HashMap<DownstreamId, Sender<json_rpc::Message>>>>,
-    pub downstream_to_sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
-    pub downstream_to_sv1_server_receiver: Receiver<(DownstreamId, json_rpc::Message)>,
-    pub channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
-    pub channel_manager_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
+struct Sv1ServerChannelState {
+    sv1_server_to_downstream_sender: Arc<Mutex<HashMap<DownstreamId, Sender<json_rpc::Message>>>>,
+    downstream_to_sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
+    downstream_to_sv1_server_receiver: Receiver<(DownstreamId, json_rpc::Message)>,
+    channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
+    channel_manager_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Sv1ServerChannelState {
-    pub fn new(
+    fn new(
         channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
         channel_manager_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
     ) -> Self {
@@ -79,7 +78,7 @@ impl Sv1ServerChannelState {
         }
     }
 
-    pub fn drop(&self) {
+    fn drop(&self) {
         self.channel_manager_receiver.close();
         self.channel_manager_sender.close();
         self.downstream_to_sv1_server_receiver.close();
@@ -99,7 +98,7 @@ impl Sv1ServerChannelState {
 /// variable difficulty adjustment based on share submission rates.
 #[derive(Clone)]
 pub struct Sv1Server {
-    pub(crate) sv1_server_channel_state: Sv1ServerChannelState,
+    sv1_server_channel_state: Sv1ServerChannelState,
     pub(crate) shares_per_minute: SharesPerMinute,
     pub(crate) listener_addr: SocketAddr,
     pub(crate) config: TranslatorConfig,
@@ -176,7 +175,7 @@ impl Sv1Server {
     }
 
     /// Cleans up server state and closes communication channels.
-    pub fn cleanup(&self) {
+    fn cleanup(&self) {
         self.prevhashes.clear();
         self.valid_sv1_jobs.clear();
         if self.config.downstream_difficulty_config.enable_vardiff {
@@ -410,7 +409,7 @@ impl Sv1Server {
     /// # Returns
     /// * `Ok(())` - Message processed successfully
     /// * `Err(TproxyError)` - Error processing the message
-    pub async fn handle_downstream_message(&self) -> TproxyResult<(), error::Sv1Server> {
+    async fn handle_downstream_message(&self) -> TproxyResult<(), error::Sv1Server> {
         let (downstream_id, downstream_message) = self
             .sv1_server_channel_state
             .downstream_to_sv1_server_receiver
@@ -636,7 +635,7 @@ impl Sv1Server {
     /// # Returns
     /// * `Ok(())` - Message processed successfully
     /// * `Err(TproxyError)` - Error processing the message
-    pub async fn handle_upstream_message(
+    async fn handle_upstream_message(
         &self,
         first_target: Target,
     ) -> TproxyResult<(), error::Sv1Server> {
@@ -847,7 +846,7 @@ impl Sv1Server {
     /// # Returns
     /// * `Ok(())` - Channel setup request sent successfully
     /// * `Err(TproxyError)` - Error setting up the channel
-    pub async fn open_extended_mining_channel(
+    async fn open_extended_mining_channel(
         &self,
         request_id: RequestId,
         downstream_id: DownstreamId,
@@ -910,17 +909,6 @@ impl Sv1Server {
         }
 
         Ok(())
-    }
-
-    /// Extracts the downstream ID from a Downstream instance.
-    ///
-    /// # Arguments
-    /// * `downstream` - The downstream connection to get the ID from
-    ///
-    /// # Returns
-    /// The downstream ID as a u32
-    pub fn get_downstream_id(downstream: Downstream) -> DownstreamId {
-        downstream.downstream_id
     }
 
     /// Handles cleanup when a downstream connection disconnects.
@@ -1185,7 +1173,7 @@ impl Sv1Server {
     ///
     /// This prevents SV1 miners from timing out when there are no new jobs received from the
     /// upstream for a while.
-    pub async fn spawn_job_keepalive_loop(self: Arc<Self>) {
+    async fn spawn_job_keepalive_loop(self: Arc<Self>) {
         let keepalive_interval_secs = self
             .config
             .downstream_difficulty_config
@@ -1341,10 +1329,7 @@ impl Sv1Server {
     /// Gets the last job from the jobs storage.
     /// In aggregated mode, returns the last job from the shared job list.
     /// In non-aggregated mode, returns the last job for the specified channel.
-    pub fn get_last_job(
-        &self,
-        channel_id: Option<u32>,
-    ) -> Option<server_to_client::Notify<'static>> {
+    fn get_last_job(&self, channel_id: Option<u32>) -> Option<server_to_client::Notify<'static>> {
         let channel_id = if self.mode.is_aggregated() {
             AGGREGATED_CHANNEL_ID
         } else {
@@ -1358,7 +1343,7 @@ impl Sv1Server {
 
     /// Gets the original upstream job by its job_id.
     /// This is used to find the base time for keepalive time capping.
-    pub fn get_original_job(
+    fn get_original_job(
         &self,
         job_id: &str,
         channel_id: Option<u32>,
