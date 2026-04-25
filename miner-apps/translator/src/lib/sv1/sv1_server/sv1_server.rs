@@ -4,13 +4,11 @@ use crate::{
     status::{handle_error, Status, StatusSender},
     sv1::{
         downstream::Downstream,
-        sv1_server::{
-            channel::Sv1ServerChannelState, is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER,
-        },
+        sv1_server::{is_mining_authorize, KEEPALIVE_JOB_ID_DELIMITER},
     },
     utils::{SubmitShareWithChannelId, TproxyMode, AGGREGATED_CHANNEL_ID},
 };
-use async_channel::{Receiver, Sender};
+use async_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use std::{
     collections::HashMap,
@@ -42,7 +40,7 @@ use stratum_apps::{
             },
             sv2_to_sv1::{build_sv1_notify_from_sv2, build_sv1_set_difficulty_from_sv2_target},
         },
-        sv1_api::{server_to_client, utils::HexU32Be, IsServer},
+        sv1_api::{json_rpc, server_to_client, utils::HexU32Be, IsServer},
     },
     task_manager::TaskManager,
     utils::types::{ChannelId, DownstreamId, Hashrate, RequestId, SharesPerMinute},
@@ -50,6 +48,41 @@ use stratum_apps::{
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
+
+#[derive(Clone)]
+pub struct Sv1ServerChannelState {
+    pub sv1_server_to_downstream_sender:
+        Arc<Mutex<HashMap<DownstreamId, Sender<json_rpc::Message>>>>,
+    pub downstream_to_sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
+    pub downstream_to_sv1_server_receiver: Receiver<(DownstreamId, json_rpc::Message)>,
+    pub channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
+    pub channel_manager_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
+}
+
+#[cfg_attr(not(test), hotpath::measure_all)]
+impl Sv1ServerChannelState {
+    pub fn new(
+        channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
+        channel_manager_sender: Sender<(Mining<'static>, Option<Vec<Tlv>>)>,
+    ) -> Self {
+        let (downstream_to_sv1_server_sender, downstream_to_sv1_server_receiver) = unbounded();
+
+        Self {
+            sv1_server_to_downstream_sender: Arc::new(Mutex::new(HashMap::new())),
+            downstream_to_sv1_server_receiver,
+            downstream_to_sv1_server_sender,
+            channel_manager_receiver,
+            channel_manager_sender,
+        }
+    }
+
+    pub fn drop(&self) {
+        self.channel_manager_receiver.close();
+        self.channel_manager_sender.close();
+        self.downstream_to_sv1_server_receiver.close();
+        self.downstream_to_sv1_server_sender.close();
+    }
+}
 
 /// SV1 server that handles connections from SV1 miners.
 ///

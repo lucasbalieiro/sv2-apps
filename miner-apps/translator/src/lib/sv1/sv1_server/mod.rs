@@ -1,6 +1,5 @@
 use stratum_apps::stratum_core::sv1_api::{json_rpc, Message};
 
-pub(super) mod channel;
 mod difficulty_manager;
 pub mod downstream_message_handler;
 pub mod sv1_server;
