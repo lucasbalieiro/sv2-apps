@@ -231,7 +231,7 @@ impl ChannelManagerData {
 
 /// Represents all communication channels managed by the Channel Manager.
 ///
-/// The `ChannelManagerChannel` holds all the asynchronous communication primitives
+/// The `ChannelManagerIo` holds all the asynchronous communication primitives
 /// required for message exchange between the **Channel Manager** and other subsystems.
 /// It ensures decoupled, structured communication between upstreams, downstreams,
 /// the Job Dispatcher Service (JDS), and the Template Provider (TP).
@@ -256,7 +256,7 @@ impl ChannelManagerData {
 ///      changes.
 
 #[derive(Clone)]
-pub struct ChannelManagerChannel {
+pub struct ChannelManagerIo {
     upstream_sender: Sender<Sv2Frame>,
     upstream_receiver: Receiver<Sv2Frame>,
     jd_sender: Sender<JobDeclaration<'static>>,
@@ -273,7 +273,7 @@ pub struct ChannelManagerChannel {
 #[derive(Clone)]
 pub struct ChannelManager {
     pub channel_manager_data: Arc<Mutex<ChannelManagerData>>,
-    channel_manager_channel: ChannelManagerChannel,
+    channel_manager_io: ChannelManagerIo,
     miner_tag_string: String,
     share_batch_size: SharesBatchSize,
     shares_per_minute: SharesPerMinute,
@@ -381,7 +381,7 @@ impl ChannelManager {
             cached_shares: HashMap::new(),
         }));
 
-        let channel_manager_channel = ChannelManagerChannel {
+        let channel_manager_io = ChannelManagerIo {
             upstream_sender,
             upstream_receiver,
             jd_sender,
@@ -394,7 +394,7 @@ impl ChannelManager {
 
         let channel_manager = ChannelManager {
             channel_manager_data,
-            channel_manager_channel,
+            channel_manager_io,
             share_batch_size: config.share_batch_size(),
             shares_per_minute: config.shares_per_minute(),
             miner_tag_string: config.jdc_signature().to_string(),
@@ -603,7 +603,7 @@ impl ChannelManager {
                                         required_extensions_inner,
                                     );
 
-                                    this.channel_manager_channel.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender_downstream));
+                                    this.channel_manager_io.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender_downstream));
 
                                     this.channel_manager_data.super_safe_lock(|data| {
                                         data.downstream.insert(downstream_id, downstream.clone());
@@ -769,7 +769,7 @@ impl ChannelManager {
                 .vardiff
                 .retain(|key, _| key.downstream_id != downstream_id);
         });
-        self.channel_manager_channel
+        self.channel_manager_io
             .downstream_sender
             .super_safe_lock(|map| map.remove(&downstream_id));
     }
@@ -781,7 +781,7 @@ impl ChannelManager {
     ///   message handler.
     /// - If the frame contains any unsupported message type, an error is returned.
     async fn handle_jds_message(&mut self) -> JDCResult<(), error::ChannelManager> {
-        if let Ok(message) = self.channel_manager_channel.jd_receiver.recv().await {
+        if let Ok(message) = self.channel_manager_io.jd_receiver.recv().await {
             self.handle_job_declaration_message_from_server(None, message, None)
                 .await?;
         }
@@ -795,7 +795,7 @@ impl ChannelManager {
     ///   handler.
     /// - If the frame contains any unsupported message type, an error is returned.
     async fn handle_pool_message_frame(&mut self) -> JDCResult<(), error::ChannelManager> {
-        if let Ok(mut sv2_frame) = self.channel_manager_channel.upstream_receiver.recv().await {
+        if let Ok(mut sv2_frame) = self.channel_manager_io.upstream_receiver.recv().await {
             let header = sv2_frame.get_header().ok_or_else(|| {
                 error!("SV2 frame missing header");
                 JDCError::fallback(framing_sv2::Error::MissingHeader)
@@ -831,7 +831,7 @@ impl ChannelManager {
     //   distribution message handler.
     // - If the frame contains any unsupported message type, an error is returned.
     async fn handle_template_provider_message(&mut self) -> JDCResult<(), error::ChannelManager> {
-        if let Ok(message) = self.channel_manager_channel.tp_receiver.recv().await {
+        if let Ok(message) = self.channel_manager_io.tp_receiver.recv().await {
             self.handle_template_distribution_message_from_server(None, message, None)
                 .await?;
         }
@@ -873,7 +873,7 @@ impl ChannelManager {
     //   mechanism and are sent directly to the mining handler.
     async fn handle_downstream_message(&mut self) -> JDCResult<(), error::ChannelManager> {
         if let Ok((downstream_id, message, tlvs)) = self
-            .channel_manager_channel
+            .channel_manager_io
             .downstream_receiver
             .recv()
             .await
@@ -924,7 +924,7 @@ impl ChannelManager {
                                 let sv2_frame: Sv2Frame = AnyMessage::Mining(upstream_message)
                                     .try_into()
                                     .map_err(JDCError::shutdown)?;
-                                self.channel_manager_channel
+                                self.channel_manager_io
                                     .upstream_sender
                                     .send(sv2_frame)
                                     .await
@@ -993,7 +993,7 @@ impl ChannelManager {
                                 let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
                                     .try_into()
                                     .map_err(JDCError::shutdown)?;
-                                self.channel_manager_channel
+                                self.channel_manager_io
                                     .upstream_sender
                                     .send(sv2_frame)
                                     .await
@@ -1081,7 +1081,7 @@ impl ChannelManager {
                 request_id,
             });
 
-            self.channel_manager_channel
+            self.channel_manager_io
                 .jd_sender
                 .send(message)
                 .await
@@ -1298,7 +1298,7 @@ impl ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -1322,7 +1322,7 @@ impl ChannelManager {
     ) -> JDCResult<(), error::ChannelManager> {
         let msg = coinbase_output_constraints_message(coinbase_outputs);
 
-        self.channel_manager_channel
+        self.channel_manager_io
             .tp_sender
             .send(TemplateDistribution::CoinbaseOutputConstraints(msg))
             .await

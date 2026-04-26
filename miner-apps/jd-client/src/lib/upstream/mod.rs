@@ -48,7 +48,7 @@ pub struct UpstreamData;
 /// - `outbound_tx` → sends frames outbound to upstream
 /// - `inbound_rx` → receives frames inbound from upstream
 #[derive(Clone)]
-pub struct UpstreamChannel {
+pub struct UpstreamIo {
     channel_manager_sender: Sender<Sv2Frame>,
     channel_manager_receiver: Receiver<Sv2Frame>,
     upstream_sender: Sender<Sv2Frame>,
@@ -62,7 +62,7 @@ pub struct Upstream {
     /// Internal state
     upstream_data: Arc<Mutex<UpstreamData>>,
     /// Messaging channels to/from the channel manager and Upstream.
-    upstream_channel: UpstreamChannel,
+    upstream_io: UpstreamIo,
     /// Protocol extensions that the JDC requires
     required_extensions: Vec<u16>,
     /// Upstream address
@@ -174,7 +174,7 @@ impl Upstream {
 
         debug!("Noise setup done in upstream connection");
         let upstream_data = Arc::new(Mutex::new(UpstreamData));
-        let upstream_channel = UpstreamChannel {
+        let upstream_io = UpstreamIo {
             channel_manager_receiver,
             channel_manager_sender,
             upstream_sender: outbound_tx,
@@ -182,7 +182,7 @@ impl Upstream {
         };
         Ok(Upstream {
             upstream_data,
-            upstream_channel,
+            upstream_io,
             required_extensions,
             address: addr,
         })
@@ -207,13 +207,13 @@ impl Upstream {
         debug!(?sv2_frame, "Encoded `SetupConnection` frame");
 
         // Send SetupConnection
-        if let Err(e) = self.upstream_channel.upstream_sender.send(sv2_frame).await {
+        if let Err(e) = self.upstream_io.upstream_sender.send(sv2_frame).await {
             error!(?e, "Failed to send `SetupConnection` frame to upstream");
             return Err(JDCError::fallback(JDCErrorKind::ChannelErrorSender));
         }
         info!("Sent `SetupConnection` to upstream, awaiting response...");
 
-        let incoming_frame = match self.upstream_channel.upstream_receiver.recv().await {
+        let incoming_frame = match self.upstream_io.upstream_receiver.recv().await {
             Ok(frame) => {
                 debug!(?frame, "Received raw inbound frame during handshake");
                 frame
@@ -273,7 +273,7 @@ impl Upstream {
             .try_into()
             .map_err(JDCError::shutdown)?;
 
-        self.upstream_channel
+        self.upstream_io
             .upstream_sender
             .send(sv2_frame)
             .await
@@ -382,7 +382,7 @@ impl Upstream {
     async fn handle_pool_message_frame(&mut self) -> JDCResult<(), error::Upstream> {
         debug!("Received SV2 frame from upstream.");
         let mut sv2_frame = self
-            .upstream_channel
+            .upstream_io
             .upstream_receiver
             .recv()
             .await
@@ -401,7 +401,7 @@ impl Upstream {
                     .await?;
             }
             MessageType::Mining | MessageType::Extensions => {
-                self.upstream_channel
+                self.upstream_io
                     .channel_manager_sender
                     .send(sv2_frame)
                     .await
@@ -421,10 +421,10 @@ impl Upstream {
     //
     // Forwards messages upstream.
     async fn handle_channel_manager_message_frame(&mut self) -> JDCResult<(), error::Upstream> {
-        match self.upstream_channel.channel_manager_receiver.recv().await {
+        match self.upstream_io.channel_manager_receiver.recv().await {
             Ok(sv2_frame) => {
                 debug!("Received sv2 frame from channel manager, forwarding upstream.");
-                self.upstream_channel
+                self.upstream_io
                     .upstream_sender
                     .send(sv2_frame)
                     .await

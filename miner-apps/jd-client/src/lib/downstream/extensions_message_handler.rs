@@ -89,7 +89,7 @@ impl HandleExtensionsFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Extensions(error.into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+            if let Err(e) = self.downstream_io.downstream_sender.send(frame).await {
                 error!(
                     "Failed to send RequestExtensionsError to downstream {}: {e}",
                     self.downstream_id
@@ -130,7 +130,7 @@ impl HandleExtensionsFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Extensions(success.into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+            if let Err(e) = self.downstream_io.downstream_sender.send(frame).await {
                 error!(
                     "Failed to send RequestExtensionsSuccess to downstream {}: {e}",
                     self.downstream_id

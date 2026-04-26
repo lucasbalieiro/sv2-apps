@@ -68,7 +68,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                     template_id: msg.template_id,
                 });
 
-            self.channel_manager_channel
+            self.channel_manager_io
                 .tp_sender
                 .send(tx_data_request)
                 .await
@@ -236,7 +236,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -387,7 +387,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
         if let Some(declare_job) = declare_job {
             let message = JobDeclaration::DeclareMiningJob(declare_job);
-            _ = self.channel_manager_channel.jd_sender.send(message).await;
+            _ = self.channel_manager_io.jd_sender.send(message).await;
         }
 
         Ok(())
@@ -443,7 +443,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             if let Some(Some(job)) = declare_job {
                 let message = JobDeclaration::DeclareMiningJob(job);
 
-                self.channel_manager_channel
+                self.channel_manager_io
                     .jd_sender
                     .send(message)
                     .await
@@ -614,7 +614,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
