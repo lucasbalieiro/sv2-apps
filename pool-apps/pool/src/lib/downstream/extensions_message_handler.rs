@@ -87,7 +87,7 @@ impl HandleExtensionsFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Extensions(error.into_static().into())
                 .try_into()
                 .map_err(PoolError::shutdown)?;
-            self.downstream_channel
+            self.downstream_io
                 .downstream_sender
                 .send(frame)
                 .await
@@ -127,7 +127,7 @@ impl HandleExtensionsFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Extensions(success.into_static().into())
                 .try_into()
                 .map_err(PoolError::shutdown)?;
-            self.downstream_channel
+            self.downstream_io
                 .downstream_sender
                 .send(frame)
                 .await

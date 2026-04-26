@@ -54,7 +54,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
                 .map_err(PoolError::shutdown)?;
-            self.downstream_channel
+            self.downstream_io
                 .downstream_sender
                 .send(frame)
                 .await
@@ -93,7 +93,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
         let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
             .try_into()
             .map_err(PoolError::shutdown)?;
-        self.downstream_channel
+        self.downstream_io
             .downstream_sender
             .send(frame)
             .await

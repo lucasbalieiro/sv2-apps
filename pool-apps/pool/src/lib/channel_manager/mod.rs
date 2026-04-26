@@ -89,7 +89,7 @@ pub struct ChannelManagerData {
 }
 
 #[derive(Clone)]
-pub struct ChannelManagerChannel {
+pub struct ChannelManagerIo {
     tp_sender: Sender<TemplateDistribution<'static>>,
     tp_receiver: Receiver<TemplateDistribution<'static>>,
     downstream_sender: Arc<Mutex<HashMap<DownstreamId, Sender<DownstreamMessage>>>>,
@@ -102,7 +102,7 @@ pub struct ChannelManagerChannel {
 #[derive(Clone)]
 pub struct ChannelManager {
     pub(crate) channel_manager_data: Arc<Mutex<ChannelManagerData>>,
-    channel_manager_channel: ChannelManagerChannel,
+    channel_manager_io: ChannelManagerIo,
     pool_tag_string: String,
     share_batch_size: usize,
     shares_per_minute: SharesPerMinute,
@@ -174,7 +174,7 @@ impl ChannelManager {
             last_new_prev_hash: None,
         }));
 
-        let channel_manager_channel = ChannelManagerChannel {
+        let channel_manager_io = ChannelManagerIo {
             tp_sender,
             tp_receiver,
             downstream_sender: Arc::new(Mutex::new(HashMap::new())),
@@ -183,7 +183,7 @@ impl ChannelManager {
 
         let channel_manager = ChannelManager {
             channel_manager_data,
-            channel_manager_channel,
+            channel_manager_io,
             share_batch_size: config.share_batch_size(),
             shares_per_minute: config.shares_per_minute(),
             pool_tag_string: config.pool_signature().to_string(),
@@ -358,7 +358,7 @@ impl ChannelManager {
                                         this.required_extensions.clone(),
                                     );
 
-                                    this.channel_manager_channel.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender));
+                                    this.channel_manager_io.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender));
 
                                     this.channel_manager_data.super_safe_lock(|data| {
                                         data.downstream.insert(downstream_id, downstream.clone());
@@ -456,7 +456,7 @@ impl ChannelManager {
                 .vardiff
                 .retain(|key, _| key.downstream_id != downstream_id);
         });
-        self.channel_manager_channel
+        self.channel_manager_io
             .downstream_sender
             .super_safe_lock(|map| map.remove(&downstream_id));
     }
@@ -468,7 +468,7 @@ impl ChannelManager {
     //   distribution message handler.
     // - If the frame contains any unsupported message type, an error is returned.
     async fn handle_template_provider_message(&mut self) -> PoolResult<(), error::ChannelManager> {
-        if let Ok(message) = self.channel_manager_channel.tp_receiver.recv().await {
+        if let Ok(message) = self.channel_manager_io.tp_receiver.recv().await {
             self.handle_template_distribution_message_from_server(None, message, None)
                 .await?;
         }
@@ -476,11 +476,8 @@ impl ChannelManager {
     }
 
     async fn handle_downstream_mining_message(&mut self) -> PoolResult<(), error::ChannelManager> {
-        if let Ok((downstream_id, message, tlv_fields)) = self
-            .channel_manager_channel
-            .downstream_receiver
-            .recv()
-            .await
+        if let Ok((downstream_id, message, tlv_fields)) =
+            self.channel_manager_io.downstream_receiver.recv().await
         {
             let tlv_slice = tlv_fields.as_deref();
             self.handle_mining_message_from_client(Some(downstream_id), message, tlv_slice)
@@ -641,7 +638,7 @@ impl ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 error!("Failed to forward message {e:?}");
             }
         }
@@ -665,7 +662,7 @@ impl ChannelManager {
     ) -> PoolResult<(), error::ChannelManager> {
         let msg = coinbase_output_constraints_message_with_offset(coinbase_outputs);
 
-        self.channel_manager_channel
+        self.channel_manager_io
             .tp_sender
             .send(TemplateDistribution::CoinbaseOutputConstraints(msg))
             .await
@@ -699,13 +696,10 @@ impl<'a> From<(DownstreamId, Mining<'a>)> for RouteMessageTo<'a> {
 }
 
 impl RouteMessageTo<'_> {
-    pub async fn forward(
-        self,
-        channel_manager_channel: &ChannelManagerChannel,
-    ) -> Result<(), PoolErrorKind> {
+    pub async fn forward(self, channel_manager_io: &ChannelManagerIo) -> Result<(), PoolErrorKind> {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
-                let sender = channel_manager_channel
+                let sender = channel_manager_io
                     .downstream_sender
                     .super_safe_lock(|map| map.get(&downstream_id).cloned());
 
@@ -716,7 +710,7 @@ impl RouteMessageTo<'_> {
                 }
             }
             RouteMessageTo::TemplateProvider(message) => {
-                channel_manager_channel
+                channel_manager_io
                     .tp_sender
                     .send(message.into_static())
                     .await?;
