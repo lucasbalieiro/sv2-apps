@@ -98,7 +98,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
                     coinbase_output_max_additional_sigops: max_additional_sigops,
                 });
 
-            self.channel_manager_channel
+            self.channel_manager_io
                 .tp_sender
                 .send(coinbase_output_constraints_message)
                 .await
@@ -232,7 +232,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
         let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
             .try_into()
             .map_err(JDCError::shutdown)?;
-        self.channel_manager_channel
+        self.channel_manager_io
             .upstream_sender
             .send(sv2_frame)
             .await
@@ -302,7 +302,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
         };
         let message = JobDeclaration::ProvideMissingTransactionsSuccess(response);
 
-        self.channel_manager_channel
+        self.channel_manager_io
             .jd_sender
             .send(message)
             .await

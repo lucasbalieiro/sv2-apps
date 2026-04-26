@@ -69,7 +69,7 @@ pub struct DownstreamData {
 /// - `downstream_sender`: sends frames to the downstream.
 /// - `downstream_receiver`: receives frames from the downstream.
 #[derive(Clone)]
-pub struct DownstreamChannel {
+pub struct DownstreamIo {
     channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
     channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
     downstream_sender: Sender<Sv2Frame>,
@@ -80,7 +80,7 @@ pub struct DownstreamChannel {
 #[derive(Clone)]
 pub struct Downstream {
     pub downstream_data: Arc<Mutex<DownstreamData>>,
-    downstream_channel: DownstreamChannel,
+    downstream_io: DownstreamIo,
     pub downstream_id: DownstreamId,
     /// Per-connection cancellation token (child of the global token).
     /// Cancelled when this downstream's message loop exits, causing
@@ -167,7 +167,7 @@ impl Downstream {
             fallback_coordinator.clone(),
         );
 
-        let downstream_channel = DownstreamChannel {
+        let downstream_io = DownstreamIo {
             channel_manager_receiver,
             channel_manager_sender,
             downstream_sender: outbound_tx,
@@ -186,7 +186,7 @@ impl Downstream {
         }));
 
         Downstream {
-            downstream_channel,
+            downstream_io,
             downstream_data,
             downstream_id,
             downstream_cancellation_token,
@@ -278,7 +278,7 @@ impl Downstream {
     // Performs the initial handshake with a downstream peer.
     async fn setup_connection_with_downstream(&mut self) -> JDCResult<(), error::Downstream> {
         let mut frame = self
-            .downstream_channel
+            .downstream_io
             .downstream_receiver
             .recv()
             .await
@@ -297,11 +297,7 @@ impl Downstream {
 
     // Handles messages sent from the channel manager to this downstream.
     async fn handle_channel_manager_message(self) -> JDCResult<(), error::Downstream> {
-        let (message, _tlv_fields) = match self
-            .downstream_channel
-            .channel_manager_receiver
-            .recv()
-            .await
+        let (message, _tlv_fields) = match self.downstream_io.channel_manager_receiver.recv().await
         {
             Ok(msg) => msg,
             Err(e) => {
@@ -319,7 +315,7 @@ impl Downstream {
         let message = AnyMessage::Mining(message);
         let sv2_frame: Sv2Frame = message.try_into().map_err(JDCError::shutdown)?;
 
-        self.downstream_channel
+        self.downstream_io
             .downstream_sender
             .send(sv2_frame)
             .await
@@ -334,7 +330,7 @@ impl Downstream {
     // Handles incoming messages from the downstream peer.
     async fn handle_downstream_message(mut self) -> JDCResult<(), error::Downstream> {
         let mut sv2_frame = self
-            .downstream_channel
+            .downstream_io
             .downstream_receiver
             .recv()
             .await
@@ -351,7 +347,7 @@ impl Downstream {
                 .map_err(|error| JDCError::disconnect(error, self.downstream_id))?;
         match any_message {
             AnyMessage::Mining(message) => {
-                self.downstream_channel
+                self.downstream_io
                     .channel_manager_sender
                     .send((self.downstream_id, message, tlv_fields))
                     .await

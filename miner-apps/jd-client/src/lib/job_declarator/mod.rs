@@ -3,7 +3,6 @@ use std::{net::SocketAddr, sync::Arc};
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
-    custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     network_helpers::{connect_with_noise, resolve_host},
     stratum_core::{
@@ -29,12 +28,9 @@ use crate::{
 
 mod message_handler;
 
-/// Shared state for Job Declarator
-pub struct JobDeclaratorData;
-
 /// Holds all channels required for Job Declarator communication.
 #[derive(Clone)]
-pub struct JobDeclaratorChannel {
+pub struct JobDeclaratorIo {
     channel_manager_sender: Sender<JobDeclaration<'static>>,
     channel_manager_receiver: Receiver<JobDeclaration<'static>>,
     jds_sender: Sender<Sv2Frame>,
@@ -45,10 +41,8 @@ pub struct JobDeclaratorChannel {
 #[allow(warnings)]
 #[derive(Clone)]
 pub struct JobDeclarator {
-    /// Internal state
-    job_declarator_data: Arc<Mutex<JobDeclaratorData>>,
     /// Messaging channels to/from the channel manager and JD.
-    job_declarator_channel: JobDeclaratorChannel,
+    job_declarator_io: JobDeclaratorIo,
     /// Socket address of the Job Declarator server.
     socket_address: SocketAddr,
     /// Config JDC mode
@@ -155,16 +149,15 @@ impl JobDeclarator {
             cancellation_token,
             fallback_coordinator,
         );
-        let job_declarator_data = Arc::new(Mutex::new(JobDeclaratorData));
-        let job_declarator_channel = JobDeclaratorChannel {
+
+        let job_declarator_io = JobDeclaratorIo {
             channel_manager_receiver,
             channel_manager_sender,
             jds_sender: outbound_tx,
             jds_receiver: inbound_rx,
         };
         Ok(JobDeclarator {
-            job_declarator_channel,
-            job_declarator_data,
+            job_declarator_io,
             socket_address: addr,
             mode,
         })
@@ -262,14 +255,14 @@ impl JobDeclarator {
                 JDCError::shutdown(e)
             })?;
 
-        if let Err(e) = self.job_declarator_channel.jds_sender.send(sv2_frame).await {
+        if let Err(e) = self.job_declarator_io.jds_sender.send(sv2_frame).await {
             error!(error=?e, "Failed to send SetupConnection frame.");
             return Err(JDCError::fallback(JDCErrorKind::ChannelErrorSender));
         }
         debug!("SetupConnection frame sent successfully.");
 
         let mut incoming = self
-            .job_declarator_channel
+            .job_declarator_io
             .jds_receiver
             .recv()
             .await
@@ -296,17 +289,12 @@ impl JobDeclarator {
 
     // Handles messages coming from the Channel Manager and forwards them to the Job Declarator.
     async fn handle_channel_manager_message(&self) -> JDCResult<(), error::JobDeclarator> {
-        match self
-            .job_declarator_channel
-            .channel_manager_receiver
-            .recv()
-            .await
-        {
+        match self.job_declarator_io.channel_manager_receiver.recv().await {
             Ok(msg) => {
                 debug!("Forwarding message from channel manager to JDS.");
                 let message = AnyMessage::JobDeclaration(msg);
                 let sv2_frame: Sv2Frame = message.try_into().map_err(JDCError::shutdown)?;
-                self.job_declarator_channel
+                self.job_declarator_io
                     .jds_sender
                     .send(sv2_frame)
                     .await
@@ -329,7 +317,7 @@ impl JobDeclarator {
     // - Rejects unsupported message types.
     async fn handle_job_declarator_message(&mut self) -> JDCResult<(), error::JobDeclarator> {
         let mut sv2_frame = self
-            .job_declarator_channel
+            .job_declarator_io
             .jds_receiver
             .recv()
             .await
@@ -353,7 +341,7 @@ impl JobDeclarator {
                 let message = JobDeclaration::try_from((message_type, sv2_frame.payload()))
                     .map_err(JDCError::fallback)?
                     .into_static();
-                self.job_declarator_channel
+                self.job_declarator_io
                     .channel_manager_sender
                     .send(message)
                     .await

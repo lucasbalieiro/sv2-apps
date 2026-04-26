@@ -31,7 +31,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     channel_manager::{
-        ChannelManager, ChannelManagerChannel, SharesOrderedByDiff, SOLO_FULL_EXTRANONCE_SIZE,
+        ChannelManager, ChannelManagerIo, SharesOrderedByDiff, SOLO_FULL_EXTRANONCE_SIZE,
     },
     error::{self, JDCError, JDCErrorKind},
     utils::{add_share_to_cache, create_close_channel_msg},
@@ -104,13 +104,10 @@ impl RouteMessageTo<'_> {
     /// - [`RouteMessageTo::JobDeclarator`] → Sends the job declaration message to the JDS.
     /// - [`RouteMessageTo::TemplateProvider`] → Sends the template distribution message to the
     ///   template provider.
-    pub async fn forward(
-        self,
-        channel_manager_channel: &ChannelManagerChannel,
-    ) -> Result<(), JDCErrorKind> {
+    pub async fn forward(self, channel_manager_io: &ChannelManagerIo) -> Result<(), JDCErrorKind> {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
-                let sender = channel_manager_channel
+                let sender = channel_manager_io
                     .downstream_sender
                     .super_safe_lock(|map| map.get(&downstream_id).cloned());
                 if let Some(sender) = sender {
@@ -122,19 +119,16 @@ impl RouteMessageTo<'_> {
             RouteMessageTo::Upstream(message) => {
                 let message_static = message.into_static();
                 let sv2_frame: Sv2Frame = AnyMessage::Mining(message_static).try_into()?;
-                channel_manager_channel
-                    .upstream_sender
-                    .send(sv2_frame)
-                    .await?;
+                channel_manager_io.upstream_sender.send(sv2_frame).await?;
             }
             RouteMessageTo::JobDeclarator(message) => {
-                channel_manager_channel
+                channel_manager_io
                     .jd_sender
                     .send(message.into_static())
                     .await?;
             }
             RouteMessageTo::TemplateProvider(message) => {
-                channel_manager_channel
+                channel_manager_io
                     .tp_sender
                     .send(message.into_static())
                     .await?;
@@ -457,7 +451,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -719,7 +713,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -913,7 +907,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -1153,7 +1147,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -1416,7 +1410,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }

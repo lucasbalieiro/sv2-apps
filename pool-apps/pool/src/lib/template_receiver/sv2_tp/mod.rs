@@ -26,7 +26,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct Sv2TpChannel {
+pub struct Sv2TpIo {
     channel_manager_sender: Sender<TemplateDistribution<'static>>,
     channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
     tp_sender: Sender<Sv2Frame>,
@@ -35,7 +35,7 @@ pub struct Sv2TpChannel {
 
 #[derive(Clone)]
 pub struct Sv2Tp {
-    sv2_tp_channel: Sv2TpChannel,
+    sv2_tp_io: Sv2TpIo,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -112,7 +112,7 @@ impl Sv2Tp {
                                         cancellation_token.clone(),
                                     );
 
-                                    let template_receiver_channel = Sv2TpChannel {
+                                    let sv2_tp_io = Sv2TpIo {
                                         channel_manager_receiver,
                                         channel_manager_sender,
                                         tp_receiver: inbound_rx,
@@ -121,7 +121,7 @@ impl Sv2Tp {
 
                                     info!(attempt, "TemplateReceiver initialized successfully");
                                     return Ok(Sv2Tp {
-                                        sv2_tp_channel: template_receiver_channel,
+                                        sv2_tp_io,
                                     });
                                 }
                                 Err(network_helpers::Error::InvalidKey) => {
@@ -221,7 +221,7 @@ impl Sv2Tp {
         &mut self,
     ) -> PoolResult<(), error::TemplateProvider> {
         let mut sv2_frame = self
-            .sv2_tp_channel
+            .sv2_tp_io
             .tp_receiver
             .recv()
             .await
@@ -249,7 +249,7 @@ impl Sv2Tp {
                         .map_err(PoolError::shutdown)?
                         .into_static();
 
-                self.sv2_tp_channel
+                self.sv2_tp_io
                     .channel_manager_sender
                     .send(message)
                     .await
@@ -274,7 +274,7 @@ impl Sv2Tp {
     /// Forwards outbound frames upstream
     pub async fn handle_channel_manager_message(&self) -> PoolResult<(), error::TemplateProvider> {
         let msg = self
-            .sv2_tp_channel
+            .sv2_tp_io
             .channel_manager_receiver
             .recv()
             .await
@@ -283,7 +283,7 @@ impl Sv2Tp {
         let frame: Sv2Frame = message.try_into().map_err(PoolError::shutdown)?;
 
         debug!("Forwarding message from channel manager to outbound_tx");
-        self.sv2_tp_channel
+        self.sv2_tp_io
             .tp_sender
             .send(frame)
             .await
@@ -309,17 +309,13 @@ impl Sv2Tp {
             .map_err(PoolError::shutdown)?;
 
         info!("Sending SetupConnection message to the Template Provider");
-        self.sv2_tp_channel
-            .tp_sender
-            .send(frame)
-            .await
-            .map_err(|_| {
-                error!("Failed to send setup connection message upstream");
-                PoolError::shutdown(PoolErrorKind::ChannelErrorSender)
-            })?;
+        self.sv2_tp_io.tp_sender.send(frame).await.map_err(|_| {
+            error!("Failed to send setup connection message upstream");
+            PoolError::shutdown(PoolErrorKind::ChannelErrorSender)
+        })?;
 
         info!("Waiting for upstream handshake response");
-        let mut incoming: Sv2Frame = self.sv2_tp_channel.tp_receiver.recv().await.map_err(|e| {
+        let mut incoming: Sv2Frame = self.sv2_tp_io.tp_receiver.recv().await.map_err(|e| {
             error!(?e, "Upstream connection closed during handshake");
             PoolError::shutdown(e)
         })?;

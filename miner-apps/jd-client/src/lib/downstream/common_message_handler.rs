@@ -69,7 +69,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+            if let Err(e) = self.downstream_io.downstream_sender.send(frame).await {
                 error!(
                     "Failed to send SetupConnectionError to downstream {}: {e}",
                     self.downstream_id
@@ -94,7 +94,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             let frame: Sv2Frame = AnyMessage::Common(response.into_static().into())
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+            if let Err(e) = self.downstream_io.downstream_sender.send(frame).await {
                 error!(
                     "Failed to send SetupConnectionError to downstream {}: {e}",
                     self.downstream_id
@@ -119,7 +119,7 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
             .try_into()
             .map_err(JDCError::shutdown)?;
 
-        if let Err(e) = self.downstream_channel.downstream_sender.send(frame).await {
+        if let Err(e) = self.downstream_io.downstream_sender.send(frame).await {
             error!(
                 "Failed to send SetupConnectionSuccess to downstream {}: {e}",
                 self.downstream_id

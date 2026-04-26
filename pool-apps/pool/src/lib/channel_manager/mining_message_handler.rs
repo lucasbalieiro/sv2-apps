@@ -257,7 +257,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 error!("Failed to forward message {e:?}");
             }
         }
@@ -530,7 +530,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 error!("Failed to forward message {e:?}");
             }
         }
@@ -696,7 +696,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 error!("Failed to forward message {e:?}");
             }
         }
@@ -893,7 +893,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 error!("Failed to forward message {e:?}");
             }
         }
@@ -1053,7 +1053,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 error!("Failed to forward message {e:?}");
             }
         }
@@ -1083,7 +1083,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             let message: RouteMessageTo =
                 (downstream_id, Mining::SetCustomMiningJobError(error)).into();
             message
-                .forward(&self.channel_manager_channel)
+                .forward(&self.channel_manager_io)
                 .await
                 .map_err(|e| PoolError::disconnect(e, downstream_id))?;
             return Ok(());
@@ -1104,7 +1104,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             )
                 .into();
             message
-                .forward(&self.channel_manager_channel)
+                .forward(&self.channel_manager_io)
                 .await
                 .map_err(|e| PoolError::disconnect(e, downstream_id))?;
             return Ok(());
@@ -1157,7 +1157,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 })?;
 
         message
-            .forward(&self.channel_manager_channel)
+            .forward(&self.channel_manager_io)
             .await
             .map_err(|e| PoolError::disconnect(e, downstream_id))?;
 

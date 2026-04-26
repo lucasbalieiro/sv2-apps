@@ -70,7 +70,7 @@ pub struct DownstreamData {
 /// - `downstream_sender`: sends frames to the downstream.
 /// - `downstream_receiver`: receives frames from the downstream.
 #[derive(Clone)]
-pub struct DownstreamChannel {
+pub struct DownstreamIo {
     channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
     channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
     downstream_sender: Sender<Sv2Frame>,
@@ -81,7 +81,7 @@ pub struct DownstreamChannel {
 #[derive(Clone)]
 pub struct Downstream {
     pub downstream_data: Arc<Mutex<DownstreamData>>,
-    downstream_channel: DownstreamChannel,
+    downstream_io: DownstreamIo,
     pub downstream_id: usize,
     pub requires_standard_jobs: Arc<AtomicBool>,
     pub requires_custom_work: Arc<AtomicBool>,
@@ -163,7 +163,7 @@ impl Downstream {
             downstream_connection_token.clone(),
         );
 
-        let downstream_channel = DownstreamChannel {
+        let downstream_io = DownstreamIo {
             channel_manager_receiver,
             channel_manager_sender,
             downstream_sender: outbound_tx,
@@ -180,7 +180,7 @@ impl Downstream {
         }));
 
         Downstream {
-            downstream_channel,
+            downstream_io,
             downstream_data,
             downstream_id,
             requires_standard_jobs: Arc::new(AtomicBool::new(false)),
@@ -265,7 +265,7 @@ impl Downstream {
     // Performs the initial handshake with a downstream peer.
     async fn setup_connection_with_downstream(&mut self) -> PoolResult<(), error::Downstream> {
         let mut frame = self
-            .downstream_channel
+            .downstream_io
             .downstream_receiver
             .recv()
             .await
@@ -296,12 +296,7 @@ impl Downstream {
 
     // Handles messages sent from the channel manager to this downstream.
     async fn handle_channel_manager_message(self) -> PoolResult<(), error::Downstream> {
-        let (msg, _tlv_fields) = match self
-            .downstream_channel
-            .channel_manager_receiver
-            .recv()
-            .await
-        {
+        let (msg, _tlv_fields) = match self.downstream_io.channel_manager_receiver.recv().await {
             Ok(msg) => msg,
             Err(e) => {
                 warn!(
@@ -318,7 +313,7 @@ impl Downstream {
         let message = AnyMessage::Mining(msg);
         let std_frame: Sv2Frame = message.try_into().map_err(PoolError::shutdown)?;
 
-        self.downstream_channel
+        self.downstream_io
             .downstream_sender
             .send(std_frame)
             .await
@@ -333,7 +328,7 @@ impl Downstream {
     // Handles incoming messages from the downstream peer.
     async fn handle_downstream_message(&mut self) -> PoolResult<(), error::Downstream> {
         let mut sv2_frame = self
-            .downstream_channel
+            .downstream_io
             .downstream_receiver
             .recv()
             .await
@@ -368,7 +363,7 @@ impl Downstream {
                         ));
                     }
                 };
-                self.downstream_channel
+                self.downstream_io
                     .channel_manager_sender
                     .send((self.downstream_id, mining_message, tlv_fields))
                     .await

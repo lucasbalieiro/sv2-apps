@@ -15,7 +15,6 @@ use std::sync::Arc;
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
-    custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
     network_helpers::{self, connect_with_noise, resolve_host_port},
@@ -42,9 +41,6 @@ use crate::{
 
 mod message_handler;
 
-/// Placeholder for future Sv2Tp–specific state.
-pub struct Sv2TpData;
-
 /// Holds communication channels between the Sv2Tp, channel manager,
 /// and upstream template provider.
 ///
@@ -53,7 +49,7 @@ pub struct Sv2TpData;
 /// - `outbound_tx` → sends frames upstream to the template provider
 /// - `inbound_rx` → receives frames from the template provider
 #[derive(Clone)]
-pub struct Sv2TpChannel {
+pub struct Sv2TpIo {
     channel_manager_sender: Sender<TemplateDistribution<'static>>,
     channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
     tp_sender: Sender<Sv2Frame>,
@@ -71,10 +67,8 @@ pub struct Sv2TpChannel {
 #[allow(warnings)]
 #[derive(Clone)]
 pub struct Sv2Tp {
-    /// Internal state
-    sv2_tp_data: Arc<Mutex<Sv2TpData>>,
     /// Messaging channels to/from the channel manager and TP.
-    sv2_tp_channel: Sv2TpChannel,
+    sv2_tp_io: Sv2TpIo,
     /// Address of the template provider (string form)
     tp_address: String,
 }
@@ -164,8 +158,7 @@ impl Sv2Tp {
                                         fallback_coordinator.clone(),
                                     );
 
-                                    let template_receiver_data = Arc::new(Mutex::new(Sv2TpData));
-                                    let template_receiver_channel = Sv2TpChannel {
+                                    let sv2_tp_io = Sv2TpIo {
                                         channel_manager_receiver,
                                         channel_manager_sender,
                                         tp_receiver: inbound_rx,
@@ -174,8 +167,7 @@ impl Sv2Tp {
 
                                     info!(attempt, "TemplateReceiver initialized successfully");
                                     return Ok(Sv2Tp {
-                                        sv2_tp_channel: template_receiver_channel,
-                                        sv2_tp_data: template_receiver_data,
+                                        sv2_tp_io,
                                         tp_address,
                                     });
                                 }
@@ -276,7 +268,7 @@ impl Sv2Tp {
         &mut self,
     ) -> JDCResult<(), error::TemplateProvider> {
         let mut sv2_frame = self
-            .sv2_tp_channel
+            .sv2_tp_io
             .tp_receiver
             .recv()
             .await
@@ -304,7 +296,7 @@ impl Sv2Tp {
                 let message = TemplateDistribution::try_from((message_type, sv2_frame.payload()))
                     .map_err(JDCError::shutdown)?
                     .into_static();
-                self.sv2_tp_channel
+                self.sv2_tp_io
                     .channel_manager_sender
                     .send(message)
                     .await
@@ -325,7 +317,7 @@ impl Sv2Tp {
     /// Forwards outbound frames upstream
     pub async fn handle_channel_manager_message(&self) -> JDCResult<(), error::TemplateProvider> {
         let msg = AnyMessage::TemplateDistribution(
-            self.sv2_tp_channel
+            self.sv2_tp_io
                 .channel_manager_receiver
                 .recv()
                 .await
@@ -333,7 +325,7 @@ impl Sv2Tp {
         );
         debug!("Forwarding message from channel manager to outbound_tx");
         let sv2_frame: Sv2Frame = msg.try_into().map_err(JDCError::shutdown)?;
-        self.sv2_tp_channel
+        self.sv2_tp_io
             .tp_sender
             .send(sv2_frame)
             .await
@@ -359,17 +351,13 @@ impl Sv2Tp {
             .map_err(JDCError::shutdown)?;
 
         info!("Sending setup connection message to upstream");
-        self.sv2_tp_channel
-            .tp_sender
-            .send(frame)
-            .await
-            .map_err(|_| {
-                error!("Failed to send setup connection message upstream");
-                JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
-            })?;
+        self.sv2_tp_io.tp_sender.send(frame).await.map_err(|_| {
+            error!("Failed to send setup connection message upstream");
+            JDCError::shutdown(JDCErrorKind::ChannelErrorSender)
+        })?;
 
         info!("Waiting for upstream handshake response");
-        let mut incoming: Sv2Frame = self.sv2_tp_channel.tp_receiver.recv().await.map_err(|e| {
+        let mut incoming: Sv2Frame = self.sv2_tp_io.tp_receiver.recv().await.map_err(|e| {
             error!(?e, "Upstream connection closed during handshake");
             JDCError::shutdown(noise_sv2::Error::ExpectedIncomingHandshakeMessage)
         })?;

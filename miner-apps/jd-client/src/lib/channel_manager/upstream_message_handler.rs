@@ -259,7 +259,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                         TemplateDistribution::RequestTransactionData(RequestTransactionData {
                             template_id: template.template_id,
                         });
-                    self.channel_manager_channel
+                    self.channel_manager_io
                         .tp_sender
                         .send(tx_data_request)
                         .await
@@ -273,7 +273,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                     let sv2_frame: Sv2Frame = AnyMessage::Mining(set_custom_job)
                         .try_into()
                         .map_err(JDCError::shutdown)?;
-                    self.channel_manager_channel
+                    self.channel_manager_io
                         .upstream_sender
                         .send(sv2_frame)
                         .await
@@ -302,7 +302,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
             let sv2_frame: Sv2Frame = AnyMessage::Mining(close_channel)
                 .try_into()
                 .map_err(JDCError::shutdown)?;
-            self.channel_manager_channel
+            self.channel_manager_io
                 .upstream_sender
                 .send(sv2_frame)
                 .await
@@ -525,7 +525,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
             // A send can only fail if the receiver side of the channel is closed.
             // Since this is an unbounded channel, it cannot fail due to capacity
             // limits (which would only apply to bounded channels).
-            if let Err(e) = message.forward(&self.channel_manager_channel).await {
+            if let Err(e) = message.forward(&self.channel_manager_io).await {
                 tracing::error!("Failed to forward message {e:?}");
             }
         }
@@ -690,7 +690,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         // endpoint has been dropped (e.g., during disconnect or shutdown).
         // Lifecycle and error handling are managed elsewhere.
         for msg in shares_to_submit_upstream {
-            _ = msg.forward(&self.channel_manager_channel).await;
+            _ = msg.forward(&self.channel_manager_io).await;
         }
 
         Ok(())

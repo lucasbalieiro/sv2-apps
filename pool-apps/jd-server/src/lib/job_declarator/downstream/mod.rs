@@ -8,7 +8,11 @@ use super::{
     DownstreamJobDeclarationMessage, JobDeclarationMessage, ALLOCATED_TOKEN_TIMEOUT_SECS,
     JANITOR_INTERVAL_SECS,
 };
-use crate::{error, error::JDSResult, error::LoopControl, io_task::spawn_io_tasks};
+use crate::{
+    error,
+    error::{JDSResult, LoopControl},
+    io_task::spawn_io_tasks,
+};
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::job_declaration_protocol::CancellationToken;
 use dashmap::DashMap;
