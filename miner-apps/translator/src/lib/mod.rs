@@ -36,7 +36,7 @@ use config::TranslatorConfig;
 use crate::{
     error::TproxyErrorKind,
     status::{State, Status},
-    sv1::sv1_server::sv1_server::Sv1Server,
+    sv1::Sv1Server,
     sv2::{ChannelManager, Upstream},
     utils::{TproxyMode, UpstreamEntry},
 };
@@ -154,7 +154,6 @@ impl TranslatorSv2 {
             upstream_to_channel_manager_receiver,
             channel_manager_to_sv1_server_sender.clone(),
             sv1_server_to_channel_manager_receiver,
-            status_sender.clone(),
             self.config.supported_extensions.clone(),
             self.config.required_extensions.clone(),
             tproxy_mode,
@@ -305,7 +304,6 @@ impl TranslatorSv2 {
                                     upstream_to_channel_manager_receiver,
                                     channel_manager_to_sv1_server_sender,
                                     sv1_server_to_channel_manager_receiver,
-                                    status_sender.clone(),
                                     self.config.supported_extensions.clone(),
                                     self.config.required_extensions.clone(),
                                     tproxy_mode,

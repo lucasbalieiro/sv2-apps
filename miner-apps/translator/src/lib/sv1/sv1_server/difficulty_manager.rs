@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::sv1::sv1_server::sv1_server::PendingTargetUpdate;
+use crate::sv1::sv1_server::PendingTargetUpdate;
 
 use stratum_apps::{
     stratum_core::{
@@ -30,7 +30,7 @@ impl Sv1Server {
     ///
     /// This method implements the SV1 server's variable difficulty logic for all downstreams.
     /// Every 60 seconds, this method updates the difficulty state for each downstream.
-    pub async fn spawn_vardiff_loop(self: Arc<Self>) {
+    pub(super) async fn spawn_vardiff_loop(self: Arc<Self>) {
         info!("Variable difficulty adjustment enabled - starting vardiff loop");
 
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -128,7 +128,6 @@ impl Sv1Server {
                                 data.push(PendingTargetUpdate {
                                     downstream_id: *downstream_id,
                                     new_target,
-                                    new_hashrate,
                                 })
                             });
                         }
@@ -156,7 +155,7 @@ impl Sv1Server {
             if let Ok(set_difficulty_msg) = build_sv1_set_difficulty_from_sv2_target(target) {
                 let downstream_id = downstream_id.unwrap_or(0);
                 if let Some(sender) = self
-                    .sv1_server_channel_state
+                    .sv1_server_io
                     .sv1_server_to_downstream_sender
                     .super_safe_lock(|downstream| downstream.get(&downstream_id).cloned())
                 {
@@ -251,7 +250,7 @@ impl Sv1Server {
         );
 
         if let Err(e) = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .channel_manager_sender
             .send((Mining::UpdateChannel(update_channel), None))
             .await
@@ -277,7 +276,7 @@ impl Sv1Server {
             );
 
             if let Err(e) = self
-                .sv1_server_channel_state
+                .sv1_server_io
                 .channel_manager_sender
                 .send((Mining::UpdateChannel(update_channel), None))
                 .await
@@ -295,7 +294,7 @@ impl Sv1Server {
     /// Aggregated mode: Single SetTarget updates all downstreams and processes all pending updates
     /// Non-aggregated mode: Each SetTarget updates one specific downstream and processes its
     /// pending update
-    pub async fn handle_set_target_message(&self, set_target: SetTarget<'_>) {
+    pub(super) async fn handle_set_target_message(&self, set_target: SetTarget<'_>) {
         let new_upstream_target =
             Target::from_le_bytes(set_target.maximum_target.inner_as_ref().try_into().unwrap());
         debug!(
@@ -438,7 +437,7 @@ impl Sv1Server {
                 };
 
             if let Some(sender) = self
-                .sv1_server_channel_state
+                .sv1_server_io
                 .sv1_server_to_downstream_sender
                 .super_safe_lock(|downstream| downstream.get(&update.downstream_id).cloned())
             {
@@ -512,7 +511,7 @@ impl Sv1Server {
         };
 
         if let Err(e) = self
-            .sv1_server_channel_state
+            .sv1_server_io
             .channel_manager_sender
             .send((Mining::UpdateChannel(update), None))
             .await

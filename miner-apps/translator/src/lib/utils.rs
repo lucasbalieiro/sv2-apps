@@ -16,12 +16,18 @@ use stratum_apps::{
             merkle_root::merkle_root_from_path,
             target::{bytes_to_hex, u256_to_block_hash},
         },
-        sv1_api::{client_to_server, server_to_client::Notify, utils::HexU32Be},
+        sv1_api::{
+            client_to_server::{self, Submit},
+            json_rpc,
+            server_to_client::Notify,
+            utils::HexU32Be,
+            Message,
+        },
     },
-    utils::types::ChannelId,
+    utils::types::{ChannelId, DownstreamId},
 };
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::TproxyErrorKind;
 
@@ -205,4 +211,79 @@ impl TproxyMode {
     pub(crate) fn is_non_aggregated(self) -> bool {
         TproxyMode::NonAggregated == self
     }
+}
+
+/// Messages sent from downstream handling logic to the SV1 server.
+///
+/// This enum defines the types of messages that downstream connections can send
+/// to the central SV1 server for processing and forwarding to upstream.
+#[derive(Debug)]
+pub enum DownstreamMessages {
+    /// Represents a submitted share from a downstream miner,
+    /// wrapped with the relevant channel ID.
+    SubmitShares(SubmitShareWithChannelId),
+    /// Request to open an extended mining channel for a downstream that just sent its first
+    /// message.
+    OpenChannel(DownstreamId), // downstream_id
+}
+
+/// A wrapper around a `mining.submit` message with additional channel information.
+///
+/// This struct contains all the necessary information to process a share submission
+/// from an SV1 miner, including the share data itself and metadata needed for
+/// proper routing and validation.
+#[derive(Debug, Clone)]
+pub struct SubmitShareWithChannelId {
+    /// The SV2 channel ID this share belongs to
+    pub channel_id: ChannelId,
+    /// The downstream connection ID that submitted this share
+    pub downstream_id: DownstreamId,
+    /// The actual SV1 share submission data
+    pub share: Submit<'static>,
+    /// The complete extranonce used for this share
+    pub extranonce: Vec<u8>,
+    /// The length of the extranonce2 field
+    pub extranonce2_len: usize,
+    /// Optional version rolling mask for the share
+    pub version_rolling_mask: Option<HexU32Be>,
+    /// The version field from the job, used for validation
+    pub job_version: Option<u32>,
+}
+
+/// Delimiter used to separate original job ID from keepalive mutation counter.
+/// Format: `{original_job_id}#{counter}`
+pub(crate) const KEEPALIVE_JOB_ID_DELIMITER: char = '#';
+
+/// Check if Sv1 message is mining.authorize
+pub(crate) fn is_mining_authorize(msg: &Message) -> bool {
+    if let json_rpc::Message::StandardRequest(r) = &msg {
+        r.method == "mining.authorize"
+    } else {
+        false
+    }
+}
+
+/// Truncates a string to [`MAX_USER_IDENTITY_BYTES`], respecting UTF-8 character boundaries.
+///
+/// If the input string exceeds the limit, it is truncated at the last valid UTF-8 character
+/// boundary before or at [`MAX_USER_IDENTITY_BYTES`] and a warning is logged.
+pub(crate) fn tlv_compatible_username(s: &str) -> &str {
+    const MAX_USER_IDENTITY_BYTES: usize = 32;
+    let len = s.len();
+
+    if len <= MAX_USER_IDENTITY_BYTES {
+        return s;
+    }
+    // Find the last valid UTF-8 char boundary at or before MAX_USER_IDENTITY_BYTES
+    let mut end = MAX_USER_IDENTITY_BYTES;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let truncated = &s[..end];
+    warn!(
+        "Username '{}' exceeds {} bytes ({} bytes), truncating to '{}'. \
+         Consider using a shorter username for full visibility on the pool dashboard.",
+        s, MAX_USER_IDENTITY_BYTES, len, truncated
+    );
+    truncated
 }

@@ -3,7 +3,7 @@
 //! This module implements the Sv1ClientsMonitoring trait on `Sv1Server`.
 use stratum_apps::monitoring::sv1::{Sv1ClientInfo, Sv1ClientsMonitoring};
 
-use crate::sv1::{downstream::downstream::Downstream, sv1_server::sv1_server::Sv1Server};
+use crate::sv1::{Downstream, Sv1Server};
 
 /// Helper to convert a Downstream to Sv1ClientInfo
 fn downstream_to_sv1_client_info(downstream: &Downstream) -> Option<Sv1ClientInfo> {

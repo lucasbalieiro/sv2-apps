@@ -1,11 +1,8 @@
 use crate::{
     error::{self, TproxyError, TproxyErrorKind},
-    sv2::{
-        channel_manager::channel_manager::{
-            AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES, AGGREGATED_TPROXY_MAX_CHANNELS,
-            NON_AGGREGATED_TPROXY_MAX_CHANNELS,
-        },
-        ChannelManager,
+    sv2::channel_manager::{
+        ChannelManager, AGGREGATED_TPROXY_LOCAL_PREFIX_BYTES, AGGREGATED_TPROXY_MAX_CHANNELS,
+        NON_AGGREGATED_TPROXY_MAX_CHANNELS,
     },
     utils::{AggregatedState, AGGREGATED_CHANNEL_ID},
 };
@@ -360,7 +357,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
             }
         }?;
 
-        self.channel_state
+        self.channel_manager_io
             .sv1_server_sender
             .send((
                 Mining::OpenExtendedMiningChannelSuccess(success.clone()),
@@ -671,7 +668,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         // now we need to send the NewExtendedMiningJob message(s) to the SV1Server
         for message in new_extended_mining_job_messages_sv1_server {
-            self.channel_state
+            self.channel_manager_io
                 .sv1_server_sender
                 .send((Mining::NewExtendedMiningJob(message), None))
                 .await
@@ -842,7 +839,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         // we need to send the SetNewPrevHash message(s) to the SV1Server
         for message in set_new_prev_hash_messages_sv1_server {
-            self.channel_state
+            self.channel_manager_io
                 .sv1_server_sender
                 .send((Mining::SetNewPrevHash(message), None))
                 .await
@@ -854,7 +851,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         // we need to send the NewExtendedMiningJob message(s) to the SV1Server
         for message in new_extended_mining_job_messages_sv1_server {
-            self.channel_state
+            self.channel_manager_io
                 .sv1_server_sender
                 .send((Mining::NewExtendedMiningJob(message), None))
                 .await
@@ -1002,7 +999,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         // now we need to send the SetTarget message(s) to the SV1Server
         for message in set_target_messages_sv1_server {
-            self.channel_state
+            self.channel_manager_io
                 .sv1_server_sender
                 .send((Mining::SetTarget(message), None))
                 .await

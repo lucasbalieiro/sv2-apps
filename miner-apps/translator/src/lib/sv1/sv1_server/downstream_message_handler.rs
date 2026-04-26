@@ -10,8 +10,11 @@ use tracing::{debug, info, warn};
 
 use crate::{
     error,
-    sv1::{downstream::SubmitShareWithChannelId, sv1_server::tlv_compatible_username, Sv1Server},
-    utils::{validate_sv1_share, AGGREGATED_CHANNEL_ID},
+    sv1::Sv1Server,
+    utils::{
+        tlv_compatible_username, validate_sv1_share, SubmitShareWithChannelId,
+        AGGREGATED_CHANNEL_ID,
+    },
 };
 
 // Implements `IsServer` for `Sv1Server` to handle the Sv1 messages.
