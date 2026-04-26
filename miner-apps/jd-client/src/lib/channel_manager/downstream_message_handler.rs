@@ -104,10 +104,7 @@ impl RouteMessageTo<'_> {
     /// - [`RouteMessageTo::JobDeclarator`] → Sends the job declaration message to the JDS.
     /// - [`RouteMessageTo::TemplateProvider`] → Sends the template distribution message to the
     ///   template provider.
-    pub async fn forward(
-        self,
-        channel_manager_io: &ChannelManagerIo,
-    ) -> Result<(), JDCErrorKind> {
+    pub async fn forward(self, channel_manager_io: &ChannelManagerIo) -> Result<(), JDCErrorKind> {
         match self {
             RouteMessageTo::Downstream((downstream_id, message)) => {
                 let sender = channel_manager_io
@@ -122,10 +119,7 @@ impl RouteMessageTo<'_> {
             RouteMessageTo::Upstream(message) => {
                 let message_static = message.into_static();
                 let sv2_frame: Sv2Frame = AnyMessage::Mining(message_static).try_into()?;
-                channel_manager_io
-                    .upstream_sender
-                    .send(sv2_frame)
-                    .await?;
+                channel_manager_io.upstream_sender.send(sv2_frame).await?;
             }
             RouteMessageTo::JobDeclarator(message) => {
                 channel_manager_io

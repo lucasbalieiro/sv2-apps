@@ -3,7 +3,6 @@ use std::{net::SocketAddr, sync::Arc};
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
-    custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     network_helpers::{connect_with_noise, resolve_host},
     stratum_core::{
@@ -29,9 +28,6 @@ use crate::{
 
 mod message_handler;
 
-/// Shared state for Job Declarator
-pub struct JobDeclaratorData;
-
 /// Holds all channels required for Job Declarator communication.
 #[derive(Clone)]
 pub struct JobDeclaratorIo {
@@ -45,8 +41,6 @@ pub struct JobDeclaratorIo {
 #[allow(warnings)]
 #[derive(Clone)]
 pub struct JobDeclarator {
-    /// Internal state
-    job_declarator_data: Arc<Mutex<JobDeclaratorData>>,
     /// Messaging channels to/from the channel manager and JD.
     job_declarator_io: JobDeclaratorIo,
     /// Socket address of the Job Declarator server.
@@ -155,7 +149,7 @@ impl JobDeclarator {
             cancellation_token,
             fallback_coordinator,
         );
-        let job_declarator_data = Arc::new(Mutex::new(JobDeclaratorData));
+
         let job_declarator_io = JobDeclaratorIo {
             channel_manager_receiver,
             channel_manager_sender,
@@ -164,7 +158,6 @@ impl JobDeclarator {
         };
         Ok(JobDeclarator {
             job_declarator_io,
-            job_declarator_data,
             socket_address: addr,
             mode,
         })
@@ -296,12 +289,7 @@ impl JobDeclarator {
 
     // Handles messages coming from the Channel Manager and forwards them to the Job Declarator.
     async fn handle_channel_manager_message(&self) -> JDCResult<(), error::JobDeclarator> {
-        match self
-            .job_declarator_io
-            .channel_manager_receiver
-            .recv()
-            .await
-        {
+        match self.job_declarator_io.channel_manager_receiver.recv().await {
             Ok(msg) => {
                 debug!("Forwarding message from channel manager to JDS.");
                 let message = AnyMessage::JobDeclaration(msg);

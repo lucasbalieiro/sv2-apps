@@ -872,11 +872,8 @@ impl ChannelManager {
     // - After the upstream channel is established, all new downstream requests bypass the pending
     //   mechanism and are sent directly to the mining handler.
     async fn handle_downstream_message(&mut self) -> JDCResult<(), error::ChannelManager> {
-        if let Ok((downstream_id, message, tlvs)) = self
-            .channel_manager_io
-            .downstream_receiver
-            .recv()
-            .await
+        if let Ok((downstream_id, message, tlvs)) =
+            self.channel_manager_io.downstream_receiver.recv().await
         {
             match message {
                 Mining::OpenExtendedMiningChannel(downstream_channel_request) => {

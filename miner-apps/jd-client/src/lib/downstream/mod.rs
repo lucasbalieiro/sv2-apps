@@ -297,11 +297,7 @@ impl Downstream {
 
     // Handles messages sent from the channel manager to this downstream.
     async fn handle_channel_manager_message(self) -> JDCResult<(), error::Downstream> {
-        let (message, _tlv_fields) = match self
-            .downstream_io
-            .channel_manager_receiver
-            .recv()
-            .await
+        let (message, _tlv_fields) = match self.downstream_io.channel_manager_receiver.recv().await
         {
             Ok(msg) => msg,
             Err(e) => {

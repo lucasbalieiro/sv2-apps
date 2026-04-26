@@ -14,7 +14,6 @@ use std::{net::SocketAddr, sync::Arc};
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
-    custom_mutex::Mutex,
     fallback_coordinator::FallbackCoordinator,
     network_helpers::{connect_with_noise, resolve_host},
     stratum_core::{
@@ -38,9 +37,6 @@ use crate::{
 
 mod message_handler;
 
-/// Placeholder for future upstream-specific data/state.
-pub struct UpstreamData;
-
 /// Holds channels for communication between upstream and channel manager.
 ///
 /// - `channel_manager_sender` → sends frames to channel manager
@@ -58,9 +54,6 @@ pub struct UpstreamIo {
 /// Represents an upstream connection (e.g., a pool).
 #[derive(Clone)]
 pub struct Upstream {
-    #[allow(dead_code)]
-    /// Internal state
-    upstream_data: Arc<Mutex<UpstreamData>>,
     /// Messaging channels to/from the channel manager and Upstream.
     upstream_io: UpstreamIo,
     /// Protocol extensions that the JDC requires
@@ -173,7 +166,6 @@ impl Upstream {
         );
 
         debug!("Noise setup done in upstream connection");
-        let upstream_data = Arc::new(Mutex::new(UpstreamData));
         let upstream_io = UpstreamIo {
             channel_manager_receiver,
             channel_manager_sender,
@@ -181,7 +173,6 @@ impl Upstream {
             upstream_receiver: inbound_rx,
         };
         Ok(Upstream {
-            upstream_data,
             upstream_io,
             required_extensions,
             address: addr,
