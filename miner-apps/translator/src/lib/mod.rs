@@ -35,7 +35,6 @@ use config::TranslatorConfig;
 
 use crate::{
     error::TproxyErrorKind,
-    status::{State, Status},
     sv1::Sv1Server,
     sv2::{ChannelManager, Upstream},
     utils::{TproxyMode, UpstreamEntry},
@@ -46,7 +45,6 @@ pub mod error;
 mod io_task;
 #[cfg(feature = "monitoring")]
 mod monitoring;
-pub mod status;
 pub mod sv1;
 #[cfg(feature = "monitoring")]
 mod sv1_monitoring;
@@ -89,7 +87,6 @@ impl TranslatorSv2 {
         let tproxy_mode = TproxyMode::from(self.config.aggregate_channels);
 
         let task_manager = Arc::new(TaskManager::new());
-        let (status_sender, status_receiver) = async_channel::unbounded::<Status>();
 
         let (channel_manager_to_upstream_sender, channel_manager_to_upstream_receiver) =
             unbounded();
@@ -136,7 +133,6 @@ impl TranslatorSv2 {
                 upstream_to_channel_manager_sender.clone(),
                 cancellation_token.clone(),
                 fallback_coordinator.clone(),
-                status_sender.clone(),
                 task_manager.clone(),
                 sv1_server.clone(),
                 self.config.required_extensions.clone(),
@@ -166,7 +162,6 @@ impl TranslatorSv2 {
             channel_manager.clone(),
             cancellation_token.clone(),
             fallback_coordinator.clone(),
-            status_sender.clone(),
             task_manager.clone(),
         )
         .await;
@@ -222,6 +217,8 @@ impl TranslatorSv2 {
             });
         }
 
+        let mut fallback_token = fallback_coordinator.token();
+
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
@@ -232,38 +229,15 @@ impl TranslatorSv2 {
                 _ = cancellation_token.cancelled() => {
                     break;
                 }
-                message = status_receiver.recv() => {
-                    if let Ok(status) = message {
-                        match status.state {
-                            State::DownstreamShutdown{downstream_id,..} => {
-                                warn!("Downstream {downstream_id:?} disconnected — cleaning up sv1_server state.");
-                                // clean up sv1_server state
-                                sv1_server.handle_downstream_disconnect(downstream_id).await;
-                            }
-                            State::Sv1ServerShutdown(_) => {
-                                warn!("SV1 Server shutdown requested — initiating full shutdown.");
-                                cancellation_token.cancel();
-                                break;
-                            }
-                            State::ChannelManagerShutdown(_) => {
-                                warn!("Channel Manager shutdown requested — initiating full shutdown.");
-                                cancellation_token.cancel();
-                                break;
-                            }
-                            State::UpstreamShutdown(msg) => {
-                                warn!("Upstream connection dropped: {msg:?} — attempting reconnection...");
-
+                _ = fallback_token.cancelled() => {
+                    info!("Preparing fallback");
                                 // Trigger fallback and wait for all components to finish cleanup
                                 fallback_coordinator.trigger_fallback_and_wait().await;
                                 info!("All components finished fallback cleanup");
 
-                                // Drain any buffered status messages from old components
-                                while let Ok(old_status) = status_receiver.try_recv() {
-                                    debug!("Draining buffered status message: {:?}", old_status.state);
-                                }
-
                                 // Create a fresh FallbackCoordinator for the reconnection attempt
                                 fallback_coordinator = FallbackCoordinator::new();
+                                fallback_token = fallback_coordinator.token();
 
                                 // Recreate channels and components (old ones were closed during fallback)
                                 let (channel_manager_to_upstream_sender, channel_manager_to_upstream_receiver) =
@@ -289,7 +263,6 @@ impl TranslatorSv2 {
                                     upstream_to_channel_manager_sender,
                                     cancellation_token.clone(),
                                     fallback_coordinator.clone(),
-                                    status_sender.clone(),
                                     task_manager.clone(),
                                     sv1_server.clone(),
                                     self.config.required_extensions.clone(),
@@ -316,7 +289,6 @@ impl TranslatorSv2 {
                                     channel_manager.clone(),
                                     cancellation_token.clone(),
                                     fallback_coordinator.clone(),
-                                    status_sender.clone(),
                                     task_manager.clone(),
                                 )
                                 .await;
@@ -367,9 +339,6 @@ impl TranslatorSv2 {
                                 }
 
                                 info!("Upstream and ChannelManager restarted successfully.");
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -432,7 +401,6 @@ impl TranslatorSv2 {
         upstream_to_channel_manager_sender: Sender<Sv2Frame>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
         sv1_server_instance: Arc<Sv1Server>,
         required_extensions: Vec<u16>,
@@ -466,7 +434,6 @@ impl TranslatorSv2 {
                     channel_manager_to_upstream_receiver.clone(),
                     cancellation_token.clone(),
                     fallback_coordinator.clone(),
-                    status_sender.clone(),
                     task_manager.clone(),
                     required_extensions.clone(),
                 )
@@ -479,7 +446,6 @@ impl TranslatorSv2 {
                             .start(
                                 cancellation_token.clone(),
                                 fallback_coordinator.clone(),
-                                status_sender.clone(),
                                 task_manager.clone(),
                             )
                             .await
@@ -522,7 +488,6 @@ async fn try_initialize_upstream(
     channel_manager_to_upstream_receiver: Receiver<Sv2Frame>,
     cancellation_token: CancellationToken,
     fallback_coordinator: FallbackCoordinator,
-    status_sender: Sender<Status>,
     task_manager: Arc<TaskManager>,
     required_extensions: Vec<u16>,
 ) -> Result<(), TproxyErrorKind> {
@@ -538,12 +503,7 @@ async fn try_initialize_upstream(
     .await?;
 
     upstream
-        .start(
-            cancellation_token,
-            fallback_coordinator,
-            status_sender,
-            task_manager,
-        )
+        .start(cancellation_token, fallback_coordinator, task_manager)
         .await?;
     Ok(())
 }

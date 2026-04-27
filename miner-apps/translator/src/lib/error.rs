@@ -60,6 +60,12 @@ pub enum Action {
     Shutdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopControl {
+    Continue,
+    Break,
+}
+
 impl CanDisconnect for Downstream {}
 impl CanDisconnect for Sv1Server {}
 impl CanDisconnect for ChannelManager {}

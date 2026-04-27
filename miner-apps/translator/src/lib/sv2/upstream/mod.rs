@@ -1,9 +1,8 @@
 pub mod common_message_handler;
 
 use crate::{
-    error::{self, TproxyError, TproxyErrorKind, TproxyResult},
+    error::{self, Action, LoopControl, TproxyError, TproxyErrorKind, TproxyResult},
     io_task::spawn_io_tasks,
-    status::{handle_error, Status, StatusSender},
     utils::UpstreamEntry,
 };
 use async_channel::{unbounded, Receiver, Sender};
@@ -60,7 +59,7 @@ impl UpstreamIo {
     fn drop(&self) {
         debug!("Closing all upstream channels");
         self.upstream_receiver.close();
-        self.upstream_receiver.close();
+        self.upstream_sender.close();
     }
 }
 
@@ -87,6 +86,47 @@ pub struct Upstream {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Upstream {
+    fn handle_error_action(
+        context: &str,
+        e: &TproxyError<error::Upstream>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            other => {
+                warn!(
+                    action = ?other,
+                    error_kind = ?e.kind,
+                    "{context} returned an unhandled action"
+                );
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Creates a new upstream connection by attempting to connect to configured servers.
     ///
     /// This method tries to establish a connection to one of the provided upstream
@@ -223,7 +263,6 @@ impl Upstream {
         mut self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Upstream> {
         let fallback_token: CancellationToken = fallback_coordinator.token();
@@ -246,15 +285,7 @@ impl Upstream {
             }
         }
 
-        // Wrap status sender and start upstream task
-        let wrapped_status_sender = StatusSender::Upstream(status_sender);
-
-        self.run_upstream_task(
-            cancellation_token,
-            fallback_coordinator,
-            wrapped_status_sender,
-            task_manager,
-        )?;
+        self.run_upstream_task(cancellation_token, fallback_coordinator, task_manager)?;
 
         Ok(())
     }
@@ -317,7 +348,8 @@ impl Upstream {
         if !self.required_extensions.is_empty() {
             let require_extensions = RequestExtensions {
                 request_id: 1,
-                requested_extensions: Seq064K::new(self.required_extensions.clone()).unwrap(),
+                requested_extensions: Seq064K::new(self.required_extensions.clone())
+                    .map_err(TproxyError::shutdown)?,
             };
 
             info!(
@@ -402,7 +434,6 @@ impl Upstream {
         mut self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: StatusSender,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Upstream> {
         task_manager.spawn(async move {
@@ -434,12 +465,19 @@ impl Upstream {
                                 debug!("Upstream: received frame.");
                                 if let Err(e) = self.on_upstream_message(frame).await {
                                     error!("Upstream: error while processing message: {e:?}");
-                                    handle_error(&status_sender, e).await;
+                                    if let LoopControl::Break = Self::handle_error_action(
+                                            "Upstream::on_upstream_message",
+                                            &e,
+                                            &cancellation_token,
+                                            &fallback_token,
+                                        ) {
+                                            break;
+                                        }
                                 }
                             }
                             Err(e) => {
                                 error!("Upstream: receiver channel closed unexpectedly: {e}");
-                                handle_error(&status_sender, TproxyError::<error::Upstream>::fallback(e)).await;
+                                fallback_token.cancel();
                                 break;
                             }
                         }
@@ -455,17 +493,15 @@ impl Upstream {
                                     .upstream_sender
                                     .send(sv2_frame)
                                     .await
-                                    .map_err(|e| {
-                                        error!("Upstream: failed to send sv2 frame: {e:?}");
-                                        TproxyError::<error::Upstream>::fallback(TproxyErrorKind::ChannelErrorSender)
-                                    })
                                 {
-                                    handle_error(&status_sender, e).await;
+                                    error!("Upstream: failed to send sv2 frame: {e:?}");
+                                    fallback_token.cancel();
+                                    break;
                                 }
                             }
                             Err(e) => {
                                 error!("Upstream: channel manager receiver closed: {e}");
-                                handle_error(&status_sender, TproxyError::<error::Upstream>::shutdown(e)).await;
+                                cancellation_token.cancel();
                                 break;
                             }
                         }
