@@ -32,27 +32,7 @@ impl ServerMonitoring for ChannelManager {
                         aggregated_extended_channel.get_rollable_extranonce_size();
                     let version_rolling = aggregated_extended_channel.is_version_rolling();
                     let nominal_hashrate = aggregated_extended_channel.get_nominal_hashrate();
-
-                    let mut shares_acknowledged: u32 = 0;
-                    let mut shares_submitted: u32 = 0;
-                    let mut shares_rejected: u32 = 0;
-                    let mut share_work_sum: f64 = 0.0;
-                    let mut best_diff: f64 = 0.0;
-                    let mut blocks_found: u32 = 0;
-
-                    for entry in self.extended_channels.iter() {
-                        let share_accounting = entry.get_share_accounting();
-                        shares_acknowledged = shares_acknowledged
-                            .saturating_add(share_accounting.get_acknowledged_shares());
-                        shares_submitted = shares_submitted
-                            .saturating_add(share_accounting.get_validated_shares());
-                        shares_rejected =
-                            shares_rejected.saturating_add(share_accounting.get_rejected_shares());
-                        share_work_sum += share_accounting.get_share_work_sum();
-                        best_diff = best_diff.max(share_accounting.get_best_diff());
-                        blocks_found =
-                            blocks_found.saturating_add(share_accounting.get_blocks_found());
-                    }
+                    let share_accounting = aggregated_extended_channel.get_share_accounting();
 
                     extended_channels.push(ServerExtendedChannelInfo {
                         channel_id,
@@ -63,12 +43,12 @@ impl ServerMonitoring for ChannelManager {
                         full_extranonce_size,
                         rollable_extranonce_size,
                         version_rolling,
-                        shares_acknowledged,
-                        shares_submitted,
-                        shares_rejected,
-                        share_work_sum,
-                        best_diff,
-                        blocks_found,
+                        shares_acknowledged: share_accounting.get_acknowledged_shares(),
+                        shares_submitted: share_accounting.get_validated_shares(),
+                        shares_rejected: share_accounting.get_rejected_shares(),
+                        share_work_sum: share_accounting.get_share_work_sum(),
+                        best_diff: share_accounting.get_best_diff(),
+                        blocks_found: share_accounting.get_blocks_found(),
                     });
                 }
             }
@@ -112,5 +92,78 @@ impl ServerMonitoring for ChannelManager {
             extended_channels,
             standard_channels,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_channel::unbounded;
+    use stratum_apps::stratum_core::{
+        bitcoin::Target,
+        channels_sv2::{client::extended::ExtendedChannel, extranonce_manager::ExtranoncePrefix},
+    };
+
+    fn create_test_channel_manager() -> ChannelManager {
+        let (upstream_sender, _upstream_receiver) = unbounded();
+        let (_upstream_sender2, upstream_receiver) = unbounded();
+        let (sv1_server_sender, _sv1_server_receiver) = unbounded();
+        let (_sv1_server_sender2, sv1_server_receiver) = unbounded();
+
+        ChannelManager::new(
+            upstream_sender,
+            upstream_receiver,
+            sv1_server_sender,
+            sv1_server_receiver,
+            vec![],
+            vec![],
+            TproxyMode::Aggregated,
+            true,
+        )
+    }
+
+    fn create_extended_channel(channel_id: u32, user_identity: &str) -> ExtendedChannel<'static> {
+        let prefix = ExtranoncePrefix::from_wire(vec![0x01, channel_id as u8]).unwrap();
+        ExtendedChannel::new(
+            channel_id,
+            user_identity.to_string(),
+            prefix,
+            Target::from_le_bytes([0xff; 32]),
+            1.0,
+            true,
+            4,
+        )
+    }
+
+    #[test]
+    fn aggregated_monitoring_uses_only_upstream_channel_accounting() {
+        let manager = create_test_channel_manager();
+
+        manager.extended_channels.insert(
+            AGGREGATED_CHANNEL_ID,
+            create_extended_channel(42, "upstream"),
+        );
+        manager
+            .extended_channels
+            .insert(7, create_extended_channel(7, "downstream"));
+
+        manager
+            .extended_channels
+            .get_mut(&AGGREGATED_CHANNEL_ID)
+            .unwrap()
+            .on_share_acknowledgement(2, 10.0);
+        manager
+            .extended_channels
+            .get_mut(&7)
+            .unwrap()
+            .on_share_acknowledgement(5, 25.0);
+
+        let server = manager.get_server();
+        let aggregated = server.extended_channels.first().unwrap();
+
+        assert_eq!(server.extended_channels.len(), 1);
+        assert_eq!(aggregated.channel_id, 42);
+        assert_eq!(aggregated.shares_acknowledged, 2);
+        assert_eq!(aggregated.share_work_sum, 10.0);
     }
 }

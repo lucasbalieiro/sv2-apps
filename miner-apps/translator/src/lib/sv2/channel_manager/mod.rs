@@ -477,68 +477,61 @@ impl ChannelManager {
                     })?;
             }
             Mining::SubmitSharesExtended(mut m) => {
-                let value =
-                    self.extended_channels
-                        .get_mut(&m.channel_id)
-                        .map(|mut extended_channel| {
-                            (
-                                extended_channel.validate_share(m.clone()),
-                                extended_channel.get_share_accounting().clone(),
-                            )
-                        });
-                if let Some((Ok(_result), _share_accounting)) = value {
-                    if self.mode.is_aggregated()
-                        && self.extended_channels.contains_key(&AGGREGATED_CHANNEL_ID)
+                if self.mode.is_aggregated()
+                    && self.extended_channels.contains_key(&AGGREGATED_CHANNEL_ID)
+                {
+                    let downstream_channel_id = m.channel_id;
+                    let downstream_extranonce_prefix = self
+                        .extended_channels
+                        .get(&downstream_channel_id)
+                        .map(|channel| channel.get_extranonce_prefix().to_vec());
+                    let upstream_prefix_len =
+                        self.aggregated_extranonce_allocator
+                            .super_safe_lock(|allocator| {
+                                allocator.as_ref().map(|a| a.upstream_prefix_len() as usize)
+                            });
+                    if let (Some(downstream_extranonce_prefix), Some(upstream_prefix_len)) =
+                        (downstream_extranonce_prefix, upstream_prefix_len)
                     {
-                        let upstream_extended_channel_id = self
-                            .extended_channels
-                            .get(&AGGREGATED_CHANNEL_ID)
-                            .map(|ch| ch.get_channel_id())
-                            .unwrap();
+                        // Skip the upstream prefix and keep only the
+                        // translator-managed local bytes before appending the
+                        // miner-supplied extranonce.
+                        let translator_prefix =
+                            &downstream_extranonce_prefix[upstream_prefix_len..];
+                        let mut new_extranonce = translator_prefix.to_vec();
+                        new_extranonce.extend_from_slice(m.extranonce.as_ref());
+                        m.extranonce = new_extranonce.try_into().map_err(TproxyError::shutdown)?;
+                    }
+
+                    let upstream_extended_channel_id = self
+                        .extended_channels
+                        .get(&AGGREGATED_CHANNEL_ID)
+                        .map(|ch| ch.get_channel_id())
+                        .unwrap();
+                    m.channel_id = upstream_extended_channel_id;
+
+                    let value = self
+                        .extended_channels
+                        .get_mut(&AGGREGATED_CHANNEL_ID)
+                        .map(|mut aggregated_channel| aggregated_channel.validate_share(m.clone()));
+                    if let Some(Ok(_result)) = value {
                         info!(
-                        "SubmitSharesExtended: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {} ☑️",
+                            "SubmitSharesExtended: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {} ☑️",
                             upstream_extended_channel_id, m.sequence_number
                         );
 
                         // In aggregated mode, use a single sequence counter for all valid shares
                         m.sequence_number =
                             self.next_share_sequence_number(upstream_extended_channel_id);
-                        // The downstream channel's extranonce prefix has the
-                        // shape `[upstream_prefix][local_prefix (padding)][local_index]`.
-                        // To rebuild the share for upstream forwarding we
-                        // strip only the `upstream_prefix` bytes and keep the
-                        // padding + local_index as the translator's
-                        // contribution. The allocator tracks the true
-                        // upstream_prefix length for us.
-                        let downstream_extranonce_prefix = self
-                            .extended_channels
-                            .get(&m.channel_id)
-                            .map(|channel| channel.get_extranonce_prefix().to_vec());
-                        let upstream_prefix_len = self
-                            .aggregated_extranonce_allocator
-                            .super_safe_lock(|allocator| {
-                                allocator.as_ref().map(|a| a.upstream_prefix_len() as usize)
-                            });
-                        if let (Some(downstream_extranonce_prefix), Some(upstream_prefix_len)) =
-                            (downstream_extranonce_prefix, upstream_prefix_len)
-                        {
-                            // Skip the upstream prefix and take the remaining bytes
-                            // (the translator's local prefix).
-                            let translator_prefix =
-                                &downstream_extranonce_prefix[upstream_prefix_len..];
-                            // Create new extranonce: translator proxy prefix + miner's
-                            // extranonce
-                            let mut new_extranonce = translator_prefix.to_vec();
-                            new_extranonce.extend_from_slice(m.extranonce.as_ref());
-                            // Replace the original extranonce with the modified one for
-                            // upstream submission
-                            m.extranonce =
-                                new_extranonce.try_into().map_err(TproxyError::shutdown)?;
-                        }
-                        // We need to set the channel id to the upstream extended
-                        // channel id
-                        m.channel_id = upstream_extended_channel_id;
                     } else {
+                        return Ok(());
+                    }
+                } else {
+                    let value = self
+                        .extended_channels
+                        .get_mut(&m.channel_id)
+                        .map(|mut extended_channel| extended_channel.validate_share(m.clone()));
+                    if let Some(Ok(_result)) = value {
                         info!(
                             "SubmitSharesExtended: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {} ☑️",
                             m.channel_id, m.sequence_number
@@ -573,75 +566,89 @@ impl ChannelManager {
                             m.extranonce =
                                 new_extranonce.try_into().map_err(TproxyError::shutdown)?;
                         }
+                    } else {
+                        return Ok(());
                     }
+                }
 
-                    // Send the share upstream (common for both aggregated and non-aggregated modes)
-                    let contains_type_in_negotiated_extension =
-                        self.negotiated_extensions.super_safe_lock(|data| {
-                            data.contains(&EXTENSION_TYPE_WORKER_HASHRATE_TRACKING)
-                        });
+                // Send the share upstream (common for both aggregated and non-aggregated modes)
+                let contains_type_in_negotiated_extension =
+                    self.negotiated_extensions.super_safe_lock(|data| {
+                        data.contains(&EXTENSION_TYPE_WORKER_HASHRATE_TRACKING)
+                    });
 
-                    // Check if we should try to include TLV fields
-                    let should_send_with_tlv =
-                        contains_type_in_negotiated_extension && tlv_fields.is_some();
+                // Check if we should try to include TLV fields
+                let should_send_with_tlv =
+                    contains_type_in_negotiated_extension && tlv_fields.is_some();
 
-                    let mut sent = false;
-                    if should_send_with_tlv {
-                        info!(
-                            "TLV fields in Channel Manager: {:?}",
-                            tlv_fields.clone().unwrap()
-                        );
-                        // Create frame bytes with TLVs
-                        let user_identity_tlv = tlv_fields.and_then(|tlvs| {
-                            tlvs.iter()
-                                .find(|tlv| {
-                                    tlv.r#type.extension_type
-                                        == EXTENSION_TYPE_WORKER_HASHRATE_TRACKING
-                                        && tlv.r#type.field_type == TLV_FIELD_TYPE_USER_IDENTITY
-                                })
-                                .cloned()
-                        });
+                let mut sent = false;
+                if should_send_with_tlv {
+                    info!(
+                        "TLV fields in Channel Manager: {:?}",
+                        tlv_fields.clone().unwrap()
+                    );
+                    // Create frame bytes with TLVs
+                    let user_identity_tlv = tlv_fields.and_then(|tlvs| {
+                        tlvs.iter()
+                            .find(|tlv| {
+                                tlv.r#type.extension_type == EXTENSION_TYPE_WORKER_HASHRATE_TRACKING
+                                    && tlv.r#type.field_type == TLV_FIELD_TYPE_USER_IDENTITY
+                            })
+                            .cloned()
+                    });
 
-                        if let Some(tlv) = user_identity_tlv {
-                            let tlv_list = TlvList::from_slice(&[tlv]).map_err(|e| {
-                                error!("Failed to create TLV list: {:?}", e);
+                    if let Some(tlv) = user_identity_tlv {
+                        let tlv_list = TlvList::from_slice(&[tlv]).map_err(|e| {
+                            error!("Failed to create TLV list: {:?}", e);
+                            TproxyError::shutdown(e)
+                        })?;
+                        let frame_bytes = tlv_list
+                            .build_frame_bytes_with_tlvs(Mining::SubmitSharesExtended(m.clone()))
+                            .map_err(|e| {
+                                error!("Failed to build frame bytes with TLVs: {:?}", e);
                                 TproxyError::shutdown(e)
                             })?;
-                            let frame_bytes = tlv_list
-                                .build_frame_bytes_with_tlvs(Mining::SubmitSharesExtended(
-                                    m.clone(),
-                                ))
-                                .map_err(|e| {
-                                    error!("Failed to build frame bytes with TLVs: {:?}", e);
-                                    TproxyError::shutdown(e)
-                                })?;
-                            // Convert to StandardSv2Frame with proper buffer type
-                            let sv2_frame = StandardSv2Frame::from_bytes(frame_bytes.into())
-                                .map_err(|missing| {
-                                    error!(
-                                        "Failed to convert frame bytes to StandardSv2Frame: {}",
-                                        missing
-                                    );
-                                    TproxyError::shutdown(framing_sv2::Error::ExpectedSv2Frame)
-                                })?;
-                            self.channel_manager_io.upstream_sender.send(sv2_frame).await.map_err(|e| {
-                                error!("Failed to send submit shares extended message to upstream: {:?}", e);
+                        // Convert to StandardSv2Frame with proper buffer type
+                        let sv2_frame = StandardSv2Frame::from_bytes(frame_bytes.into()).map_err(
+                            |missing| {
+                                error!(
+                                    "Failed to convert frame bytes to StandardSv2Frame: {}",
+                                    missing
+                                );
+                                TproxyError::shutdown(framing_sv2::Error::ExpectedSv2Frame)
+                            },
+                        )?;
+                        self.channel_manager_io
+                            .upstream_sender
+                            .send(sv2_frame)
+                            .await
+                            .map_err(|e| {
+                                error!(
+                                    "Failed to send submit shares extended message to upstream: {:?}",
+                                    e
+                                );
                                 TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
                             })?;
-                            sent = true;
-                        }
+                        sent = true;
                     }
+                }
 
-                    if !sent {
-                        let message = Mining::SubmitSharesExtended(m);
-                        let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
-                            .try_into()
-                            .map_err(TproxyError::shutdown)?;
-                        self.channel_manager_io.upstream_sender.send(sv2_frame).await.map_err(|e| {
-                            error!("Failed to send submit shares extended message to upstream: {:?}", e);
+                if !sent {
+                    let message = Mining::SubmitSharesExtended(m);
+                    let sv2_frame: Sv2Frame = AnyMessage::Mining(message)
+                        .try_into()
+                        .map_err(TproxyError::shutdown)?;
+                    self.channel_manager_io
+                        .upstream_sender
+                        .send(sv2_frame)
+                        .await
+                        .map_err(|e| {
+                            error!(
+                                "Failed to send submit shares extended message to upstream: {:?}",
+                                e
+                            );
                             TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
                         })?;
-                    }
                 }
             }
             Mining::UpdateChannel(mut m) => {
