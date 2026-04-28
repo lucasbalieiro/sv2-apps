@@ -1,7 +1,7 @@
 //! Helpers for querying and asserting on Prometheus metrics and JSON API endpoints
 //! exposed by SV2 components during integration tests.
 
-use std::net::SocketAddr;
+use std::{collections::HashMap, fmt, net::SocketAddr};
 
 /// Fetch the raw Prometheus text-format metrics from a component's `/metrics` endpoint.
 /// Uses `spawn_blocking` to avoid blocking the tokio runtime with synchronous HTTP calls.
@@ -27,52 +27,153 @@ pub async fn fetch_api(monitoring_addr: SocketAddr, path: &str) -> String {
     .expect("spawn_blocking for fetch_api panicked")
 }
 
-/// Parse a specific metric value from Prometheus text format.
-/// Returns `None` if the metric line is not found.
+/// A Prometheus metric selector: a metric name plus an optional set of label matchers.
 ///
-/// For simple gauges/counters (no labels), pass `metric_name` like `"sv2_clients_total"`.
-/// For labeled metrics, pass the full label selector like
-/// `"sv2_server_channels{channel_type=\"extended\"}"`.
-pub(crate) fn parse_metric_value(metrics_text: &str, metric_name: &str) -> Option<f64> {
+/// Label matching is order-independent — the selector matches any exposition line
+/// whose label set is a superset of the requested labels. A selector with no labels
+/// matches any line for that metric (bare or labeled).
+///
+/// # Examples
+///
+/// ```
+/// # use integration_tests_sv2::prometheus_metrics_assertions::Metric;
+/// // Bare name (implicit via From<&str>):
+/// let _: Metric = "sv2_clients_total".into();
+///
+/// // Specific labeled series:
+/// let _ = Metric::with_labels(
+///     "sv2_server_shares_accepted_total",
+///     &[("channel_id", "1"), ("user_identity", "user1")],
+/// );
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct Metric<'a> {
+    pub name: &'a str,
+    pub labels: &'a [(&'a str, &'a str)],
+}
+
+impl<'a> Metric<'a> {
+    /// Create a selector for a metric by bare name (matches any labels).
+    pub const fn new(name: &'a str) -> Self {
+        Self { name, labels: &[] }
+    }
+
+    /// Create a selector with specific label matchers. Matches lines whose label
+    /// set is a superset of `labels`, regardless of label ordering.
+    pub const fn with_labels(name: &'a str, labels: &'a [(&'a str, &'a str)]) -> Self {
+        Self { name, labels }
+    }
+
+    /// Try to match a single Prometheus exposition line. Returns the parsed value
+    /// if the line matches this selector, otherwise `None`.
+    fn match_line(&self, line: &str) -> Option<f64> {
+        let rest = line.strip_prefix(self.name)?;
+        // The name must be a complete token: next char is whitespace, '{', or EOL.
+        // This prevents e.g. `sv2_clients_total_extra` from matching `sv2_clients_total`.
+        let is_labeled = rest.starts_with('{');
+        let is_bare = rest.chars().next().is_none_or(|c| c.is_ascii_whitespace());
+        if !is_labeled && !is_bare {
+            return None;
+        }
+
+        // Parse the labels (if any) and the value portion.
+        let (line_labels, value_part) = if is_labeled {
+            let inner = rest.strip_prefix('{')?;
+            let (block, after) = inner.split_once('}')?;
+            (parse_label_block(block), after)
+        } else {
+            (HashMap::new(), rest)
+        };
+
+        // Selector labels must all appear on the line with matching values.
+        for (k, v) in self.labels {
+            if line_labels.get(*k).map(String::as_str) != Some(*v) {
+                return None;
+            }
+        }
+
+        value_part.split_whitespace().next()?.parse().ok()
+    }
+}
+
+impl<'a> From<&'a str> for Metric<'a> {
+    fn from(name: &'a str) -> Self {
+        Metric::new(name)
+    }
+}
+
+impl fmt::Display for Metric<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name)?;
+        if !self.labels.is_empty() {
+            f.write_str("{")?;
+            for (i, (k, v)) in self.labels.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(",")?;
+                }
+                write!(f, "{}=\"{}\"", k, v)?;
+            }
+            f.write_str("}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Parse the inside of a Prometheus label block like `k1="v1",k2="v2"` into a map.
+/// Supports the subset emitted by the `prometheus` crate: simple `k="v"` pairs with
+/// no escape sequences in values (sufficient for our metrics).
+fn parse_label_block(block: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let block = block.trim();
+    if block.is_empty() {
+        return out;
+    }
+    for pair in block.split(',') {
+        let pair = pair.trim();
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let v = v.trim().trim_start_matches('"').trim_end_matches('"');
+        out.insert(k.trim().to_string(), v.to_string());
+    }
+    out
+}
+
+/// Parse a specific metric value from Prometheus text format.
+/// Returns `None` if no line matches the selector.
+pub(crate) fn parse_metric_value<'a, M: Into<Metric<'a>>>(
+    metrics_text: &str,
+    metric: M,
+) -> Option<f64> {
+    let metric = metric.into();
     for line in metrics_text.lines() {
         if line.starts_with('#') {
             continue;
         }
-        if let Some(rest) = line.strip_prefix(metric_name) {
-            let rest = rest.trim();
-            if rest.is_empty() {
-                continue;
-            }
-            // Bare metric (no labels): value follows directly after the name
-            if rest.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
-                return rest.parse::<f64>().ok();
-            }
-            // Labeled metric: skip past the closing brace to get the value
-            if rest.starts_with('{') {
-                if let Some(brace_end) = rest.find('}') {
-                    let value_str = rest[brace_end + 1..].trim();
-                    return value_str.parse::<f64>().ok();
-                }
-            }
+        if let Some(v) = metric.match_line(line) {
+            return Some(v);
         }
     }
     None
 }
 
 /// Assert that a metric is present and its value satisfies the given predicate.
-pub(crate) fn assert_metric<F: Fn(f64) -> bool>(
+pub(crate) fn assert_metric<'a, M, F>(
     metrics_text: &str,
-    metric_name: &str,
+    metric: M,
     predicate: F,
     description: &str,
-) {
-    let value = parse_metric_value(metrics_text, metric_name);
-    match value {
+) where
+    M: Into<Metric<'a>>,
+    F: Fn(f64) -> bool,
+{
+    let metric = metric.into();
+    match parse_metric_value(metrics_text, metric) {
         Some(v) => {
             assert!(
                 predicate(v),
                 "Metric '{}' has value {} but expected: {}",
-                metric_name,
+                metric,
                 v,
                 description
             );
@@ -80,83 +181,80 @@ pub(crate) fn assert_metric<F: Fn(f64) -> bool>(
         None => {
             panic!(
                 "Metric '{}' not found in metrics output. Expected: {}",
-                metric_name, description
+                metric, description
             );
         }
     }
 }
 
 /// Assert that a metric is present with a value >= the given minimum.
-pub fn assert_metric_gte(metrics_text: &str, metric_name: &str, min: f64) {
-    assert_metric(
-        metrics_text,
-        metric_name,
-        |v| v >= min,
-        &format!(">= {}", min),
-    );
+pub fn assert_metric_gte<'a, M: Into<Metric<'a>>>(metrics_text: &str, metric: M, min: f64) {
+    assert_metric(metrics_text, metric, |v| v >= min, &format!(">= {}", min));
 }
 
 /// Assert that a metric is present with the exact given value.
-pub fn assert_metric_eq(metrics_text: &str, metric_name: &str, expected: f64) {
+pub fn assert_metric_eq<'a, M: Into<Metric<'a>>>(metrics_text: &str, metric: M, expected: f64) {
     assert_metric(
         metrics_text,
-        metric_name,
+        metric,
         |v| (v - expected).abs() < f64::EPSILON,
         &format!("== {}", expected),
     );
 }
 
-/// Assert that a metric name does NOT appear in the metrics output at all.
-pub fn assert_metric_not_present(metrics_text: &str, metric_name: &str) {
+/// Assert that no exposition line matches the selector.
+///
+/// For a bare-name selector (`Metric::new("name")` or `"name".into()`), this means
+/// the metric name does not appear at all. For a labeled selector, it means no line
+/// with matching labels exists — other series for the same metric name are allowed.
+pub fn assert_metric_not_present<'a, M: Into<Metric<'a>>>(metrics_text: &str, metric: M) {
+    let metric = metric.into();
     for line in metrics_text.lines() {
         if line.starts_with('#') {
             continue;
         }
-        if let Some(rest) = line.strip_prefix(metric_name) {
-            // Make sure it's an exact match (not a prefix of another metric name)
-            if rest.starts_with(' ') || rest.starts_with('{') {
-                panic!(
-                    "Metric '{}' was found in metrics output but was expected to be absent. Line: {}",
-                    metric_name, line
-                );
-            }
+        if metric.match_line(line).is_some() {
+            panic!(
+                "Metric '{}' was found in metrics output but was expected to be absent. Line: {}",
+                metric, line
+            );
         }
     }
 }
 
-/// Assert that a metric name appears at least once in the metrics output (with any label/value).
-pub fn assert_metric_present(metrics_text: &str, metric_name: &str) {
+/// Assert that at least one exposition line matches the selector.
+pub fn assert_metric_present<'a, M: Into<Metric<'a>>>(metrics_text: &str, metric: M) {
+    let metric = metric.into();
     for line in metrics_text.lines() {
         if line.starts_with('#') {
             continue;
         }
-        if let Some(rest) = line.strip_prefix(metric_name) {
-            if rest.starts_with(' ') || rest.starts_with('{') {
-                return;
-            }
+        if metric.match_line(line).is_some() {
+            return;
         }
     }
     panic!(
         "Metric '{}' was expected to be present but was not found in metrics output",
-        metric_name
+        metric
     );
 }
 
-/// Poll `/metrics` until `metric_name` is present with a value >= `min`, or panic after
+/// Poll `/metrics` until a line matching `metric` has value >= `min`, or panic after
 /// `timeout`. Polls every 100ms to react quickly while tolerating cache refresh jitter.
 ///
 /// Returns the full metrics text from the successful scrape so callers can make additional
 /// assertions without a second fetch.
-pub async fn poll_until_metric_gte(
+pub async fn poll_until_metric_gte<'a, M: Into<Metric<'a>>>(
     monitoring_addr: SocketAddr,
-    metric_name: &str,
+    metric: M,
     min: f64,
     timeout: std::time::Duration,
 ) -> String {
+    let metric = metric.into();
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let metrics = fetch_metrics(monitoring_addr).await;
-        if let Some(v) = parse_metric_value(&metrics, metric_name) {
+        if let Some(v) = parse_metric_value(&metrics, metric) {
             if v >= min {
                 return metrics;
             }
@@ -164,7 +262,7 @@ pub async fn poll_until_metric_gte(
         if tokio::time::Instant::now() >= deadline {
             panic!(
                 "Metric '{}' never reached >= {} within {:?}. Last /metrics response:\n{}",
-                metric_name, min, timeout, metrics
+                metric, min, timeout, metrics
             );
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -227,16 +325,66 @@ sv2_client_shares_accepted_total{channel_id="1",user_identity="user1"} 5
         assert_eq!(
             parse_metric_value(
                 SAMPLE_METRICS,
-                "sv2_server_channels{channel_type=\"extended\"}"
+                Metric::with_labels("sv2_server_channels", &[("channel_type", "extended")])
             ),
             Some(1.0)
         );
         assert_eq!(
             parse_metric_value(
                 SAMPLE_METRICS,
-                "sv2_server_channels{channel_type=\"standard\"}"
+                Metric::with_labels("sv2_server_channels", &[("channel_type", "standard")])
             ),
             Some(0.0)
+        );
+    }
+
+    #[test]
+    fn test_label_order_independence() {
+        // Selector requesting labels in opposite order to the exposition line
+        // must still match — the prometheus crate emits in BTreeMap order today,
+        // but tests should not silently break if that ever changes.
+        assert_eq!(
+            parse_metric_value(
+                SAMPLE_METRICS,
+                Metric::with_labels(
+                    "sv2_client_shares_accepted_total",
+                    &[("user_identity", "user1"), ("channel_id", "1")],
+                )
+            ),
+            Some(5.0)
+        );
+    }
+
+    #[test]
+    fn test_label_subset_match() {
+        // Querying only a subset of labels still matches.
+        assert_eq!(
+            parse_metric_value(
+                SAMPLE_METRICS,
+                Metric::with_labels("sv2_client_shares_accepted_total", &[("channel_id", "1")])
+            ),
+            Some(5.0)
+        );
+    }
+
+    #[test]
+    fn test_label_mismatch_returns_none() {
+        assert_eq!(
+            parse_metric_value(
+                SAMPLE_METRICS,
+                Metric::with_labels("sv2_server_channels", &[("channel_type", "nonexistent")])
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_bare_selector_matches_labeled_line() {
+        // A bare-name selector matches any series for that metric (returns the
+        // first one found).
+        assert_eq!(
+            parse_metric_value(SAMPLE_METRICS, "sv2_server_channels"),
+            Some(1.0)
         );
     }
 
