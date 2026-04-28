@@ -4,6 +4,7 @@
 //! An app typically has one server connection with one or more channels.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use utoipa::ToSchema;
 
 /// Information about an extended channel opened with the server
@@ -20,7 +21,7 @@ pub struct ServerExtendedChannelInfo {
     pub version_rolling: bool,
     pub shares_acknowledged: u32,
     pub shares_submitted: u32,
-    pub shares_rejected: u32,
+    pub shares_rejected: HashMap<String, u32>,
     pub share_work_sum: f64,
     pub best_diff: f64,
     pub blocks_found: u32,
@@ -37,7 +38,7 @@ pub struct ServerStandardChannelInfo {
     pub extranonce_prefix_hex: String,
     pub shares_acknowledged: u32,
     pub shares_submitted: u32,
-    pub shares_rejected: u32,
+    pub shares_rejected: HashMap<String, u32>,
     pub share_work_sum: f64,
     pub best_diff: f64,
     pub blocks_found: u32,
@@ -117,7 +118,7 @@ mod tests {
             rollable_extranonce_size: 4,
             version_rolling: true,
             shares_acknowledged: 10,
-            shares_rejected: 0,
+            shares_rejected: HashMap::new(),
             share_work_sum: 100.0,
             shares_submitted: 12,
             best_diff: 50.0,
@@ -137,7 +138,7 @@ mod tests {
             extranonce_prefix_hex: "bb".into(),
             shares_acknowledged: 20,
             shares_submitted: 22,
-            shares_rejected: 1,
+            shares_rejected: HashMap::from([("duplicate-share".to_string(), 1)]),
             share_work_sum: 200.0,
             best_diff: 80.0,
             blocks_found: 0,

@@ -931,6 +931,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use http_body_util::BodyExt;
+    use std::collections::HashMap;
     use tower::ServiceExt;
 
     // ── helpers ──────────────────────────────────────────────────────
@@ -997,7 +998,7 @@ mod tests {
             rollable_extranonce_size: 4,
             version_rolling: true,
             shares_acknowledged: 10,
-            shares_rejected: 0,
+            shares_rejected: HashMap::new(),
             share_work_sum: 100.0,
             shares_submitted: 12,
             best_diff: 50.0,
@@ -1017,7 +1018,7 @@ mod tests {
             extranonce_prefix_hex: "bb".into(),
             shares_acknowledged: 20,
             shares_submitted: 22,
-            shares_rejected: 1,
+            shares_rejected: HashMap::from([("duplicate-share".to_string(), 1)]),
             share_work_sum: 200.0,
             best_diff: 80.0,
             blocks_found: 0,

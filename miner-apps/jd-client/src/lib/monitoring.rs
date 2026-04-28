@@ -26,6 +26,7 @@ impl ServerMonitoring for ChannelManager {
                     let extranonce_prefix = upstream_channel.get_extranonce_prefix();
                     let user_identity = upstream_channel.get_user_identity();
                     let share_accounting = upstream_channel.get_share_accounting();
+                    let shares_rejected = share_accounting.get_rejected_shares().clone();
 
                     extended_channels.push(ServerExtendedChannelInfo {
                         channel_id,
@@ -38,7 +39,7 @@ impl ServerMonitoring for ChannelManager {
                         version_rolling: upstream_channel.is_version_rolling(),
                         shares_acknowledged: share_accounting.get_acknowledged_shares(),
                         shares_submitted: share_accounting.get_validated_shares(),
-                        shares_rejected: share_accounting.get_rejected_shares(),
+                        shares_rejected,
                         share_work_sum: share_accounting.get_share_work_sum(),
                         best_diff: share_accounting.get_best_diff(),
                         blocks_found: share_accounting.get_blocks_found(),
