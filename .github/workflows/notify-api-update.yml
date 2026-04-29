@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'stratum-apps/src/monitoring/openapi.json'
+  workflow_dispatch:
 
 jobs:
   create-issue:
@@ -47,12 +48,12 @@ jobs:
               repo: 'sv2-ui',
               title: `Monitoring API updated in PR #${prNumber}`,
               body: `## Summary
-The monitoring API schema was updated in [PR #${prNumber}](${apiUrl}).
+              The monitoring API schema was updated in [PR #${prNumber}](${apiUrl}).
 
-## Action Required
-- [ ] Adapt UI components to the new API structure
-- [ ] Verify all monitoring endpoints work correctly
-- [ ] Test with real mining data if applicable
-`,
+              ## Action Required
+              - [ ] Adapt UI components to the new API structure
+              - [ ] Verify all monitoring endpoints work correctly
+              - [ ] Test with real mining data if applicable
+              `,
               labels: ['monitoring-api-change']
             });
