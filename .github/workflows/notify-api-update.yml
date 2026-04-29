@@ -33,7 +33,7 @@ jobs:
             const apiUrl = `${context.serverUrl}/${owner}/${repo}/pull/${prNumber}`;
 
             const { data: issues } = await github.rest.issues.listForRepo({
-              owner: 'stratum-mining',
+              owner: 'lucasbalieiro',
               repo: 'sv2-ui',
               labels: 'monitoring-api-change',
               state: 'open'
@@ -43,7 +43,7 @@ jobs:
             if (exists) return;
 
             await github.rest.issues.create({
-              owner: 'stratum-mining',
+              owner: 'lucasbalieiro',
               repo: 'sv2-ui',
               title: `Monitoring API updated in PR #${prNumber}`,
               body: `## Summary
