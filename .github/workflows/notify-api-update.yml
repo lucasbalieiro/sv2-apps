@@ -1,0 +1,58 @@
+name: Notify Monitoring API Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stratum-apps/src/monitoring/openapi.json'
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create Issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: context.sha
+            });
+
+            const prNumber = prs[0]?.number;
+
+            if (!prNumber) {
+              core.setFailed("No PR associated with this push");
+              return;
+            }
+
+            const apiUrl = `${context.serverUrl}/${owner}/${repo}/pull/${prNumber}`;
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: 'stratum-mining',
+              repo: 'sv2-ui',
+              labels: 'monitoring-api-change',
+              state: 'open'
+            });
+
+            const exists = issues.find(i => i.title.includes(`#${prNumber}`));
+            if (exists) return;
+
+            await github.rest.issues.create({
+              owner: 'stratum-mining',
+              repo: 'sv2-ui',
+              title: `Monitoring API updated in PR #${prNumber}`,
+              body: `## Summary
+The monitoring API schema was updated in [PR #${prNumber}](${apiUrl}).
+
+## Action Required
+- [ ] Adapt UI components to the new API structure
+- [ ] Verify all monitoring endpoints work correctly
+- [ ] Test with real mining data if applicable
+`,
+              labels: ['monitoring-api-change']
+            });
