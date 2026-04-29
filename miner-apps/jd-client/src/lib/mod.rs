@@ -323,21 +323,28 @@ impl JobDeclaratorClient {
             };
         }
 
-        _ = channel_manager_clone
-            .clone()
-            .start_downstream_server(
-                *self.config.authority_public_key(),
-                *self.config.authority_secret_key(),
-                self.config.cert_validity_sec(),
-                *self.config.listening_address(),
-                task_manager.clone(),
-                self.cancellation_token.clone(),
-                fallback_coordinator.clone(),
-                downstream_to_channel_manager_sender.clone(),
-                self.config.supported_extensions().to_vec(),
-                self.config.required_extensions().to_vec(),
-            )
-            .await;
+        task_manager.spawn({
+            let config = self.config.clone();
+            let cancellation_token = self.cancellation_token.clone();
+            let task_manager = task_manager.clone();
+            let fallback_coordinator = fallback_coordinator.clone();
+            async move {
+                _ = initial_channel_manager
+                    .start_downstream_server(
+                        *config.authority_public_key(),
+                        *config.authority_secret_key(),
+                        config.cert_validity_sec(),
+                        *config.listening_address(),
+                        task_manager,
+                        cancellation_token,
+                        fallback_coordinator,
+                        downstream_to_channel_manager_sender,
+                        config.supported_extensions().to_vec(),
+                        config.required_extensions().to_vec(),
+                    )
+                    .await;
+            }
+        });
 
         info!("Spawning status listener task...");
         let mut fallback_token = fallback_coordinator.token();
