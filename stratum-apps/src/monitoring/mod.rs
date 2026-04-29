@@ -20,7 +20,7 @@ pub use client::{
     ExtendedChannelInfo, StandardChannelInfo, Sv2ClientInfo, Sv2ClientMetadata,
     Sv2ClientsMonitoring, Sv2ClientsSummary,
 };
-pub use http_server::MonitoringServer;
+pub use http_server::{ApiDoc, MonitoringServer};
 pub use server::{
     ServerExtendedChannelInfo, ServerInfo, ServerMonitoring, ServerStandardChannelInfo,
     ServerSummary,
