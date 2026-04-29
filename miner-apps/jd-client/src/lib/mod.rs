@@ -101,7 +101,7 @@ impl JobDeclaratorClient {
 
         debug!("Channels initialized.");
 
-        let mut channel_manager = ChannelManager::new(
+        let channel_manager = ChannelManager::new(
             self.config.clone(),
             channel_manager_to_upstream_sender.clone(),
             upstream_to_channel_manager_receiver.clone(),
@@ -166,7 +166,7 @@ impl JobDeclaratorClient {
             });
         }
 
-        let mut channel_manager_clone = channel_manager.clone();
+        let initial_channel_manager = channel_manager.clone();
         let mut bitcoin_core_sv2_join_handle: Option<JoinHandle<()>> = None;
 
         match self.config.template_provider_type().clone() {
@@ -311,10 +311,10 @@ impl JobDeclaratorClient {
                         )
                         .await;
 
-                    channel_manager_clone
+                    initial_channel_manager
                         .upstream_state
                         .set(UpstreamState::NoChannel);
-                    _ = channel_manager_clone.allocate_tokens(2).await;
+                    _ = initial_channel_manager.allocate_tokens(2).await;
                 }
                 Err(e) => {
                     tracing::error!("Failed to initialize upstream: {:?}", e);
@@ -378,7 +378,7 @@ impl JobDeclaratorClient {
                         unbounded();
 
                     // Create a fresh channel_manager with new channels
-                    channel_manager = ChannelManager::new(
+                    let channel_manager = ChannelManager::new(
                         self.config.clone(),
                         channel_manager_to_upstream_sender_new.clone(),
                         upstream_to_channel_manager_receiver_new.clone(),
@@ -394,10 +394,8 @@ impl JobDeclaratorClient {
                     )
                     .await
                     .unwrap();
-                    channel_manager_clone = channel_manager.clone();
 
-                    channel_manager
-                        .clone()
+                    channel_manager.clone()
                         .start(
                             self.cancellation_token.clone(),
                             fallback_coordinator.clone(),
@@ -441,15 +439,15 @@ impl JobDeclaratorClient {
                                 )
                                 .await;
 
-                            channel_manager_clone
+                            channel_manager
                                 .upstream_state
                                 .set(UpstreamState::NoChannel);
 
-                            _ = channel_manager_clone.allocate_tokens(2).await;
+                            _ = channel_manager.allocate_tokens(2).await;
                         }
                         Err(e) => {
                             tracing::error!("Failed to initialize upstream: {:?}", e);
-                            channel_manager_clone
+                            channel_manager
                                 .upstream_state
                                 .set(UpstreamState::SoloMining);
                             mode.set_solo_mining();
@@ -467,8 +465,8 @@ impl JobDeclaratorClient {
 
                         let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
                             monitoring_addr,
-                            Some(Arc::new(channel_manager_clone.clone())),
-                            Some(Arc::new(channel_manager_clone.clone())),
+                            Some(Arc::new(channel_manager.clone())),
+                            Some(Arc::new(channel_manager.clone())),
                             std::time::Duration::from_secs(self.config.monitoring_cache_refresh_secs().unwrap_or(15)),
                         )
                         .expect("Failed to initialize monitoring server");
@@ -503,21 +501,28 @@ impl JobDeclaratorClient {
                         });
                     }
 
-                    _ = channel_manager_clone
-                        .clone()
-                        .start_downstream_server(
-                            *self.config.authority_public_key(),
-                            *self.config.authority_secret_key(),
-                            self.config.cert_validity_sec(),
-                            *self.config.listening_address(),
-                            task_manager.clone(),
-                            self.cancellation_token.clone(),
-                            fallback_coordinator.clone(),
-                            downstream_to_channel_manager_sender_new.clone(),
-                            self.config.supported_extensions().to_vec(),
-                            self.config.required_extensions().to_vec(),
-                        )
-                        .await;
+                    task_manager.spawn({
+                        let config = self.config.clone();
+                        let cancellation_token = self.cancellation_token.clone();
+                        let task_manager = task_manager.clone();
+                        let fallback_coordinator = fallback_coordinator.clone();
+                        async move {
+                            _ = channel_manager
+                                .start_downstream_server(
+                                    *config.authority_public_key(),
+                                    *config.authority_secret_key(),
+                                    config.cert_validity_sec(),
+                                    *config.listening_address(),
+                                    task_manager,
+                                    cancellation_token,
+                                    fallback_coordinator,
+                                    downstream_to_channel_manager_sender_new,
+                                    config.supported_extensions().to_vec(),
+                                    config.required_extensions().to_vec(),
+                                )
+                                .await;
+                        }
+                    });
                 }
             }
         }
