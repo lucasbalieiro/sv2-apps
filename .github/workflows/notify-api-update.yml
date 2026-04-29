@@ -19,14 +19,15 @@ jobs:
       - name: Create Issue
         uses: actions/github-script@v9
         with:
+          github-token: ${{ secrets.SV2_UI_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
 
             let prNumber;
 
-            // 1. Manual trigger support
+            // 1. Manual trigger support (FIXED)
             if (context.eventName === 'workflow_dispatch') {
-              prNumber = core.getInput('pr_number');
+              prNumber = context.payload.inputs?.pr_number;
             }
 
             // 2. Try to resolve from context
