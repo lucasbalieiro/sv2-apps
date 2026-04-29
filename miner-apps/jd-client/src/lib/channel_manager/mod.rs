@@ -500,6 +500,7 @@ impl ChannelManager {
         let this = Arc::new(self);
 
         // Wait for initial template and prevhash before accepting connections
+        let fallback_token = fallback_coordinator.token();
         loop {
             let has_required_data = this.channel_manager_data.super_safe_lock(|data| {
                 data.last_future_template.is_some() && data.last_new_prev_hash.is_some()
@@ -516,6 +517,10 @@ impl ChannelManager {
                     info!("Channel Manager: received shutdown while waiting for templates");
                     return Ok(());
                 }
+                _ = fallback_token.cancelled() => {
+                    info!("Channel Manager: received fallback while waiting for templates");
+                    return Ok(());
+                }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
             }
         }
@@ -530,7 +535,6 @@ impl ChannelManager {
         // Register the listener task in fallback coordination, so fallback waits
         // for this accept loop to stop before attempting to re-bind the same port.
         let fallback_handler = fallback_coordinator.register();
-        let fallback_token = fallback_coordinator.token();
         task_manager.spawn(async move {
             loop {
                 select! {
