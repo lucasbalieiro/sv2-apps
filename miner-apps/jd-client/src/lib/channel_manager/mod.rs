@@ -696,7 +696,9 @@ impl ChannelManager {
                     res = &mut vardiff_future => {
                         info!("Vardiff loop completed with: {res:?}");
                     }
-                    res = cm_jds.handle_jds_message() => {
+                    res = cm_jds.handle_jds_message(),
+                        if !cm.channel_manager_io.jd_receiver.is_closed() =>
+                    {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling JDS message");
                             if let LoopControl::Break = cm.handle_error_action(
@@ -709,7 +711,9 @@ impl ChannelManager {
                             }
                         }
                     }
-                    res = cm_pool.handle_pool_message_frame() => {
+                    res = cm_pool.handle_pool_message_frame(),
+                        if !cm.channel_manager_io.upstream_receiver.is_closed() =>
+                    {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling Pool message");
                             if let LoopControl::Break = cm.handle_error_action(
