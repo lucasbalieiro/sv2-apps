@@ -6,6 +6,10 @@ on:
     paths:
       - 'stratum-apps/src/monitoring/openapi.json'
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number (for manual runs)'
+        required: true
 
 jobs:
   create-issue:
@@ -18,16 +22,26 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
 
-            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner,
-              repo,
-              commit_sha: context.sha
-            });
+            let prNumber;
 
-            const prNumber = prs[0]?.number;
+            // 1. Manual trigger support
+            if (context.eventName === 'workflow_dispatch') {
+              prNumber = core.getInput('pr_number');
+            }
+
+            // 2. Try to resolve from context
+            if (!prNumber) {
+              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: context.sha
+              });
+
+              prNumber = prs[0]?.number;
+            }
 
             if (!prNumber) {
-              core.setFailed("No PR associated with this push");
+              core.setFailed('No PR associated and no PR number provided');
               return;
             }
 
