@@ -33,6 +33,8 @@ impl ServerMonitoring for ChannelManager {
                     let version_rolling = aggregated_extended_channel.is_version_rolling();
                     let nominal_hashrate = aggregated_extended_channel.get_nominal_hashrate();
                     let share_accounting = aggregated_extended_channel.get_share_accounting();
+                    let shares_rejected_by_reason = share_accounting.get_rejected_shares().clone();
+                    let shares_rejected = shares_rejected_by_reason.values().copied().sum();
 
                     extended_channels.push(ServerExtendedChannelInfo {
                         channel_id,
@@ -45,7 +47,8 @@ impl ServerMonitoring for ChannelManager {
                         version_rolling,
                         shares_acknowledged: share_accounting.get_acknowledged_shares(),
                         shares_submitted: share_accounting.get_validated_shares(),
-                        shares_rejected: share_accounting.get_rejected_shares().clone(),
+                        shares_rejected,
+                        shares_rejected_by_reason,
                         share_work_sum: share_accounting.get_share_work_sum(),
                         best_diff: share_accounting.get_best_diff(),
                         blocks_found: share_accounting.get_blocks_found(),
@@ -63,7 +66,8 @@ impl ServerMonitoring for ChannelManager {
                     let extranonce_prefix = extended_channel.get_extranonce_prefix();
                     let user_identity = extended_channel.get_user_identity();
                     let share_accounting = extended_channel.get_share_accounting();
-                    let shares_rejected = share_accounting.get_rejected_shares().clone();
+                    let shares_rejected_by_reason = share_accounting.get_rejected_shares().clone();
+                    let shares_rejected = shares_rejected_by_reason.values().copied().sum();
 
                     extended_channels.push(ServerExtendedChannelInfo {
                         channel_id,
@@ -81,6 +85,7 @@ impl ServerMonitoring for ChannelManager {
                         shares_acknowledged: share_accounting.get_acknowledged_shares(),
                         shares_submitted: share_accounting.get_validated_shares(),
                         shares_rejected,
+                        shares_rejected_by_reason,
                         share_work_sum: share_accounting.get_share_work_sum(),
                         best_diff: share_accounting.get_best_diff(),
                         blocks_found: share_accounting.get_blocks_found(),

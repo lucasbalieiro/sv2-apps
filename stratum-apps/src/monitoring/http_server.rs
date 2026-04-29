@@ -853,7 +853,8 @@ mod tests {
             rollable_extranonce_size: 4,
             version_rolling: true,
             shares_acknowledged: 10,
-            shares_rejected: HashMap::new(),
+            shares_rejected: 0,
+            shares_rejected_by_reason: HashMap::new(),
             share_work_sum: 100.0,
             shares_submitted: 12,
             best_diff: 50.0,
@@ -873,7 +874,8 @@ mod tests {
             extranonce_prefix_hex: "bb".into(),
             shares_acknowledged: 20,
             shares_submitted: 22,
-            shares_rejected: HashMap::from([("duplicate-share".to_string(), 1)]),
+            shares_rejected: 1,
+            shares_rejected_by_reason: HashMap::from([("duplicate-share".to_string(), 1)]),
             share_work_sum: 200.0,
             best_diff: 80.0,
             blocks_found: 0,
@@ -1185,6 +1187,32 @@ mod tests {
         assert_eq!(json["offset"], 1);
         assert_eq!(json["limit"], 1);
         assert_eq!(json["extended_channels"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn server_channels_endpoint_keeps_rejected_shares_total_compatible() {
+        let server = Arc::new(MockServer(super::super::server::ServerInfo {
+            extended_channels: vec![],
+            standard_channels: vec![create_server_standard_channel_info(1, Some(50.0))],
+        }));
+
+        let app = build_test_app(
+            Some(server as Arc<dyn ServerMonitoring + Send + Sync>),
+            None,
+            None,
+        );
+        let response = app
+            .oneshot(make_request("/api/v1/server/channels"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = get_body(response).await;
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let channel = &json["standard_channels"][0];
+
+        assert_eq!(channel["shares_rejected"], 1);
+        assert_eq!(channel["shares_rejected_by_reason"]["duplicate-share"], 1);
     }
 
     #[tokio::test]
