@@ -9,6 +9,9 @@ use integration_tests_sv2::{
 };
 use stratum_apps::stratum_core::mining_sv2::*;
 
+/// Timeout for polling metric assertions. Generous enough for slow CI.
+const METRIC_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 // ---------------------------------------------------------------------------
 // 1. Pool + SV2 Mining Device (standard channel) Pool role exposes: client metrics (connections,
 //    channels, shares, hashrate) Pool has NO upstream, so server metrics should be absent.
@@ -20,7 +23,17 @@ async fn pool_monitoring_with_sv2_mining_device() {
     let (pool, pool_addr, pool_monitoring) =
         start_pool(sv2_tp_config(tp_addr), vec![], vec![], true).await;
     let (sniffer, sniffer_addr) = start_sniffer("A", pool_addr, false, vec![], None);
-    start_mining_device_sv2(sniffer_addr, None, None, None, 1, None, true);
+    // Give the mining device an explicit user_id so its user_identity label on
+    // the pool's per-channel metrics is a meaningful value to assert against.
+    start_mining_device_sv2(
+        sniffer_addr,
+        None,
+        None,
+        Some("test-miner".to_string()),
+        1,
+        None,
+        true,
+    );
 
     // Wait for a share to be accepted so metrics are populated
     sniffer
@@ -41,12 +54,22 @@ async fn pool_monitoring_with_sv2_mining_device() {
     // Health API
     assert_api_health(pool_mon).await;
 
-    // Poll until per-channel share metric is populated in the monitoring cache
+    // Poll until the monitoring cache has refreshed with the new share data for
+    // the specific (client, channel, user) we expect from the single mining device.
+    // The pool reserves channel_id=1 for internal use and assigns 2 to the first
+    // downstream-opened channel.
     let pool_metrics = poll_until_metric_gte(
         pool_mon,
-        "sv2_client_shares_accepted_total",
+        Metric::with_labels(
+            "sv2_client_shares_accepted_total",
+            &[
+                ("client_id", "1"),
+                ("channel_id", "2"),
+                ("user_identity", "test-miner"),
+            ],
+        ),
         1.0,
-        std::time::Duration::from_secs(10),
+        METRIC_POLL_TIMEOUT,
     )
     .await;
     assert_uptime(&pool_metrics);
@@ -88,11 +111,22 @@ async fn pool_and_tproxy_monitoring_with_sv1_miner() {
     // -- Pool metrics --
     let pool_mon = pool_monitoring.expect("pool monitoring should be enabled");
     assert_api_health(pool_mon).await;
+
+    // Poll until the pool's cache has refreshed with tProxy's shares under the
+    // specific (client, channel, user) this topology produces. tProxy forwards
+    // SV1 worker names by suffixing them onto its configured user_identity.
     let pool_metrics = poll_until_metric_gte(
         pool_mon,
-        "sv2_client_shares_accepted_total",
+        Metric::with_labels(
+            "sv2_client_shares_accepted_total",
+            &[
+                ("client_id", "1"),
+                ("channel_id", "2"),
+                ("user_identity", "user_identity.miner1"),
+            ],
+        ),
         1.0,
-        std::time::Duration::from_secs(10),
+        METRIC_POLL_TIMEOUT,
     )
     .await;
     assert_uptime(&pool_metrics);
@@ -103,18 +137,27 @@ async fn pool_and_tproxy_monitoring_with_sv1_miner() {
     // -- tProxy metrics --
     let tproxy_mon = tproxy_monitoring.expect("tproxy monitoring should be enabled");
     assert_api_health(tproxy_mon).await;
+    // tProxy has its own monitoring cache, so poll independently for its
+    // upstream-channel share metric under the specific labels it reports. The
+    // user_identity reflects the SV1 worker name suffixed onto tProxy's config.
     let tproxy_metrics = poll_until_metric_gte(
         tproxy_mon,
-        "sv2_server_shares_accepted_total",
+        Metric::with_labels(
+            "sv2_server_shares_accepted_total",
+            &[
+                ("channel_id", "2"),
+                ("user_identity", "user_identity.miner1"),
+            ],
+        ),
         1.0,
-        std::time::Duration::from_secs(10),
+        METRIC_POLL_TIMEOUT,
     )
     .await;
     assert_uptime(&tproxy_metrics);
     // tProxy has 1 upstream extended channel
     assert_metric_eq(
         &tproxy_metrics,
-        "sv2_server_channels{channel_type=\"extended\"}",
+        Metric::with_labels("sv2_server_channels", &[("channel_type", "extended")]),
         1.0,
     );
     // tProxy should see at least 1 SV1 client
@@ -171,11 +214,21 @@ async fn jd_aggregated_topology_monitoring() {
     // -- Pool metrics: sees 1 SV2 client (JDC), shares accepted --
     let pool_mon = pool_monitoring.expect("pool monitoring should be enabled");
     assert_api_health(pool_mon).await;
+
+    // Poll until the pool's cache has refreshed with JDC's shares under the
+    // specific (client, channel, user) this topology produces.
     let pool_metrics = poll_until_metric_gte(
         pool_mon,
-        "sv2_client_shares_accepted_total",
+        Metric::with_labels(
+            "sv2_client_shares_accepted_total",
+            &[
+                ("client_id", "1"),
+                ("channel_id", "2"),
+                ("user_identity", "IT-test"),
+            ],
+        ),
         1.0,
-        std::time::Duration::from_secs(10),
+        METRIC_POLL_TIMEOUT,
     )
     .await;
     assert_uptime(&pool_metrics);
@@ -185,11 +238,27 @@ async fn jd_aggregated_topology_monitoring() {
     // -- tProxy metrics (aggregated): 2 SV1 clients, 1 upstream extended channel --
     let tproxy_mon = tproxy_monitoring.expect("tproxy monitoring should be enabled");
     assert_api_health(tproxy_mon).await;
-    let tproxy_metrics = fetch_metrics(tproxy_mon).await;
+    // tProxy has its own monitoring cache, so poll independently for its
+    // upstream-channel share metric under the specific labels it reports. In
+    // aggregated mode both SV1 miners share a single upstream channel; the
+    // user_identity reflects whichever worker name reaches tProxy first.
+    let tproxy_metrics = poll_until_metric_gte(
+        tproxy_mon,
+        Metric::with_labels(
+            "sv2_server_shares_accepted_total",
+            &[
+                ("channel_id", "2"),
+                ("user_identity", "user_identity.miner1"),
+            ],
+        ),
+        1.0,
+        METRIC_POLL_TIMEOUT,
+    )
+    .await;
     assert_uptime(&tproxy_metrics);
     assert_metric_eq(
         &tproxy_metrics,
-        "sv2_server_channels{channel_type=\"extended\"}",
+        Metric::with_labels("sv2_server_channels", &[("channel_type", "extended")]),
         1.0,
     );
     assert_metric_eq(&tproxy_metrics, "sv1_clients_total", 2.0);
@@ -231,13 +300,15 @@ async fn block_found_detected_in_pool_metrics() {
         .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SUBMIT_SOLUTION)
         .await;
 
-    // Poll until block found metric appears in monitoring cache
+    // Poll until the monitoring cache has refreshed with the block found data.
+    // sv2_client_blocks_found_total is a scalar gauge (no labels), so bare-name
+    // selector is the correct form here.
     let pool_mon = pool_monitoring.expect("pool monitoring should be enabled");
     let pool_metrics = poll_until_metric_gte(
         pool_mon,
         "sv2_client_blocks_found_total",
         1.0,
-        std::time::Duration::from_secs(10),
+        METRIC_POLL_TIMEOUT,
     )
     .await;
     assert_uptime(&pool_metrics);
