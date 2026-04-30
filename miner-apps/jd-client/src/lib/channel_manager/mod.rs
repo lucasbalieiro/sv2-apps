@@ -715,7 +715,8 @@ impl ChannelManager {
                         info!("Vardiff loop completed with: {res:?}");
                     }
                     res = cm_jds.handle_jds_message(),
-                        if !cm.channel_manager_io.jd_receiver.is_closed() =>
+                        if !cm.mode.is_solo_mining()
+                            && !cm.channel_manager_io.jd_receiver.is_closed() =>
                     {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling JDS message");
@@ -730,7 +731,8 @@ impl ChannelManager {
                         }
                     }
                     res = cm_pool.handle_pool_message_frame(),
-                        if !cm.channel_manager_io.upstream_receiver.is_closed() =>
+                        if !cm.mode.is_solo_mining()
+                            && !cm.channel_manager_io.upstream_receiver.is_closed() =>
                     {
                         if let Err(e) = res {
                             error!(error = ?e, "Error handling Pool message");
