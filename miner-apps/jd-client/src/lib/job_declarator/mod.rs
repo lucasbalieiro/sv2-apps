@@ -57,6 +57,22 @@ impl JobDeclarator {
         cancellation_token: &CancellationToken,
         fallback_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
         match e.action {
             Action::Log => {
                 warn!(
@@ -128,12 +144,13 @@ impl JobDeclarator {
         info!("Connection established with JD Server at {addr} in mode: {mode:?}");
 
         let (noise_stream_reader, noise_stream_writer) = tokio::select! {
-            result = connect_with_noise(stream, Some(upstream_entry.authority_pubkey)) => {
-                result.map_err(JDCError::fallback)?.into_split()
-            }
+            biased;
             _ = cancellation_token.cancelled() => {
                 info!("Shutdown received during handshake, dropping connection");
                 return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
+            }
+            result = connect_with_noise(stream, Some(upstream_entry.authority_pubkey)) => {
+                result.map_err(JDCError::fallback)?.into_split()
             }
         };
 
@@ -147,7 +164,7 @@ impl JobDeclarator {
             outbound_rx,
             inbound_tx,
             cancellation_token,
-            fallback_coordinator,
+            Some(fallback_coordinator),
         );
 
         let job_declarator_io = JobDeclaratorIo {
@@ -196,6 +213,7 @@ impl JobDeclarator {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("Job Declarator: received shutdown signal");
                         break;

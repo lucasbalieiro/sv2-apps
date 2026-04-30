@@ -15,7 +15,6 @@ use std::sync::Arc;
 use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
-    fallback_coordinator::FallbackCoordinator,
     key_utils::Secp256k1PublicKey,
     network_helpers::{self, connect_with_noise, resolve_host_port},
     stratum_core::{
@@ -80,6 +79,14 @@ impl Sv2Tp {
         e: &JDCError<error::TemplateProvider>,
         cancellation_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
         match e.action {
             Action::Log => {
                 warn!(
@@ -120,7 +127,6 @@ impl Sv2Tp {
         channel_manager_receiver: Receiver<TemplateDistribution<'static>>,
         channel_manager_sender: Sender<TemplateDistribution<'static>>,
         cancellation_token: CancellationToken,
-        fallback_coordinator: FallbackCoordinator,
         task_manager: Arc<TaskManager>,
     ) -> JDCResult<Sv2Tp, error::TemplateProvider> {
         const MAX_RETRIES: usize = 3;
@@ -136,6 +142,12 @@ impl Sv2Tp {
                     );
 
                     tokio::select! {
+                        biased;
+
+                         _ = cancellation_token.cancelled() => {
+                            info!("Shutdown received during handshake, dropping connection");
+                            return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
+                        }
                         result = connect_with_noise(stream, public_key) => {
                             match result {
                                 Ok(noise_stream) => {
@@ -155,7 +167,7 @@ impl Sv2Tp {
                                         outbound_rx,
                                         inbound_tx,
                                         cancellation_token.clone(),
-                                        fallback_coordinator.clone(),
+                                        None,
                                     );
 
                                     let sv2_tp_io = Sv2TpIo {
@@ -178,10 +190,6 @@ impl Sv2Tp {
                                     error!(attempt, error = ?e, "Noise handshake failed");
                                 }
                             }
-                        }
-                         _ = cancellation_token.cancelled() => {
-                            info!("Shutdown received during handshake, dropping connection");
-                            return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
                         }
                     }
                 }
@@ -224,6 +232,8 @@ impl Sv2Tp {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
+
                     _ = cancellation_token.cancelled() => {
                         info!("TemplateReceiver received shutdown signal");
                         break;

@@ -70,6 +70,22 @@ impl Upstream {
         cancellation_token: &CancellationToken,
         fallback_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
         match e.action {
             Action::Log => {
                 warn!(
@@ -140,15 +156,16 @@ impl Upstream {
         debug!("Begin with noise setup in upstream connection");
 
         let (noise_stream_reader, noise_stream_writer) = tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => {
+                info!("Shutdown received during handshake, dropping connection");
+                Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem))
+            }
             result = connect_with_noise(stream, Some(upstream_entry.authority_pubkey)) => {
                 match result {
                     Ok(noise_stream) => Ok(noise_stream.into_split()),
                     Err(e) => Err(JDCError::fallback(e))
                 }
-            }
-            _ = cancellation_token.cancelled() => {
-                info!("Shutdown received during handshake, dropping connection");
-                Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem))
             }
         }?;
 
@@ -162,7 +179,7 @@ impl Upstream {
             outbound_rx,
             inbound_tx,
             cancellation_token.clone(),
-            fallback_coordinator.clone(),
+            Some(fallback_coordinator.clone()),
         );
 
         debug!("Noise setup done in upstream connection");
@@ -320,6 +337,8 @@ impl Upstream {
             let mut self_clone_2 = self.clone();
             loop {
                 tokio::select! {
+                    biased;
+
                     _ = cancellation_token.cancelled() => {
                         info!("Upstream: received shutdown signal");
                         break;

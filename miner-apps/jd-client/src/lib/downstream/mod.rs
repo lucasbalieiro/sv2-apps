@@ -95,7 +95,26 @@ impl Downstream {
         context: &str,
         e: &JDCError<error::Downstream>,
         cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                downstream_id = self.downstream_id,
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                downstream_id = self.downstream_id,
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
         match e.action {
             Action::Log => {
                 warn!(
@@ -164,7 +183,7 @@ impl Downstream {
             outbound_rx,
             inbound_tx,
             downstream_cancellation_token.clone(),
-            fallback_coordinator.clone(),
+            Some(fallback_coordinator.clone()),
         );
 
         let downstream_io = DownstreamIo {
@@ -220,6 +239,7 @@ impl Downstream {
                 "Downstream::setup_connection_with_downstream",
                 &e,
                 &cancellation_token,
+                &fallback_token,
             );
             remove_downstream(self.downstream_id);
             fallback_handler.done();
@@ -232,6 +252,7 @@ impl Downstream {
                 let downstream_id = self_clone_1.downstream_id;
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         debug!("Downstream {downstream_id}: received shutdown signal");
                         break;
@@ -247,6 +268,7 @@ impl Downstream {
                                 "Downstream::handle_downstream_message",
                                 &e,
                                 &cancellation_token,
+                                &fallback_token,
                             ) {
                                 break;
                             }
@@ -259,6 +281,7 @@ impl Downstream {
                                 "Downstream::handle_channel_manager_message",
                                 &e,
                                 &cancellation_token,
+                                &fallback_token,
                             ) {
                                 break;
                             }
@@ -267,8 +290,12 @@ impl Downstream {
 
                 }
             }
-
-            remove_downstream(self.downstream_id);
+            if !cancellation_token.is_cancelled() && !fallback_token.is_cancelled() {
+                // Only remove downstream when system is not going through shutdown
+                // or fallback. As in those cases we initialize new set of subsystems
+                // and free old allocated memory.
+                remove_downstream(self.downstream_id);
+            }
             self.downstream_cancellation_token.cancel();
             warn!("Downstream: unified message loop exited.");
             fallback_handler.done();
