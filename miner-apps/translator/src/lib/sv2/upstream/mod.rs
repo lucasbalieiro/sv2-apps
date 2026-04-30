@@ -203,6 +203,11 @@ impl Upstream {
                 info!("Connected to upstream at {}", resolved_addr);
 
                 tokio::select! {
+                    biased;
+                    _ = cancellation_token.cancelled() => {
+                        info!("Shutdown received during handshake, dropping connection");
+                        Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem))
+                    }
                     result = connect_with_noise(socket, Some(upstream.authority_pubkey)) => {
                         match result {
                             Ok(stream) => {
@@ -252,10 +257,6 @@ impl Upstream {
                             }
                         }
                     }
-                    _ = cancellation_token.cancelled() => {
-                        info!("Shutdown received during handshake, dropping connection");
-                        Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem))
-                    }
                 }
             }
             Err(e) => {
@@ -285,12 +286,8 @@ impl Upstream {
 
         // wait for connection setup or cancellation signal
         tokio::select! {
-            result = self.setup_connection() => {
-                if let Err(e) = result {
-                    error!("Upstream: failed to set up SV2 connection: {e:?}");
-                    return Err(e);
-                }
-            }
+            biased;
+
             _ = cancellation_token.cancelled() => {
                 info!("Upstream: shutdown signal received during connection setup.");
                 return Ok(());
@@ -298,6 +295,12 @@ impl Upstream {
             _ = fallback_token.cancelled() => {
                 info!("Upstream: fallback signal received during connection setup.");
                 return Ok(());
+            }
+            result = self.setup_connection() => {
+                if let Err(e) = result {
+                    error!("Upstream: failed to set up SV2 connection: {e:?}");
+                    return Err(e);
+                }
             }
         }
 
@@ -485,6 +488,8 @@ impl Upstream {
 
             loop {
                 tokio::select! {
+                    biased;
+
                     // Handle app shutdown signal
                     _ = cancellation_token.cancelled() => {
                         info!("Upstream: received shutdown signal. Exiting loop.");

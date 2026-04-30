@@ -286,6 +286,7 @@ impl Downstream {
 
             loop {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("Downstream {downstream_id}: received app shutdown signal");
                         break;

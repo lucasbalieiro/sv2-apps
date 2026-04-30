@@ -356,6 +356,7 @@ impl Sv1Server {
             tokio::pin!(keepalive_future);
             loop {
                 tokio::select! {
+                    biased;
                     // Handle app shutdown signal
                     _ = cancellation_token.cancelled() => {
                         debug!("SV1 Server: received shutdown signal. Exiting.");

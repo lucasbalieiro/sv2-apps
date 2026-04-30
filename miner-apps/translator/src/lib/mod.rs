@@ -221,11 +221,7 @@ impl TranslatorSv2 {
 
         loop {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Ctrl+C received — initiating graceful shutdown...");
-                    cancellation_token.cancel();
-                    break;
-                }
+                biased;
                 _ = cancellation_token.cancelled() => {
                     break;
                 }
@@ -339,6 +335,11 @@ impl TranslatorSv2 {
                                 }
 
                                 info!("Upstream and ChannelManager restarted successfully.");
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Ctrl+C received — initiating graceful shutdown...");
+                    cancellation_token.cancel();
+                    break;
                 }
             }
         }

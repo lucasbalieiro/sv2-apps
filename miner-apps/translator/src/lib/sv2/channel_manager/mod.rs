@@ -312,6 +312,7 @@ impl ChannelManager {
 
             loop {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("ChannelManager: received shutdown signal.");
                         break;
