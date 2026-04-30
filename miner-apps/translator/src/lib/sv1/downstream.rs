@@ -167,7 +167,26 @@ impl Downstream {
         context: &str,
         e: &TproxyError<error::Downstream>,
         cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                downstream_id = self.downstream_id,
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                downstream_id = self.downstream_id,
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
         match e.action {
             Action::Log => {
                 warn!(
@@ -284,6 +303,7 @@ impl Downstream {
                                 "Downstream::handle_downstream_message",
                                 &e,
                                 &cancellation_token,
+                                &fallback_token,
                             ) {
                                 break;
                             }
@@ -298,6 +318,7 @@ impl Downstream {
                                 "Downstream::handle_sv1_server_message",
                                 &e,
                                 &cancellation_token,
+                                &fallback_token,
                             ) {
                                 break;
                             }

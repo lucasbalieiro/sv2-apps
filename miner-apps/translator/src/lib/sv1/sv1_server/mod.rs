@@ -130,6 +130,22 @@ impl Sv1Server {
         cancellation_token: &CancellationToken,
         fallback_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
         match e.action {
             Action::Log => {
                 warn!(
