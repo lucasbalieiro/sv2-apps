@@ -403,7 +403,7 @@ impl Sv1Server {
                                 info!("Downstream {} registered successfully (channel will be opened after first message)", downstream_id);
 
                                 let sv1_server = self.clone();
-                                Downstream::run_downstream_tasks(
+                                Downstream::start(
                                     downstream,
                                     cancellation_token.clone(),
                                     fallback_coordinator.clone(),

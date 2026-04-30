@@ -265,7 +265,7 @@ impl Downstream {
     /// The task will continue running until a cancellation signal is received or
     /// an unrecoverable error occurs. It ensures graceful cleanup of resources
     /// and proper error reporting.
-    pub(super) fn run_downstream_tasks<F, Fut>(
+    pub(super) fn start<F, Fut>(
         self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
