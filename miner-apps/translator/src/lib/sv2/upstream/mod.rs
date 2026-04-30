@@ -374,19 +374,16 @@ impl Upstream {
         Ok(())
     }
 
-    /// Processes incoming messages from the upstream SV2 server.
-    ///
-    /// This method handles different types of frames received from upstream:
-    /// - SV2 frames: Parses and routes mining/common messages appropriately
-    /// - Handshake frames: Logs for debugging (shouldn't occur during normal operation)
-    ///
-    /// Common messages are handled directly, while mining messages are forwarded
-    /// to the channel manager for processing and distribution to downstream connections.
-    async fn on_upstream_message(
-        &mut self,
-        mut sv2_frame: Sv2Frame,
-    ) -> TproxyResult<(), error::Upstream> {
-        debug!("Received SV2 frame from upstream.");
+    /// Handles one SV2 frame received from upstream.
+    async fn handle_upstream_message(mut self) -> TproxyResult<(), error::Upstream> {
+        let mut sv2_frame = self
+            .upstream_io
+            .upstream_receiver
+            .recv()
+            .await
+            .map_err(TproxyError::fallback)?;
+
+        debug!("Upstream: received frame.");
         let Some(header) = sv2_frame.get_header() else {
             return Err(TproxyError::fallback(TproxyErrorKind::UnexpectedMessage(
                 0, 0,
@@ -425,13 +422,39 @@ impl Upstream {
                 )));
             }
         }
+
+        Ok(())
+    }
+
+    /// Handles one SV2 frame received from the channel manager and forwards it upstream.
+    async fn handle_channel_manager_message(&self) -> TproxyResult<(), error::Upstream> {
+        let sv2_frame = self
+            .upstream_io
+            .channel_manager_receiver
+            .recv()
+            .await
+            .map_err(TproxyError::shutdown)?;
+
+        debug!(
+            "Upstream: sending sv2 frame from channel manager: {:?}",
+            sv2_frame
+        );
+        self.upstream_io
+            .upstream_sender
+            .send(sv2_frame)
+            .await
+            .map_err(|e| {
+                error!("Upstream: failed to send sv2 frame: {e:?}");
+                TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
+            })?;
+
         Ok(())
     }
 
     /// Spawns a unified task to handle upstream message I/O and shutdown logic.
     #[allow(clippy::result_large_err)]
     fn run_upstream_task(
-        mut self,
+        self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
         task_manager: Arc<TaskManager>,
@@ -458,50 +481,26 @@ impl Upstream {
                         break;
                     }
 
-                    // Handle incoming SV2 messages from upstream
-                    result = self.upstream_io.upstream_receiver.recv() => {
-                        match result {
-                            Ok(frame) => {
-                                debug!("Upstream: received frame.");
-                                if let Err(e) = self.on_upstream_message(frame).await {
-                                    error!("Upstream: error while processing message: {e:?}");
-                                    if let LoopControl::Break = Self::handle_error_action(
-                                            "Upstream::on_upstream_message",
-                                            &e,
-                                            &cancellation_token,
-                                            &fallback_token,
-                                        ) {
-                                            break;
-                                        }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Upstream: receiver channel closed unexpectedly: {e}");
-                                fallback_token.cancel();
+                    res = self.clone().handle_upstream_message() => {
+                        if let Err(e) = res {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "Upstream::handle_upstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
                     }
-
-                    // Handle messages from channel manager to send upstream
-                    result = self.upstream_io.channel_manager_receiver.recv() => {
-                        match result {
-                            Ok(sv2_frame) => {
-                                debug!("Upstream: sending sv2 frame from channel manager: {:?}", sv2_frame);
-                                if let Err(e) = self
-                                    .upstream_io
-                                    .upstream_sender
-                                    .send(sv2_frame)
-                                    .await
-                                {
-                                    error!("Upstream: failed to send sv2 frame: {e:?}");
-                                    fallback_token.cancel();
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Upstream: channel manager receiver closed: {e}");
-                                cancellation_token.cancel();
+                    res = self.handle_channel_manager_message() => {
+                        if let Err(e) = res {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "Upstream::handle_channel_manager_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
