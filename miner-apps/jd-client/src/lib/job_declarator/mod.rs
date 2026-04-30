@@ -144,12 +144,13 @@ impl JobDeclarator {
         info!("Connection established with JD Server at {addr} in mode: {mode:?}");
 
         let (noise_stream_reader, noise_stream_writer) = tokio::select! {
-            result = connect_with_noise(stream, Some(upstream_entry.authority_pubkey)) => {
-                result.map_err(JDCError::fallback)?.into_split()
-            }
+            biased;
             _ = cancellation_token.cancelled() => {
                 info!("Shutdown received during handshake, dropping connection");
                 return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
+            }
+            result = connect_with_noise(stream, Some(upstream_entry.authority_pubkey)) => {
+                result.map_err(JDCError::fallback)?.into_split()
             }
         };
 
@@ -212,6 +213,7 @@ impl JobDeclarator {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("Job Declarator: received shutdown signal");
                         break;

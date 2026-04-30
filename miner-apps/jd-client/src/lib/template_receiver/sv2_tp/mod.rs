@@ -142,6 +142,12 @@ impl Sv2Tp {
                     );
 
                     tokio::select! {
+                        biased;
+
+                         _ = cancellation_token.cancelled() => {
+                            info!("Shutdown received during handshake, dropping connection");
+                            return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
+                        }
                         result = connect_with_noise(stream, public_key) => {
                             match result {
                                 Ok(noise_stream) => {
@@ -185,10 +191,6 @@ impl Sv2Tp {
                                 }
                             }
                         }
-                         _ = cancellation_token.cancelled() => {
-                            info!("Shutdown received during handshake, dropping connection");
-                            return Err(JDCError::shutdown(JDCErrorKind::CouldNotInitiateSystem));
-                        }
                     }
                 }
                 Err(e) => {
@@ -230,6 +232,8 @@ impl Sv2Tp {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
+
                     _ = cancellation_token.cancelled() => {
                         info!("TemplateReceiver received shutdown signal");
                         break;

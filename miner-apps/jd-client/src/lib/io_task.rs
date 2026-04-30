@@ -79,6 +79,7 @@ pub fn spawn_io_tasks(
 
                 loop {
                     tokio::select! {
+                        biased;
                         _ = cancellation_token_clone.cancelled() => {
                             trace!("Received shutdown signal");
                             inbound_tx.close();
@@ -144,6 +145,7 @@ pub fn spawn_io_tasks(
 
                 loop {
                     tokio::select! {
+                        biased;
                         _ = cancellation_token.cancelled() => {
                             trace!("Received shutdown signal");
                             inbound_tx_clone.close();

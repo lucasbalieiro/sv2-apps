@@ -577,7 +577,12 @@ impl ChannelManager {
 
                                 task_manager_clone.spawn(async move {
                                     let noise_stream = tokio::select! {
-                                    result = accept_noise_connection(stream, authority_public_key, authority_secret_key, cert_validity_sec) => {
+                                        biased;
+                                        _ = cancellation_token_inner.cancelled() => {
+                                            info!("Shutdown received during handshake, dropping connection");
+                                            return;
+                                        }
+                                        result = accept_noise_connection(stream, authority_public_key, authority_secret_key, cert_validity_sec) => {
                                             match result {
                                                 Ok(r) => r,
                                                 Err(e) => {
@@ -585,10 +590,6 @@ impl ChannelManager {
                                                     return;
                                                 }
                                             }
-                                        }
-                                        _ = cancellation_token_inner.cancelled() => {
-                                            info!("Shutdown received during handshake, dropping connection");
-                                            return;
                                         }
                                     };
 
@@ -698,6 +699,7 @@ impl ChannelManager {
                 let mut cm_template = cm.clone();
                 let mut cm_downstreams = cm.clone();
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("Channel Manager: received shutdown signal");
                         break;

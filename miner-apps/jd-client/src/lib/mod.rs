@@ -394,11 +394,8 @@ impl JobDeclaratorClient {
 
         loop {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Ctrl+C received — initiating graceful shutdown...");
-                    self.cancellation_token.cancel();
-                    break;
-                }
+                biased;
+
                 _ = self.cancellation_token.cancelled() => {
                     break;
                 }
@@ -594,6 +591,11 @@ impl JobDeclaratorClient {
                         }
                     });
                 }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Ctrl+C received — initiating graceful shutdown...");
+                    self.cancellation_token.cancel();
+                    break;
+                }
             }
         }
 
@@ -677,6 +679,7 @@ impl JobDeclaratorClient {
             );
 
             tokio::select! {
+                biased;
                 _ = cancellation_token.cancelled() => {
                     info!("Shutdown requested while waiting to initialize upstream, aborting retries");
                     return Err(JDCErrorKind::CouldNotInitiateSystem);
@@ -723,6 +726,7 @@ impl JobDeclaratorClient {
                         tracing::error!("Upstream and JDS connection terminated");
 
                         tokio::select! {
+                            biased;
                             _ = cancellation_token.cancelled() => {
                                 info!("Shutdown requested after upstream initialization failure, aborting retries");
                                 return Err(JDCErrorKind::CouldNotInitiateSystem);
