@@ -201,7 +201,7 @@ impl Downstream {
         mut self,
         cancellation_token: CancellationToken,
         task_manager: Arc<TaskManager>,
-        remove_downstream: impl FnOnce(DownstreamId) + Send + 'static,
+        on_disconnect: impl FnOnce(DownstreamId) + Send + 'static,
     ) {
         // Setup initial connection
         if let Err(e) = self.setup_connection_with_downstream().await {
@@ -216,7 +216,7 @@ impl Downstream {
                 &e,
                 &cancellation_token,
             );
-            remove_downstream(self.downstream_id);
+            on_disconnect(self.downstream_id);
             return;
         }
 
@@ -257,7 +257,7 @@ impl Downstream {
                 }
             }
             self.downstream_connection_token.cancel();
-            remove_downstream(self.downstream_id);
+            on_disconnect(self.downstream_id);
             warn!("Downstream: unified message loop exited.");
         });
     }
