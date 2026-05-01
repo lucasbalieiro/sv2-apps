@@ -4,7 +4,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
     fallback_coordinator::FallbackCoordinator,
-    network_helpers::{connect_with_noise, resolve_host},
+    network_helpers::{connect_with_noise, resolve_host, TCP_CONNECT_TIMEOUT},
     stratum_core::{
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
@@ -134,13 +134,10 @@ impl JobDeclarator {
             })?;
 
         info!("Connecting to JD Server at {addr}");
-        let stream = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            TcpStream::connect(addr),
-        )
-        .await
-        .map_err(JDCError::fallback)?
-        .map_err(JDCError::fallback)?;
+        let stream = tokio::time::timeout(TCP_CONNECT_TIMEOUT, TcpStream::connect(addr))
+            .await
+            .map_err(JDCError::fallback)?
+            .map_err(JDCError::fallback)?;
         info!("Connection established with JD Server at {addr} in mode: {mode:?}");
 
         let (noise_stream_reader, noise_stream_writer) = tokio::select! {
