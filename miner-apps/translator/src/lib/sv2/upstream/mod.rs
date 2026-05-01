@@ -10,7 +10,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use std::{net::SocketAddr, sync::Arc};
 use stratum_apps::{
     fallback_coordinator::FallbackCoordinator,
-    network_helpers::{self, connect_with_noise, resolve_host},
+    network_helpers::{self, connect_with_noise, resolve_host, TCP_CONNECT_TIMEOUT},
     stratum_core::{
         binary_sv2::Seq064K,
         common_messages_sv2::{Protocol, SetupConnection},
@@ -139,7 +139,10 @@ impl Upstream {
                 TproxyError::fallback(TproxyErrorKind::NetworkHelpersError(e.into()))
             })?;
 
-        match TcpStream::connect(resolved_addr).await {
+        match tokio::time::timeout(TCP_CONNECT_TIMEOUT, TcpStream::connect(resolved_addr))
+            .await
+            .map_err(TproxyError::fallback)?
+        {
             Ok(socket) => {
                 info!("Connected to upstream at {}", resolved_addr);
 
@@ -173,38 +176,37 @@ impl Upstream {
                                     resolved_addr
                                 );
 
-                                return Ok(Self {
+                                Ok(Self {
                                     upstream_io,
                                     required_extensions: required_extensions.clone(),
                                     address: resolved_addr,
-                                });
+                                })
                             }
                             Err(network_helpers::Error::InvalidKey) => {
-                                return Err(TproxyError::fallback(TproxyErrorKind::InvalidKey));
+                                Err(TproxyError::fallback(TproxyErrorKind::InvalidKey))
                             }
                             Err(e) => {
                                 error!(
-                                    "Failed Noise handshake with {}: {e}. Retrying...",
+                                    "Failed Noise handshake with {}: {e}.",
                                     resolved_addr
                                 );
+                                Err(TproxyError::fallback(
+                                    TproxyErrorKind::NetworkHelpersError(e),
+                                ))
                             }
                         }
                     }
                     _ = cancellation_token.cancelled() => {
                         info!("Shutdown received during handshake, dropping connection");
-                        return Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem));
+                        Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem))
                     }
                 }
             }
             Err(e) => {
                 error!("Failed to connect to {}: {e}.", resolved_addr);
+                Err(TproxyError::fallback(e))
             }
         }
-
-        error!("Failed to connect to any configured upstream.");
-        Err(TproxyError::shutdown(
-            TproxyErrorKind::CouldNotInitiateSystem,
-        ))
     }
 
     /// Starts the upstream connection and begins message processing.

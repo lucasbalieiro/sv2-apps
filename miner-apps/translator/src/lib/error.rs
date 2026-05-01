@@ -29,6 +29,7 @@ use stratum_apps::{
         MessageType,
     },
 };
+use tokio::time::error::Elapsed;
 
 pub type TproxyResult<T, Owner> = Result<T, TproxyError<Owner>>;
 
@@ -157,6 +158,8 @@ pub enum TproxyErrorKind {
     ChannelErrorReceiver(async_channel::RecvError),
     /// Channel sender error
     ChannelErrorSender,
+    /// Operation timed out
+    Timeout,
     /// Error converting SetDifficulty to Message
     SetDifficultyToMessage(SetDifficulty),
     /// Received an unexpected message type
@@ -221,6 +224,7 @@ impl fmt::Display for TproxyErrorKind {
             PoisonLock => write!(f, "Poison Lock error"),
             ChannelErrorReceiver(ref e) => write!(f, "Channel receive error: `{e:?}`"),
             ChannelErrorSender => write!(f, "Sender error"),
+            Timeout => write!(f, "Operation timed out"),
             SetDifficultyToMessage(ref e) => {
                 write!(f, "Error converting SetDifficulty to Message: `{e:?}`")
             }
@@ -327,6 +331,12 @@ impl From<ConfigError> for TproxyErrorKind {
 impl From<async_channel::RecvError> for TproxyErrorKind {
     fn from(e: async_channel::RecvError) -> Self {
         TproxyErrorKind::ChannelErrorReceiver(e)
+    }
+}
+
+impl From<Elapsed> for TproxyErrorKind {
+    fn from(_value: Elapsed) -> Self {
+        TproxyErrorKind::Timeout
     }
 }
 
