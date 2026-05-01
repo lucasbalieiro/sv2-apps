@@ -57,20 +57,17 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     ) -> Result<Vec<u16>, Self::Error> {
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
-        let negotiated_extensions =
-            self.channel_manager_data
-                .super_safe_lock(|channel_manager_data| {
-                    channel_manager_data
-                        .downstream
-                        .get(&downstream_id)
-                        .map(|downstream| {
-                            downstream
-                                .downstream_data
-                                .super_safe_lock(|data| data.negotiated_extensions.clone())
-                        })
-                        .expect("negotiated_extensions must be present")
-                });
-        Ok(negotiated_extensions)
+        self.channel_manager_data.super_safe_lock(|data| {
+            let Some(downstream) = data.downstream.get(&downstream_id) else {
+                return Err(PoolError::disconnect(
+                    PoolErrorKind::DownstreamNotFound(downstream_id),
+                    downstream_id,
+                ));
+            };
+            downstream
+                .downstream_data
+                .super_safe_lock(|data| Ok(data.negotiated_extensions.clone()))
+        })
     }
 
     async fn handle_close_channel(

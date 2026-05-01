@@ -148,17 +148,17 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     ) -> Result<Vec<u16>, Self::Error> {
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
-        let negotiated_extensions = self.channel_manager_data.super_safe_lock(|data| {
-            data.downstream
-                .get(&downstream_id)
-                .map(|downstream| {
-                    downstream
-                        .downstream_data
-                        .super_safe_lock(|data| data.negotiated_extensions.clone())
-                })
-                .expect("negotiated_extensions must be present")
-        });
-        Ok(negotiated_extensions)
+        self.channel_manager_data.super_safe_lock(|data| {
+            let Some(downstream) = data.downstream.get(&downstream_id) else {
+                return Err(JDCError::disconnect(
+                    JDCErrorKind::DownstreamNotFound(downstream_id),
+                    downstream_id,
+                ));
+            };
+            downstream
+                .downstream_data
+                .super_safe_lock(|data| Ok(data.negotiated_extensions.clone()))
+        })
     }
 
     fn get_channel_type_for_client(&self, _client_id: Option<usize>) -> SupportedChannelTypes {
