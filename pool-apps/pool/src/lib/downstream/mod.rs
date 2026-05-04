@@ -233,6 +233,7 @@ impl Downstream {
                 let downstream_id = self_clone_1.downstream_id;
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         debug!("Downstream {downstream_id}: received shutdown signal");
                         break;
