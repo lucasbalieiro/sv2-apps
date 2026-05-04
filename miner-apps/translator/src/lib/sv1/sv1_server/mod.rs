@@ -3,8 +3,7 @@ pub mod downstream_message_handler;
 
 use crate::{
     config::TranslatorConfig,
-    error::{self, TproxyError, TproxyErrorKind, TproxyResult},
-    status::{handle_error, Status, StatusSender},
+    error::{self, Action, LoopControl, TproxyError, TproxyErrorKind, TproxyResult},
     sv1::downstream::Downstream,
     utils::{
         is_mining_authorize, SubmitShareWithChannelId, TproxyMode, AGGREGATED_CHANNEL_ID,
@@ -124,6 +123,64 @@ pub struct Sv1Server {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Sv1Server {
+    async fn handle_error_action(
+        &self,
+        context: &str,
+        e: &TproxyError<error::Sv1Server>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Disconnect(downstream_id) => {
+                warn!(
+                    downstream_id,
+                    error_kind = ?e.kind,
+                    "{context} requested disconnect; cancelling downstream token"
+                );
+                self.handle_downstream_disconnect(downstream_id).await;
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown; cancelling global token"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+        }
+    }
     /// Sends a message to downstream(s) for the given channel_id.
     ///
     /// In aggregated mode the channel manager rewrites the job's channel_id to
@@ -247,7 +304,6 @@ impl Sv1Server {
     /// # Arguments
     /// * `cancellation_token` - Global application cancellation token
     /// * `fallback_coordinator` - Fallback coordinator
-    /// * `status_sender` - Channel for sending status updates
     /// * `task_manager` - Manager for spawned async tasks
     ///
     /// # Returns
@@ -257,7 +313,6 @@ impl Sv1Server {
         self: Arc<Self>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Sv1Server> {
         info!("Starting SV1 server on {}", self.listener_addr);
@@ -282,7 +337,6 @@ impl Sv1Server {
 
         info!("Translator Proxy: listening on {}", self.listener_addr);
 
-        let sv1_status_sender = StatusSender::Sv1Server(status_sender.clone());
         let task_manager_clone = task_manager.clone();
         let vardiff_enabled = self.config.downstream_difficulty_config.enable_vardiff;
         let keepalive_enabled = self
@@ -302,6 +356,7 @@ impl Sv1Server {
             tokio::pin!(keepalive_future);
             loop {
                 tokio::select! {
+                    biased;
                     // Handle app shutdown signal
                     _ = cancellation_token.cancelled() => {
                         debug!("SV1 Server: received shutdown signal. Exiting.");
@@ -347,18 +402,15 @@ impl Sv1Server {
                                 }
                                 info!("Downstream {} registered successfully (channel will be opened after first message)", downstream_id);
 
-
-                                // Start downstream tasks immediately, but defer channel opening until first message
-                                let status_sender = StatusSender::Downstream {
-                                    downstream_id,
-                                    tx: status_sender.clone(),
-                                };
-                                Downstream::run_downstream_tasks(
+                                let sv1_server = self.clone();
+                                Downstream::start(
                                     downstream,
                                     cancellation_token.clone(),
                                     fallback_coordinator.clone(),
-                                    status_sender,
                                     task_manager.clone(),
+                                    move || async move {
+                                        sv1_server.handle_downstream_disconnect(downstream_id).await;
+                                    },
                                 );
                             }
                             Err(e) => {
@@ -368,7 +420,12 @@ impl Sv1Server {
                     }
                     res = self.handle_downstream_message() => {
                         if let Err(e) = res {
-                            if handle_error(&sv1_status_sender, e).await {
+                            if let LoopControl::Break = self.handle_error_action(
+                                "Sv1Server::handle_downstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ).await {
                                 self.cleanup();
                                 break;
                             }
@@ -378,7 +435,12 @@ impl Sv1Server {
                         first_target,
                     ) => {
                         if let Err(e) = res {
-                            if handle_error(&sv1_status_sender, e).await {
+                            if let LoopControl::Break = self.handle_error_action(
+                                "Sv1Server::handle_upstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ).await {
                                 self.cleanup();
                                 break;
                             }

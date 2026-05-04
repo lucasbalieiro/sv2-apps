@@ -223,7 +223,7 @@ impl Downstream {
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
         task_manager: Arc<TaskManager>,
-        remove_downstream: impl FnOnce(DownstreamId) + Send + 'static,
+        on_disconnect: impl FnOnce(DownstreamId) + Send + 'static,
     ) {
         let fallback_handler = fallback_coordinator.register();
         let fallback_token = fallback_coordinator.token();
@@ -241,7 +241,7 @@ impl Downstream {
                 &cancellation_token,
                 &fallback_token,
             );
-            remove_downstream(self.downstream_id);
+            on_disconnect(self.downstream_id);
             fallback_handler.done();
             return;
         }
@@ -294,7 +294,7 @@ impl Downstream {
                 // Only remove downstream when system is not going through shutdown
                 // or fallback. As in those cases we initialize new set of subsystems
                 // and free old allocated memory.
-                remove_downstream(self.downstream_id);
+                on_disconnect(self.downstream_id);
             }
             self.downstream_cancellation_token.cancel();
             warn!("Downstream: unified message loop exited.");

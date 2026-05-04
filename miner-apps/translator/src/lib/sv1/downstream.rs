@@ -1,10 +1,10 @@
 use crate::{
-    error::{self, TproxyError, TproxyErrorKind, TproxyResult},
-    status::{handle_error, StatusSender},
+    error::{self, Action, LoopControl, TproxyError, TproxyErrorKind, TproxyResult},
     utils::SubmitShareWithChannelId,
 };
 use async_channel::{Receiver, Sender};
 use std::{
+    future::Future,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -34,10 +34,6 @@ pub struct DownstreamIo {
     downstream_sv1_receiver: Receiver<json_rpc::Message>,
     sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
     sv1_server_receiver: Receiver<json_rpc::Message>,
-    /// Per-connection cancellation token (child of the global token).
-    /// Cancelled when this downstream's task loop exits, causing
-    /// the associated SV1 I/O task to shut down.
-    connection_token: CancellationToken,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -47,20 +43,17 @@ impl DownstreamIo {
         downstream_sv1_receiver: Receiver<json_rpc::Message>,
         sv1_server_sender: Sender<(DownstreamId, json_rpc::Message)>,
         sv1_server_receiver: Receiver<json_rpc::Message>,
-        connection_token: CancellationToken,
     ) -> Self {
         Self {
             downstream_sv1_receiver,
             downstream_sv1_sender,
             sv1_server_receiver,
             sv1_server_sender,
-            connection_token,
         }
     }
 
     fn drop(&self) {
         debug!("Dropping downstream channel state");
-        self.connection_token.cancel();
         self.downstream_sv1_receiver.close();
         self.downstream_sv1_sender.close();
     }
@@ -161,10 +154,78 @@ pub struct Downstream {
     pub downstream_io: DownstreamIo,
     // Flag to track if SV1 handshake is complete (subscribe + authorize)
     pub sv1_handshake_complete: Arc<AtomicBool>,
+    /// Per-connection cancellation token (child of the global token).
+    /// Cancelled when this downstream's task loop exits, causing
+    /// the associated SV1 I/O task to shut down.
+    downstream_cancellation_token: CancellationToken,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Downstream {
+    fn handle_error_action(
+        &self,
+        context: &str,
+        e: &TproxyError<error::Downstream>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                downstream_id = self.downstream_id,
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                downstream_id = self.downstream_id,
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
+        match e.action {
+            Action::Log => {
+                warn!(
+                    downstream_id = self.downstream_id,
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Disconnect(_) => {
+                warn!(
+                    downstream_id = self.downstream_id,
+                    error_kind = ?e.kind,
+                    "{context} requested disconnect; cancelling downstream token"
+                );
+                self.downstream_cancellation_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    downstream_id = self.downstream_id,
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown; cancelling global token"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            other => {
+                warn!(
+                    downstream_id = self.downstream_id,
+                    action = ?other,
+                    error_kind = ?e.kind,
+                    "{context} returned an unhandled action"
+                );
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Creates a new downstream connection instance.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -175,7 +236,7 @@ impl Downstream {
         sv1_server_receiver: Receiver<json_rpc::Message>,
         target: Target,
         hashrate: Option<Hashrate>,
-        connection_token: CancellationToken,
+        downstream_cancellation_token: CancellationToken,
     ) -> Self {
         let downstream_data = Arc::new(Mutex::new(DownstreamData::new(hashrate, target)));
         let downstream_channel_io = DownstreamIo::new(
@@ -183,13 +244,13 @@ impl Downstream {
             downstream_sv1_receiver,
             sv1_server_sender,
             sv1_server_receiver,
-            connection_token,
         );
         Self {
             downstream_id,
             downstream_data,
             downstream_io: downstream_channel_io,
             sv1_handshake_complete: Arc::new(AtomicBool::new(false)),
+            downstream_cancellation_token,
         }
     }
 
@@ -204,13 +265,16 @@ impl Downstream {
     /// The task will continue running until a cancellation signal is received or
     /// an unrecoverable error occurs. It ensures graceful cleanup of resources
     /// and proper error reporting.
-    pub(super) fn run_downstream_tasks(
+    pub(super) fn start<F, Fut>(
         self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: StatusSender,
         task_manager: Arc<TaskManager>,
-    ) {
+        on_disconnect: F,
+    ) where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
         let downstream_id = self.downstream_id;
         task_manager.spawn(async move {
             // we just spawned a new task that's relevant to fallback coordination
@@ -222,6 +286,7 @@ impl Downstream {
 
             loop {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("Downstream {downstream_id}: received app shutdown signal");
                         break;
@@ -235,7 +300,12 @@ impl Downstream {
                     res = self.handle_downstream_message() => {
                         if let Err(e) = res {
                             error!("Downstream {downstream_id}: error in downstream message handler: {e:?}");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = self.handle_error_action(
+                                "Downstream::handle_downstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -245,7 +315,12 @@ impl Downstream {
                     res = self.handle_sv1_server_message() => {
                         if let Err(e) = res {
                             error!("Downstream {downstream_id}: error in server message handler: {e:?}");
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = self.handle_error_action(
+                                "Downstream::handle_sv1_server_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
@@ -259,8 +334,9 @@ impl Downstream {
             }
 
             warn!("Downstream {downstream_id}: unified task shutting down");
+            self.downstream_cancellation_token.cancel();
             self.downstream_io.drop();
-
+            on_disconnect().await;
             // signal fallback coordinator that this task has completed its cleanup
             fallback_handler.done();
         });

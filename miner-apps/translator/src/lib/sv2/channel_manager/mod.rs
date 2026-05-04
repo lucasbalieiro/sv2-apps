@@ -2,8 +2,7 @@ mod extensions_message_handler;
 mod mining_message_handler;
 
 use crate::{
-    error::{self, TproxyError, TproxyErrorKind, TproxyResult},
-    status::{handle_error, Status, StatusSender},
+    error::{self, Action, LoopControl, TproxyError, TproxyErrorKind, TproxyResult},
     utils::{AggregatedState, AtomicAggregatedState, AGGREGATED_CHANNEL_ID},
     TproxyMode,
 };
@@ -173,6 +172,64 @@ pub struct ChannelManager {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl ChannelManager {
+    fn handle_error_action(
+        &self,
+        context: &str,
+        e: &TproxyError<error::ChannelManager>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            Action::Disconnect(downstream_id) => {
+                warn!(
+                    downstream_id,
+                    error_kind = ?e.kind,
+                    "{context} requested downstream disconnect"
+                );
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Creates a new ChannelManager instance.
     ///
     /// # Arguments
@@ -238,17 +295,13 @@ impl ChannelManager {
     /// # Arguments
     /// * `cancellation_token` - Global application cancellation token
     /// * `fallback_coordinator` - Fallback coordinator
-    /// * `status_sender` - Channel for sending status updates and errors
     /// * `task_manager` - Manager for tracking spawned tasks
     pub async fn run_channel_manager_tasks(
         self: Arc<Self>,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) {
-        let status_sender = StatusSender::ChannelManager(status_sender);
-
         task_manager.spawn(async move {
             // we just spawned a new task that's relevant to fallback coordination
             // so register it with the fallback coordinator
@@ -259,6 +312,7 @@ impl ChannelManager {
 
             loop {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("ChannelManager: received shutdown signal.");
                         break;
@@ -277,14 +331,24 @@ impl ChannelManager {
                     }
                     res = self.clone().handle_upstream_frame() => {
                         if let Err(e) = res {
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = self.handle_error_action(
+                                "ChannelManager::handle_upstream_frame",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
                     },
                     res = self.clone().handle_downstream_message() => {
                         if let Err(e) = res {
-                            if handle_error(&status_sender, e).await {
+                            if let LoopControl::Break = self.handle_error_action(
+                                "ChannelManager::handle_downstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }

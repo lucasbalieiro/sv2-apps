@@ -1,9 +1,8 @@
 pub mod common_message_handler;
 
 use crate::{
-    error::{self, TproxyError, TproxyErrorKind, TproxyResult},
+    error::{self, Action, LoopControl, TproxyError, TproxyErrorKind, TproxyResult},
     io_task::spawn_io_tasks,
-    status::{handle_error, Status, StatusSender},
     utils::UpstreamEntry,
 };
 use async_channel::{unbounded, Receiver, Sender};
@@ -60,7 +59,7 @@ impl UpstreamIo {
     fn drop(&self) {
         debug!("Closing all upstream channels");
         self.upstream_receiver.close();
-        self.upstream_receiver.close();
+        self.upstream_sender.close();
     }
 }
 
@@ -87,6 +86,63 @@ pub struct Upstream {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Upstream {
+    fn handle_error_action(
+        context: &str,
+        e: &TproxyError<error::Upstream>,
+        cancellation_token: &CancellationToken,
+        fallback_token: &CancellationToken,
+    ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
+
+        if fallback_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error during fallback"
+            );
+            return LoopControl::Continue;
+        }
+
+        match e.action {
+            Action::Log => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} returned a log-only error"
+                );
+                LoopControl::Continue
+            }
+            Action::Fallback => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested fallback"
+                );
+                fallback_token.cancel();
+                LoopControl::Break
+            }
+            Action::Shutdown => {
+                warn!(
+                    error_kind = ?e.kind,
+                    "{context} requested shutdown"
+                );
+                cancellation_token.cancel();
+                LoopControl::Break
+            }
+            other => {
+                warn!(
+                    action = ?other,
+                    error_kind = ?e.kind,
+                    "{context} returned an unhandled action"
+                );
+                LoopControl::Continue
+            }
+        }
+    }
+
     /// Creates a new upstream connection by attempting to connect to configured servers.
     ///
     /// This method tries to establish a connection to one of the provided upstream
@@ -147,6 +203,11 @@ impl Upstream {
                 info!("Connected to upstream at {}", resolved_addr);
 
                 tokio::select! {
+                    biased;
+                    _ = cancellation_token.cancelled() => {
+                        info!("Shutdown received during handshake, dropping connection");
+                        Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem))
+                    }
                     result = connect_with_noise(socket, Some(upstream.authority_pubkey)) => {
                         match result {
                             Ok(stream) => {
@@ -196,10 +257,6 @@ impl Upstream {
                             }
                         }
                     }
-                    _ = cancellation_token.cancelled() => {
-                        info!("Shutdown received during handshake, dropping connection");
-                        Err(TproxyError::shutdown(TproxyErrorKind::CouldNotInitiateSystem))
-                    }
                 }
             }
             Err(e) => {
@@ -223,19 +280,14 @@ impl Upstream {
         mut self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: Sender<Status>,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Upstream> {
         let fallback_token: CancellationToken = fallback_coordinator.token();
 
         // wait for connection setup or cancellation signal
         tokio::select! {
-            result = self.setup_connection() => {
-                if let Err(e) = result {
-                    error!("Upstream: failed to set up SV2 connection: {e:?}");
-                    return Err(e);
-                }
-            }
+            biased;
+
             _ = cancellation_token.cancelled() => {
                 info!("Upstream: shutdown signal received during connection setup.");
                 return Ok(());
@@ -244,17 +296,15 @@ impl Upstream {
                 info!("Upstream: fallback signal received during connection setup.");
                 return Ok(());
             }
+            result = self.setup_connection() => {
+                if let Err(e) = result {
+                    error!("Upstream: failed to set up SV2 connection: {e:?}");
+                    return Err(e);
+                }
+            }
         }
 
-        // Wrap status sender and start upstream task
-        let wrapped_status_sender = StatusSender::Upstream(status_sender);
-
-        self.run_upstream_task(
-            cancellation_token,
-            fallback_coordinator,
-            wrapped_status_sender,
-            task_manager,
-        )?;
+        self.run_upstream_task(cancellation_token, fallback_coordinator, task_manager)?;
 
         Ok(())
     }
@@ -317,7 +367,8 @@ impl Upstream {
         if !self.required_extensions.is_empty() {
             let require_extensions = RequestExtensions {
                 request_id: 1,
-                requested_extensions: Seq064K::new(self.required_extensions.clone()).unwrap(),
+                requested_extensions: Seq064K::new(self.required_extensions.clone())
+                    .map_err(TproxyError::shutdown)?,
             };
 
             info!(
@@ -342,19 +393,16 @@ impl Upstream {
         Ok(())
     }
 
-    /// Processes incoming messages from the upstream SV2 server.
-    ///
-    /// This method handles different types of frames received from upstream:
-    /// - SV2 frames: Parses and routes mining/common messages appropriately
-    /// - Handshake frames: Logs for debugging (shouldn't occur during normal operation)
-    ///
-    /// Common messages are handled directly, while mining messages are forwarded
-    /// to the channel manager for processing and distribution to downstream connections.
-    async fn on_upstream_message(
-        &mut self,
-        mut sv2_frame: Sv2Frame,
-    ) -> TproxyResult<(), error::Upstream> {
-        debug!("Received SV2 frame from upstream.");
+    /// Handles one SV2 frame received from upstream.
+    async fn handle_upstream_message(mut self) -> TproxyResult<(), error::Upstream> {
+        let mut sv2_frame = self
+            .upstream_io
+            .upstream_receiver
+            .recv()
+            .await
+            .map_err(TproxyError::fallback)?;
+
+        debug!("Upstream: received frame.");
         let Some(header) = sv2_frame.get_header() else {
             return Err(TproxyError::fallback(TproxyErrorKind::UnexpectedMessage(
                 0, 0,
@@ -393,16 +441,41 @@ impl Upstream {
                 )));
             }
         }
+
+        Ok(())
+    }
+
+    /// Handles one SV2 frame received from the channel manager and forwards it upstream.
+    async fn handle_channel_manager_message(&self) -> TproxyResult<(), error::Upstream> {
+        let sv2_frame = self
+            .upstream_io
+            .channel_manager_receiver
+            .recv()
+            .await
+            .map_err(TproxyError::shutdown)?;
+
+        debug!(
+            "Upstream: sending sv2 frame from channel manager: {:?}",
+            sv2_frame
+        );
+        self.upstream_io
+            .upstream_sender
+            .send(sv2_frame)
+            .await
+            .map_err(|e| {
+                error!("Upstream: failed to send sv2 frame: {e:?}");
+                TproxyError::fallback(TproxyErrorKind::ChannelErrorSender)
+            })?;
+
         Ok(())
     }
 
     /// Spawns a unified task to handle upstream message I/O and shutdown logic.
     #[allow(clippy::result_large_err)]
     fn run_upstream_task(
-        mut self,
+        self,
         cancellation_token: CancellationToken,
         fallback_coordinator: FallbackCoordinator,
-        status_sender: StatusSender,
         task_manager: Arc<TaskManager>,
     ) -> TproxyResult<(), error::Upstream> {
         task_manager.spawn(async move {
@@ -415,6 +488,8 @@ impl Upstream {
 
             loop {
                 tokio::select! {
+                    biased;
+
                     // Handle app shutdown signal
                     _ = cancellation_token.cancelled() => {
                         info!("Upstream: received shutdown signal. Exiting loop.");
@@ -427,45 +502,26 @@ impl Upstream {
                         break;
                     }
 
-                    // Handle incoming SV2 messages from upstream
-                    result = self.upstream_io.upstream_receiver.recv() => {
-                        match result {
-                            Ok(frame) => {
-                                debug!("Upstream: received frame.");
-                                if let Err(e) = self.on_upstream_message(frame).await {
-                                    error!("Upstream: error while processing message: {e:?}");
-                                    handle_error(&status_sender, e).await;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Upstream: receiver channel closed unexpectedly: {e}");
-                                handle_error(&status_sender, TproxyError::<error::Upstream>::fallback(e)).await;
+                    res = self.clone().handle_upstream_message() => {
+                        if let Err(e) = res {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "Upstream::handle_upstream_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
                     }
-
-                    // Handle messages from channel manager to send upstream
-                    result = self.upstream_io.channel_manager_receiver.recv() => {
-                        match result {
-                            Ok(sv2_frame) => {
-                                debug!("Upstream: sending sv2 frame from channel manager: {:?}", sv2_frame);
-                                if let Err(e) = self
-                                    .upstream_io
-                                    .upstream_sender
-                                    .send(sv2_frame)
-                                    .await
-                                    .map_err(|e| {
-                                        error!("Upstream: failed to send sv2 frame: {e:?}");
-                                        TproxyError::<error::Upstream>::fallback(TproxyErrorKind::ChannelErrorSender)
-                                    })
-                                {
-                                    handle_error(&status_sender, e).await;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Upstream: channel manager receiver closed: {e}");
-                                handle_error(&status_sender, TproxyError::<error::Upstream>::shutdown(e)).await;
+                    res = self.handle_channel_manager_message() => {
+                        if let Err(e) = res {
+                            if let LoopControl::Break = Self::handle_error_action(
+                                "Upstream::handle_channel_manager_message",
+                                &e,
+                                &cancellation_token,
+                                &fallback_token,
+                            ) {
                                 break;
                             }
                         }
