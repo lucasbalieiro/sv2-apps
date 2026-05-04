@@ -45,6 +45,13 @@ impl Sv2Tp {
         e: &PoolError<error::TemplateProvider>,
         cancellation_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
         match e.action {
             Action::Log => {
                 warn!(error_kind = ?e.kind, "{context} returned a log-only error");
@@ -90,6 +97,11 @@ impl Sv2Tp {
                     );
 
                     tokio::select! {
+                        biased;
+                        _ = cancellation_token.cancelled() => {
+                            info!("Shutdown received during handshake, dropping connection");
+                            return Err(PoolError::shutdown(PoolErrorKind::CouldNotInitiateSystem))
+                        }
                         result = connect_with_noise(stream, public_key) => {
                             match result {
                                 Ok(noise_stream) => {
@@ -132,10 +144,6 @@ impl Sv2Tp {
                                 }
                             }
                         }
-                        _ = cancellation_token.cancelled() => {
-                            info!("Shutdown received during handshake, dropping connection");
-                            return Err(PoolError::shutdown(PoolErrorKind::CouldNotInitiateSystem))
-                        }
                     }
                 }
                 Err(e) => {
@@ -176,6 +184,7 @@ impl Sv2Tp {
                 let mut self_clone_1 = self.clone();
                 let self_clone_2 = self.clone();
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         info!("Template Receiver: received shutdown signal");
                         break;
