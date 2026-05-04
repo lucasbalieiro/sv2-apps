@@ -103,6 +103,13 @@ impl Downstream {
         e: &PoolError<error::Downstream>,
         cancellation_token: &CancellationToken,
     ) -> LoopControl {
+        if cancellation_token.is_cancelled() {
+            debug!(
+                error_kind = ?e.kind,
+                "{context} returned an error after shutdown was requested"
+            );
+            return LoopControl::Continue;
+        }
         match e.action {
             Action::Log => {
                 warn!(
