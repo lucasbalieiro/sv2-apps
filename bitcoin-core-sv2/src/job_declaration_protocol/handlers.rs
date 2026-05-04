@@ -20,9 +20,9 @@ impl BitcoinCoreSv2JDP {
     /// Validates a declared mining job by checking transaction availability and block structure.
     ///
     /// Adds missing transactions to the mempool mirror, verifies all transactions are available,
-    /// assembles a test block, and uses Bitcoin Core's `checkBlock` to validate the block
-    /// structure. Returns success with current template parameters or an error if validation
-    /// fails.
+    /// assembles a test block, sets IPC thread context, and uses Bitcoin Core's `checkBlock` to
+    /// validate the block structure. Returns success with current template parameters or an error
+    /// if validation fails.
     pub(crate) async fn handle_declare_mining_job(
         &self,
         version: Version,
@@ -142,11 +142,26 @@ impl BitcoinCoreSv2JDP {
             );
 
             let mut check_block_request = self.mining_ipc_client.check_block_request();
-            let mut check_block_params = check_block_request.get();
 
-            check_block_params.set_block(&block_bytes);
+            match check_block_request.get().get_context() {
+                Ok(mut context) => context.set_thread(self.thread_ipc_client.clone()),
+                Err(e) => {
+                    tracing::error!("Failed to set check block request thread context: {e}");
+                    // send error response to the client
+                    // deliberately ignore potential send errors
+                    let _ = response_tx.send(JdResponse::Error {
+                        error_code: "internal-error".to_string(),
+                        validation_context: initial_validation_context,
+                    });
+                    tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
+                    self.cancellation_token.cancel();
+                    return;
+                }
+            }
 
-            let mut options = match check_block_params.get_options() {
+            check_block_request.get().set_block(&block_bytes);
+
+            let mut options = match check_block_request.get().get_options() {
                 Ok(options) => options,
                 Err(e) => {
                     tracing::error!("Failed to get check block options: {e}");

@@ -23,9 +23,12 @@ pub enum BitcoinCoreSv2TDPError {
     FailedToSubmitSolution,
     FailedToSetThread,
     FailedToGetWaitNextRequestOptions,
+    CreateNewBlockRequestInterrupted,
+    FailedToSendInterruptCreateNewBlockRequest,
     FailedToSendInterruptWaitRequest,
     FailedToWaitForMonitorIpcTemplatesTask,
     FailedToCreateSolutionDir,
+    InvalidBlockRewardRemaining(i64),
 }
 
 impl From<capnp::Error> for BitcoinCoreSv2TDPError {
@@ -53,6 +56,7 @@ pub enum TemplateDataError {
     CapnpError(capnp::Error),
     FailedIpcSubmitSolution,
     FailedToSerializeEmptyCoinbaseOutputs,
+    FailedToSerializeCoinbaseOutputs,
     FailedToConvertMerklePathHashToU256,
     FailedToCreateMerklePathSeq,
     BitcoinCoreSv2TDPError(BitcoinCoreSv2TDPError),
@@ -94,6 +98,9 @@ impl std::fmt::Display for TemplateDataError {
             }
             TemplateDataError::FailedToSerializeEmptyCoinbaseOutputs => {
                 write!(f, "Failed to serialize empty coinbase outputs")
+            }
+            TemplateDataError::FailedToSerializeCoinbaseOutputs => {
+                write!(f, "Failed to serialize coinbase outputs")
             }
             TemplateDataError::FailedToSumCoinbaseOutputs => {
                 write!(f, "Failed to sum coinbase outputs")

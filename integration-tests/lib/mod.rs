@@ -179,15 +179,24 @@ pub fn start_template_provider(
 ) -> (TemplateProvider, SocketAddr) {
     let address = get_available_address();
     let sv2_interval = sv2_interval.unwrap_or(20);
-    let template_provider = TemplateProvider::start(address.port(), sv2_interval, difficulty_level);
-    template_provider.generate_blocks(1);
+    let template_provider =
+        TemplateProvider::start(address.port(), sv2_interval, difficulty_level.clone());
+    if difficulty_level == DifficultyLevel::Low {
+        // template_provider.generate_blocks(1);
+        // generate 16 blocks as a workaround for https://github.com/bitcoin/bitcoin/issues/35126
+        template_provider.generate_blocks(16);
+    }
     (template_provider, address)
 }
 
 pub fn start_bitcoin_core(difficulty_level: DifficultyLevel) -> BitcoinCore {
     let address = get_available_address();
-    let bitcoin_core = BitcoinCore::start(address.port(), difficulty_level);
-    bitcoin_core.generate_blocks(1);
+    let bitcoin_core = BitcoinCore::start(address.port(), difficulty_level.clone());
+    if difficulty_level == DifficultyLevel::Low {
+        // template_provider.generate_blocks(1);
+        // generate 16 blocks as a workaround for https://github.com/bitcoin/bitcoin/issues/35126
+        bitcoin_core.generate_blocks(16);
+    }
     bitcoin_core
 }
 

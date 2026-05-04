@@ -264,14 +264,16 @@ impl BitcoinCoreIPCEngine {
                         let bitcoin_core_sv2_jdp = match BitcoinCoreSv2JDP::new(
                             unix_socket_path,
                             request_receiver,
-                            cancellation_token_clone,
+                            cancellation_token_clone.clone(),
                             ready_tx,
                         )
                         .await
                         {
                             Ok(client) => client,
                             Err(e) => {
-                                tracing::error!("Failed to create BitcoinCoreSv2JDP: {:?}", e);
+                                if !cancellation_token_clone.is_cancelled() {
+                                    tracing::error!("Failed to create BitcoinCoreSv2JDP: {:?}", e);
+                                }
                                 // ready_tx dropped here, signaling failure to ready_rx
                                 return;
                             }
@@ -283,10 +285,42 @@ impl BitcoinCoreIPCEngine {
             });
         });
 
-        // Wait for BitcoinCoreSv2JDP to complete mempool bootstrap
-        ready_rx
-            .await
-            .map_err(|_| JDSErrorKind::BitcoinCoreIPC("Mempool bootstrap failed".to_string()))?;
+        // Wait for BitcoinCoreSv2JDP to complete mempool bootstrap, mirroring the
+        // pool's Template Provider startup behavior during IBD.
+        // Until `new()` succeeds, this function is still the only owner of the spawned JDP
+        // thread handle, so cancellation/bootstrap failure must join here rather than detach it.
+        let mut ready_rx = ready_rx;
+        loop {
+            tokio::select! {
+                res = &mut ready_rx => {
+                    match res {
+                        Ok(()) => break,
+                        Err(_) => {
+                            if let Err(e) = jdp_thread_handle.join() {
+                                tracing::warn!("BitcoinCoreSv2JDP thread join failed: {e:?}");
+                            }
+
+                            return Err(JDSErrorKind::BitcoinCoreIPC(
+                                "Mempool bootstrap did not complete".to_string(),
+                            ));
+                        }
+                    }
+                }
+                _ = cancellation_token.cancelled() => {
+                    tracing::info!("BitcoinCoreIPCEngine stopped before mempool bootstrap completed");
+                    if let Err(e) = jdp_thread_handle.join() {
+                        tracing::warn!("BitcoinCoreSv2JDP thread join failed during startup cancellation: {e:?}");
+                    }
+                    return Err(JDSErrorKind::BitcoinCoreIPC(
+                        "Mempool bootstrap did not complete".to_string(),
+                    ));
+                }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    tracing::warn!("Waiting for initial template and prevhash from Template Provider...");
+                    tracing::warn!("Is the Bitcoin node undergoing IBD?");
+                }
+            }
+        }
 
         let allocated_token_to_request_id =
             Arc::new(DashMap::<JdToken, AllocatedTokenEntry>::new());

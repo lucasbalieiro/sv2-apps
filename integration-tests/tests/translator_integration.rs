@@ -1840,7 +1840,21 @@ async fn pool_does_not_hang_on_no_handshake() {
     start_tracing();
     let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
     let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
-    let ephemeral_stream = TcpStream::connect(pool_addr).await.unwrap();
+    let ephemeral_stream = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match TcpStream::connect(pool_addr).await {
+                Ok(stream) => break stream,
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::ConnectionRefused {
+                        panic!("failed to connect to {pool_addr}: {e}");
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+    })
+    .await
+    .expect("pool downstream listener did not start");
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let (pool_translator_sniffer, pool_translator_sniffer_addr) =

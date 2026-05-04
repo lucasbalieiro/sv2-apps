@@ -10,8 +10,19 @@ use tracing::warn;
 
 use crate::utils::{fs_utils, http, tarball};
 
-const VERSION_SV2_TP: &str = "1.0.3";
-const VERSION_BITCOIN_CORE: &str = "30.2";
+const VERSION_SV2_TP: &str = "1.1.0";
+const VERSION_BITCOIN_CORE: &str = "31.0";
+/// Allow static signet fixtures to leave IBD without freezing Bitcoin Core's
+/// clock, so mined blocks still use wall-clock timestamps.
+///
+/// Since Bitcoin Core v31, IPC `createNewBlock` waits while IBD is active, so
+/// `bitcoin_core_sv2` does not send templates before IBD is over.
+/// See https://github.com/bitcoin/bitcoin/issues/33994.
+///
+/// 100 years is intentionally far above the fixture age so these static chains
+/// remain usable without periodic timestamp refreshes. This only relaxes the
+/// stale-tip IBD threshold; it does not change Bitcoin Core's clock.
+const SIGNET_FIXTURE_MAX_TIP_AGE_SECS: u64 = 100 * 365 * 24 * 60 * 60;
 
 fn get_sv2_tp_filename(os: &str, arch: &str) -> String {
     match (os, arch) {
@@ -52,13 +63,14 @@ fn get_bitcoin_core_filename(os: &str, arch: &str) -> String {
 /// (most of the time, a CPU should take a REALLY long time to find a block)
 ///
 /// Note: signet mode has signetchallenge=51, which means no signature is needed on the coinbase.
+#[derive(PartialEq, Clone)]
 pub enum DifficultyLevel {
     Low,
     Mid,
     High,
 }
 
-/// Represents a Bitcoin Core v30.2+ node with IPC enabled.
+/// Represents a Bitcoin Core node with IPC enabled.
 #[derive(Debug)]
 pub struct BitcoinCore {
     bitcoind: Node,
@@ -85,6 +97,7 @@ impl BitcoinCore {
         let staticdir = format!(".bitcoin-{port}");
         conf.staticdir = Some(data_dir.join(staticdir.clone()));
 
+        let max_tip_age_arg = format!("-maxtipage={SIGNET_FIXTURE_MAX_TIP_AGE_SECS}");
         match difficulty_level {
             DifficultyLevel::Low => {
                 // use default corepc-node settings, which means regtest mode
@@ -94,14 +107,24 @@ impl BitcoinCore {
                 // use signet mode with genesis difficulty
                 // (signetchallenge=51, no signature needed on the coinbase)
                 // most of the time, a CPU should find a block in a minute or less
-                conf.args = vec!["-signet", "-fallbackfee=0.0001", "-signetchallenge=51"];
+                conf.args = vec![
+                    "-signet",
+                    "-fallbackfee=0.0001",
+                    "-signetchallenge=51",
+                    max_tip_age_arg.as_str(),
+                ];
                 conf.network = "signet";
             }
             DifficultyLevel::High => {
                 // use signet mode with premined blocks raising difficulty to 77761.11
                 // (signetchallenge=51, no signature needed on the coinbase)
                 // most of the time, a CPU should take a REALLY long time to find a block
-                conf.args = vec!["-signet", "-fallbackfee=0.0001", "-signetchallenge=51"];
+                conf.args = vec![
+                    "-signet",
+                    "-fallbackfee=0.0001",
+                    "-signetchallenge=51",
+                    max_tip_age_arg.as_str(),
+                ];
                 conf.network = "signet";
 
                 // Create signet datadir
@@ -132,7 +155,7 @@ impl BitcoinCore {
             }
         }
 
-        // Download and setup Bitcoin Core v30.2 with IPC support
+        // Download and setup Bitcoin Core with IPC support
         let os = env::consts::OS;
         let arch = env::consts::ARCH;
         let bitcoin_filename = get_bitcoin_core_filename(os, arch);
@@ -147,7 +170,7 @@ impl BitcoinCore {
                     warn!("Downloading Bitcoin Core {} for the testing session. This could take a while...", VERSION_BITCOIN_CORE);
                     let download_endpoint = env::var("BITCOIN_CORE_DOWNLOAD_ENDPOINT")
                         .unwrap_or_else(|_| {
-                            "https://bitcoincore.org/bin/bitcoin-core-30.2".to_owned()
+                            "https://bitcoincore.org/bin/bitcoin-core-31.0".to_owned()
                         });
                     let url = format!("{download_endpoint}/{bitcoin_filename}");
                     http::make_get_request(&url, 5)
@@ -212,16 +235,25 @@ impl BitcoinCore {
     }
 
     /// Mine `n` blocks.
-    pub fn generate_blocks(&self, n: u64) {
+    pub fn generate_blocks(&self, n: usize) {
         let mining_address = self
             .bitcoind
             .client
             .new_address()
             .expect("Failed to get mining address");
-        self.bitcoind
+        let generated_blocks = self
+            .bitcoind
             .client
-            .generate_to_address(n as usize, &mining_address)
+            .generate_to_address(n, &mining_address)
             .expect("Failed to generate blocks");
+        // Bitcoin Core's generatetoaddress returns Ok(block_hashes) with an array of hashes of the
+        // generated blocks.
+        assert_eq!(
+            generated_blocks.0.len(),
+            n,
+            "Bitcoin Core generated {} of {n} requested blocks",
+            generated_blocks.0.len()
+        );
     }
 
     /// Return the node's RPC info.
@@ -285,10 +317,10 @@ impl BitcoinCore {
     }
 }
 
-/// Represents a template provider using Bitcoin Core v30.2+ with IPC and standalone sv2-tp.
+/// Represents a template provider using Bitcoin Core with IPC and standalone sv2-tp.
 ///
 /// This implementation launches two separate processes:
-/// 1. Bitcoin Core v30.2+ (bitcoin-node) with IPC enabled
+/// 1. Bitcoin Core (bitcoin-node) with IPC enabled
 /// 2. Standalone sv2-tp binary that connects to Bitcoin Core via IPC
 #[derive(Debug)]
 pub struct TemplateProvider {
@@ -298,7 +330,7 @@ pub struct TemplateProvider {
 }
 
 impl TemplateProvider {
-    /// Start a new [`TemplateProvider`] instance with Bitcoin Core v30.2+ and standalone sv2-tp.
+    /// Start a new [`TemplateProvider`] instance with Bitcoin Core and standalone sv2-tp.
     pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
         let bitcoin_core = BitcoinCore::start(port, difficulty_level);
 
@@ -355,7 +387,7 @@ impl TemplateProvider {
             .arg(network)
             .arg(format!("-datadir={}", datadir.display()))
             .arg(format!("-sv2port={}", port))
-            .arg(format!("-sv2interval={}", sv2_interval))
+            .arg(format!("-templateinterval={}", sv2_interval))
             .arg("-sv2feedelta=0")
             .arg("-debug=sv2")
             .arg("-loglevel=sv2:trace")
@@ -375,7 +407,7 @@ impl TemplateProvider {
     }
 
     /// Mine `n` blocks.
-    pub fn generate_blocks(&self, n: u64) {
+    pub fn generate_blocks(&self, n: usize) {
         self.bitcoin_core.generate_blocks(n);
     }
 

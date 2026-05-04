@@ -48,6 +48,7 @@ mod monitors;
 /// Incoming [`PushSolution`] requests are used to submit mining solutions to Bitcoin Core.
 #[derive(Clone)]
 pub struct BitcoinCoreSv2JDP {
+    thread_map: ThreadMapIpcClient,
     thread_ipc_client: ThreadIpcClient,
     mining_ipc_client: MiningIpcClient,
     current_template_ipc_client: Rc<RefCell<BlockTemplateIpcClient>>,
@@ -120,6 +121,10 @@ impl BitcoinCoreSv2JDP {
         let mining_ipc_client: MiningIpcClient = mining_client_response.get()?.get_result()?;
 
         let mut template_ipc_client_request = mining_ipc_client.create_new_block_request();
+        template_ipc_client_request
+            .get()
+            .get_context()?
+            .set_thread(thread_ipc_client.clone());
         let mut template_ipc_client_request_options = template_ipc_client_request
             .get()
             .get_options()
@@ -130,14 +135,25 @@ impl BitcoinCoreSv2JDP {
         template_ipc_client_request_options.set_use_mempool(true);
 
         tracing::debug!("Sending createNewBlock request to Bitcoin Core");
-        let template_ipc_client_response = template_ipc_client_request
-            .send()
-            .promise
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to send template IPC client request: {}", e);
-                e
-            })?;
+        let create_new_block_promise = template_ipc_client_request.send().promise;
+        // During IBD this startup call can block for a long time, so shutdown must interrupt the
+        // in-flight request instead of only abandoning the outer wait loop.
+        let template_ipc_client_response = tokio::select! {
+            template_ipc_client_response = create_new_block_promise => {
+                template_ipc_client_response.map_err(|e| {
+                    tracing::error!("Failed to send template IPC client request: {}", e);
+                    e
+                })?
+            }
+            _ = cancellation_token.cancelled() => {
+                tracing::debug!("Interrupting initial createNewBlock request");
+                Self::interrupt_create_new_block_request(&mining_ipc_client).await?;
+                return Err(capnp::Error::failed(
+                    "createNewBlock request interrupted during shutdown".to_string(),
+                )
+                .into());
+            }
+        };
 
         let template_ipc_client_result = template_ipc_client_response.get().map_err(|e| {
             tracing::error!("Failed to get template IPC client result: {}", e);
@@ -152,6 +168,7 @@ impl BitcoinCoreSv2JDP {
         info!("IPC JDP client successfully created.");
 
         let self_ = Self {
+            thread_map,
             thread_ipc_client,
             mining_ipc_client,
             current_template_ipc_client: Rc::new(RefCell::new(template_ipc_client)),
@@ -178,6 +195,45 @@ impl BitcoinCoreSv2JDP {
         Ok(self_)
     }
 
+    /// Creates a new dedicated thread IPC client.
+    async fn new_thread_ipc_client(&self) -> Result<ThreadIpcClient, BitcoinCoreSv2JDPError> {
+        let thread_request = self.thread_map.make_thread_request();
+        let thread_response = thread_request.send().promise.await.map_err(|e| {
+            let details = format!("Failed to send make_thread request: {}", e);
+            tracing::error!("{}", details);
+            BitcoinCoreSv2JDPError::FailedToCreateThreadIpcClient(details)
+        })?;
+
+        let thread_ipc_client = thread_response
+            .get()
+            .map_err(|e| {
+                let details = format!("Failed to read make_thread response: {}", e);
+                tracing::error!("{}", details);
+                BitcoinCoreSv2JDPError::FailedToCreateThreadIpcClient(details)
+            })?
+            .get_result()
+            .map_err(|e| {
+                let details = format!("Failed to get thread IPC client: {}", e);
+                tracing::error!("{}", details);
+                BitcoinCoreSv2JDPError::FailedToCreateThreadIpcClient(details)
+            })?;
+
+        Ok(thread_ipc_client)
+    }
+
+    /// Interrupts an in-flight `createNewBlock` request during startup shutdown.
+    async fn interrupt_create_new_block_request(
+        mining_ipc_client: &MiningIpcClient,
+    ) -> Result<(), BitcoinCoreSv2JDPError> {
+        let interrupt_request = mining_ipc_client.interrupt_request();
+        if let Err(e) = interrupt_request.send().promise.await {
+            tracing::error!("Failed to send interrupt createNewBlock request: {}", e);
+            return Err(BitcoinCoreSv2JDPError::CapnpError(e));
+        }
+
+        Ok(())
+    }
+
     /// Main event loop - runs in a LocalSet on dedicated thread.
     ///
     /// Spawns the monitor task and processes incoming job declaration requests until shutdown.
@@ -194,14 +250,10 @@ impl BitcoinCoreSv2JDP {
                     break;
                 }
 
-                // Process incoming requests
-                // Note: requests are processed sequentially for two reasons:
-                // 1. This loop awaits each request before reading the next one
-                // 2. On the Bitcoin Core side, `checkBlock` lacks a `context :Proxy.Context`
-                //    parameter in its capnp definition (mining.capnp), so it runs synchronously
-                //    on the Cap'n Proto event loop thread, blocking all other IPC operations on
-                //    this connection until it completes
-                // Pending requests are unboundedly buffered in the async_channel
+                // Process incoming requests.
+                // Requests are handled sequentially because this loop awaits each request before
+                // reading the next one.
+                // Pending requests are unboundedly buffered in the async_channel.
                 request = self.incoming_requests.recv() => {
                     match request {
                         Ok(request) => {
@@ -279,6 +331,15 @@ impl BitcoinCoreSv2JDP {
             let result = async {
                 let mut create_new_block_request =
                     self.mining_ipc_client.create_new_block_request();
+
+                create_new_block_request
+                    .get()
+                    .get_context()
+                    .map_err(|e| {
+                        tracing::error!("Failed to get template IPC client request context: {e}");
+                        e
+                    })?
+                    .set_thread(self.thread_ipc_client.clone());
 
                 let mut create_new_block_options =
                     create_new_block_request.get().get_options().map_err(|e| {
