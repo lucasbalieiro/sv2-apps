@@ -5,7 +5,7 @@ use bitcoin_core_sv2::template_distribution_protocol::CancellationToken;
 use stratum_apps::{
     channel_utils::ReceiverCleanup,
     key_utils::Secp256k1PublicKey,
-    network_helpers::{self, connect_with_noise, resolve_host_port},
+    network_helpers::{self, connect_with_noise, resolve_host_port, TCP_CONNECT_TIMEOUT},
     stratum_core::{
         framing_sv2,
         handlers_sv2::HandleCommonMessagesFromServerAsync,
@@ -17,7 +17,7 @@ use stratum_apps::{
         types::{Message, Sv2Frame},
     },
 };
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, time::timeout};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -99,7 +99,10 @@ impl Sv2Tp {
         for attempt in 1..=MAX_RETRIES {
             info!(attempt, MAX_RETRIES, "Connecting to template provider");
 
-            match TcpStream::connect(tp_address.as_str()).await {
+            match timeout(TCP_CONNECT_TIMEOUT, TcpStream::connect(tp_address.as_str()))
+                .await
+                .map_err(PoolError::shutdown)?
+            {
                 Ok(stream) => {
                     info!(
                         attempt,
