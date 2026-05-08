@@ -25,6 +25,7 @@ use stratum_apps::{
         CanDisconnect, CanShutdown, ChannelId, DownstreamId, ExtensionType, MessageType,
     },
 };
+use tokio::time::error::Elapsed;
 
 pub type PoolResult<T, Owner> = Result<T, PoolError<Owner>>;
 
@@ -201,6 +202,8 @@ pub enum PoolErrorKind {
     PayoutModeError(String),
     /// JDS error (from embedded Job Declaration Server)
     Jds(jd_server_sv2::error::JDSErrorKind),
+    /// Timeout error
+    Timeout,
 }
 
 impl std::fmt::Display for PoolErrorKind {
@@ -293,6 +296,7 @@ impl std::fmt::Display for PoolErrorKind {
             InvalidKey => write!(f, "Invalid key used during noise handshake"),
             PayoutModeError(e) => write!(f, "Unable to parse the PayoutMode: {e}"),
             Jds(e) => write!(f, "JDS error: {e:?}"),
+            Timeout => write!(f, "Time out error"),
         }
     }
 }
@@ -437,5 +441,11 @@ impl<Owner> HandlerErrorType for PoolError<Owner> {
 impl<Owner> std::fmt::Display for PoolError<Owner> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "[{:?}/{:?}]", self.kind, self.action)
+    }
+}
+
+impl From<Elapsed> for PoolErrorKind {
+    fn from(_value: Elapsed) -> Self {
+        Self::Timeout
     }
 }
