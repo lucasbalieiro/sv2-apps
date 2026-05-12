@@ -233,6 +233,8 @@ impl MonitoringServer {
         info!("Starting monitoring server on http://{}", self.bind_address);
         info!("Cache refresh interval: {:?}", self.refresh_interval);
 
+        let listener = TcpListener::bind(self.bind_address).await?;
+
         // Spawn background task to refresh cache periodically
         let cache_for_refresh = self.state.cache.clone();
         let refresh_interval = self.refresh_interval;
@@ -262,8 +264,6 @@ impl MonitoringServer {
             .nest("/api/v1", api_v1)
             .route("/metrics", get(handle_prometheus_metrics))
             .with_state(self.state);
-
-        let listener = TcpListener::bind(self.bind_address).await?;
 
         info!(
             "Swagger UI available at http://{}/swagger-ui",
@@ -1090,6 +1090,22 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(json["service"], "SRI Monitoring API");
         assert!(json["endpoints"].is_object());
+    }
+
+    #[tokio::test]
+    async fn run_returns_error_when_bind_address_is_in_use() {
+        let occupied_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let occupied_addr = occupied_listener.local_addr().unwrap();
+        let server =
+            MonitoringServer::new(occupied_addr, None, None, Duration::from_millis(10)).unwrap();
+
+        let err = server.run(std::future::pending()).await.unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::AddrInUse)
+        );
     }
 
     #[tokio::test]
