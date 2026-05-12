@@ -332,11 +332,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 Err(e) => {
                                     error!(?e, "Failed to create standard channel");
                                     return match e {
-                                        StandardChannelError::InvalidNominalHashrate => Ok(vec![(
-                                            downstream_id,
-                                            build_error("invalid-nominal-hashrate"),
-                                        )
-                                            .into()]),
+                                        StandardChannelError::OpenChannelInvalidNominalHashrate(
+                                            code,
+                                        ) => Ok(vec![(downstream_id, build_error(code)).into()]),
                                         other => Err(JDCError::disconnect(other, downstream_id)),
                                     };
                                 }
@@ -544,7 +542,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 error!(?e, "Extranonce prefix error");
                                 return Ok(vec![(
                                     downstream_id,
-                                    build_error("min-extranonce-size-too-large"),
+                                    build_error(
+                                        ERROR_CODE_OPEN_MINING_CHANNEL_MIN_EXTRANONCE_SIZE_TOO_LARGE,
+                                    ),
                                 )
                                     .into()]);
                             }
@@ -581,9 +581,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 Err(e) => {
                                     error!(?e, "Failed to create ExtendedChannel");
                                     return match e {
-                                        ExtendedChannelError::InvalidNominalHashrate => Ok(vec![(
+                                        ExtendedChannelError::OpenChannelInvalidNominalHashrate(code) => Ok(vec![(
                                             downstream_id,
-                                            build_error("invalid-nominal-hashrate"),
+                                            build_error(code),
                                         )
                                             .into()]),
                                         other => Err(JDCError::disconnect(other, downstream_id)),
@@ -783,11 +783,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     error!(channel_id, ?e, "StandardChannel update failed");
 
                                     let err_code = match e {
-                                        StandardChannelError::InvalidNominalHashrate => {
-                                            "invalid-nominal-hashrate"
-                                        }
-                                        _ => "internal-error",
-                                    };
+                                    StandardChannelError::UpdateChannelInvalidNominalHashrate(
+                                        code,
+                                    ) => code,
+                                    _ => "internal-error",
+                                };
                                     if err_code == "internal-error" {
                                         warn!("Failed to update extended channel {channel_id}");
                                     } else {
@@ -817,11 +817,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 if let Err(e) = update_channel {
                                     error!(channel_id, ?e, "StandardChannel update failed");
                                     let err_code = match e {
-                                        ExtendedChannelError::InvalidNominalHashrate => {
-                                            "invalid-nominal-hashrate"
-                                        }
-                                        _ => "internal-error",
-                                    };
+                                    ExtendedChannelError::UpdateChannelInvalidNominalHashrate(
+                                        code,
+                                    ) => code,
+                                    _ => "internal-error",
+                                };
                                     if err_code == "internal-error" {
                                         warn!("Failed to update extended channel {channel_id}");
                                     } else {
@@ -841,9 +841,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 );
                             } else {
                                 error!("UpdateChannelError: invalid-channel-id");
-                                return vec![
-                                    (downstream_id, build_error("invalid-channel-id")).into()
-                                ];
+                                return vec![(
+                                    downstream_id,
+                                    build_error(ERROR_CODE_UPDATE_CHANNEL_INVALID_CHANNEL_ID),
+                                )
+                                    .into()];
                             }
 
                             messages
@@ -960,8 +962,15 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 let mut messages: Vec<RouteMessageTo> = vec![];
 
                 let Some(standard_channel) = data.standard_channels.get_mut(&channel_id) else {
-                    error!("SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: invalid-channel-id", msg.sequence_number);
-                    return Ok(vec![(downstream_id, build_error("invalid-channel-id")).into()]);
+                    error!(
+                        "SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: {}",
+                        msg.sequence_number, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID
+                    );
+                    return Ok(vec![(
+                        downstream_id,
+                        build_error(ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID),
+                    )
+                        .into()]);
                 };
 
                 let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
@@ -1022,11 +1031,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     }
                     Err(err) => {
                         let code = match err {
-                            ShareValidationError::Invalid => "invalid-share",
-                            ShareValidationError::Stale => "stale-share",
-                            ShareValidationError::InvalidJobId => "invalid-job-id",
-                            ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
-                            ShareValidationError::DuplicateShare => "duplicate-share",
+                            ShareValidationError::Invalid(code) => code,
+                            ShareValidationError::Stale(code) => code,
+                            ShareValidationError::InvalidJobId(code) => code,
+                            ShareValidationError::DoesNotMeetTarget(code) => code,
+                            ShareValidationError::DuplicateShare(code) => code,
+                            ShareValidationError::VersionRollingNotAllowed(code) => code,
                             _ => unreachable!(),
                         };
                         error!("❌ SubmitSharesError: ch={}, seq={}, error={code}", channel_id, msg.sequence_number);
@@ -1104,11 +1114,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 }
                                 Err(err) => {
                                     let code = match err {
-                                        client::share_accounting::ShareValidationError::Invalid => "invalid-share",
-                                        client::share_accounting::ShareValidationError::Stale => "stale-share",
-                                        client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
-                                        client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
-                                        client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                                        client::share_accounting::ShareValidationError::Invalid(code) => code,
+                                        client::share_accounting::ShareValidationError::Stale(code) => code,
+                                        client::share_accounting::ShareValidationError::InvalidJobId(code) => code,
+                                        client::share_accounting::ShareValidationError::DoesNotMeetTarget(code) => code,
+                                        client::share_accounting::ShareValidationError::DuplicateShare(code) => code,
+                                        client::share_accounting::ShareValidationError::VersionRollingNotAllowed(code) => code,
                                         _ => unreachable!(),
                                     };
                                     debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
@@ -1200,8 +1211,15 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 let mut messages: Vec<RouteMessageTo> = vec![];
 
                 let Some(extended_channel) = data.extended_channels.get_mut(&channel_id) else {
-                    error!("SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: invalid-channel-id", msg.sequence_number);
-                    return Ok(vec![(downstream_id, build_error("invalid-channel-id")).into()]);
+                    error!(
+                        "SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: {}",
+                        msg.sequence_number, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID
+                    );
+                    return Ok(vec![(
+                        downstream_id,
+                        build_error(ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID),
+                    )
+                        .into()]);
                 };
                 // here we extract and set the user_identity from the TLV fields if the extension is negotiated
                 let user_identity = if negotiated_extensions.as_ref().is_ok_and(|exts| exts.contains(&EXTENSION_TYPE_WORKER_HASHRATE_TRACKING)) {
@@ -1277,12 +1295,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     }
                     Err(err) => {
                         let code = match err {
-                            ShareValidationError::Invalid => "invalid-share",
-                            ShareValidationError::Stale => "stale-share",
-                            ShareValidationError::InvalidJobId => "invalid-job-id",
-                            ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
-                            ShareValidationError::DuplicateShare => "duplicate-share",
-                            ShareValidationError::BadExtranonceSize => "bad-extranonce-size",
+                            ShareValidationError::Invalid(code) => code,
+                            ShareValidationError::Stale(code) => code,
+                            ShareValidationError::InvalidJobId(code) => code,
+                            ShareValidationError::DoesNotMeetTarget(code) => code,
+                            ShareValidationError::DuplicateShare(code) => code,
+                            ShareValidationError::BadExtranonceSize(code) => code,
+                            ShareValidationError::VersionRollingNotAllowed(code) => code,
                             _ => unreachable!(),
                         };
                         error!("❌ SubmitSharesError on downstream channel: ch={}, seq={}, error={code}", channel_id, msg.sequence_number);
@@ -1367,12 +1386,13 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 }
                                 Err(err) => {
                                     let code = match err {
-                                        client::share_accounting::ShareValidationError::Invalid=>"invalid-share",
-                                        client::share_accounting::ShareValidationError::Stale=>"stale-share",
-                                        client::share_accounting::ShareValidationError::InvalidJobId=>"invalid-job-id",
-                                        client::share_accounting::ShareValidationError::DoesNotMeetTarget=>"difficulty-too-low",
-                                        client::share_accounting::ShareValidationError::DuplicateShare=>"duplicate-share",
-                                        client::share_accounting::ShareValidationError::BadExtranonceSize=>"bad-extranonce-size",
+                                        client::share_accounting::ShareValidationError::Invalid(code)=>code,
+                                        client::share_accounting::ShareValidationError::Stale(code)=>code,
+                                        client::share_accounting::ShareValidationError::InvalidJobId(code)=>code,
+                                        client::share_accounting::ShareValidationError::DoesNotMeetTarget(code)=>code,
+                                        client::share_accounting::ShareValidationError::DuplicateShare(code)=>code,
+                                        client::share_accounting::ShareValidationError::BadExtranonceSize(code)=>code,
+                                        client::share_accounting::ShareValidationError::VersionRollingNotAllowed(code)=>code,
                                     _ => unreachable!(),
                                     };
                                     debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);

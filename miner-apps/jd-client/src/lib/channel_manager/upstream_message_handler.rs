@@ -712,7 +712,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         warn!("Received: {}", msg);
 
         let error_code = msg.error_code.as_utf8_or_hex();
-        if error_code == "stale-chain-tip" {
+        if error_code == ERROR_CODE_SET_CUSTOM_MINING_JOB_STALE_CHAIN_TIP {
             warn!(
                 "Received non-fatal SetCustomMiningJobError from upstream: stale-chain-tip (request_id={})",
                 msg.request_id
