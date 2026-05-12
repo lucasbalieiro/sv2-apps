@@ -6,7 +6,7 @@ use stratum_apps::{
         codec_sv2::StandardEitherFrame,
         common_messages_sv2::{
             Protocol, SetupConnection, SetupConnectionError, SetupConnectionSuccess,
-            MESSAGE_TYPE_SETUP_CONNECTION,
+            ERROR_CODE_SETUP_CONNECTION_UNSUPPORTED_PROTOCOL, MESSAGE_TYPE_SETUP_CONNECTION,
         },
         parsers_sv2::{AnyMessage, CommonMessages, IsSv2Message},
     },
@@ -201,7 +201,7 @@ impl MockUpstream {
                             let error = AnyMessage::Common(CommonMessages::SetupConnectionError(
                                 SetupConnectionError {
                                     flags: 0,
-                                    error_code: "unsupported-protocol"
+                                    error_code: ERROR_CODE_SETUP_CONNECTION_UNSUPPORTED_PROTOCOL
                                         .to_string()
                                         .into_bytes()
                                         .try_into()
