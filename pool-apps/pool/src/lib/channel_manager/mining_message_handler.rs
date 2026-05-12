@@ -124,7 +124,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 error!("OpenStandardMiningChannel: Standard Channels are not supported for this connection");
                 let open_standard_mining_channel_error = OpenMiningChannelError {
                     request_id,
-                    error_code: "standard-channels-not-supported-for-custom-work"
+                    error_code: ERROR_CODE_OPEN_MINING_CHANNEL_STANDARD_CHANNELS_NOT_SUPPORTED_FOR_CUSTOM_WORK
                         .to_string()
                         .try_into()
                         .expect("error code must be valid string"),
@@ -146,7 +146,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     error!("Invalid user_identity '{}': does not match any supported identity format", user_identity);
                     let open_standard_mining_channel_error = OpenMiningChannelError {
                         request_id,
-                        error_code: "invalid-user-identity"
+                        error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
                             .to_string()
                             .try_into()
                             .expect("error code must be valid string"),
@@ -173,11 +173,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 let mut standard_channel = match StandardChannel::new_for_pool(channel_id, user_identity.to_string(), extranonce_prefix, requested_max_target, nominal_hash_rate, self.share_batch_size, self.shares_per_minute, job_store, self.pool_tag_string.clone()) {
                     Ok(channel) => channel,
                     Err(e) => match e {
-                        StandardChannelError::InvalidNominalHashrate => {
-                            error!("OpenMiningChannelError: invalid-nominal-hashrate");
+                        StandardChannelError::OpenChannelInvalidNominalHashrate(code) => {
+                            error!("OpenMiningChannelError: {}", code);
                             let open_standard_mining_channel_error = OpenMiningChannelError {
                                 request_id,
-                                error_code: "invalid-nominal-hashrate"
+                                error_code: code
                                     .to_string()
                                     .try_into()
                                     .expect("error code must be valid string"),
@@ -300,7 +300,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 error!("OpenMiningChannelError: min-extranonce-size-too-large");
                                 let open_extended_mining_channel_error = OpenMiningChannelError {
                                     request_id,
-                                    error_code: "min-extranonce-size-too-large"
+                                    error_code: ERROR_CODE_OPEN_MINING_CHANNEL_MIN_EXTRANONCE_SIZE_TOO_LARGE
                                         .to_string()
                                         .try_into()
                                         .expect("error code must be valid string"),
@@ -321,7 +321,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 error!("Invalid user_identity '{}': does not match any supported identity format", user_identity);
                                 let open_extended_mining_channel_error = OpenMiningChannelError {
                                     request_id,
-                                    error_code: "invalid-user-identity"
+                                    error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
                                         .to_string()
                                         .try_into()
                                         .expect("error code must be valid string"),
@@ -359,12 +359,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             Ok(channel) => channel,
                             Err(e) => {
                                 match e {
-                                ExtendedChannelError::InvalidNominalHashrate => {
-                                    error!("OpenMiningChannelError: invalid-nominal-hashrate");
+                                ExtendedChannelError::OpenChannelInvalidNominalHashrate(code) => {
+                                    error!("OpenMiningChannelError: {}", code);
                                     let open_extended_mining_channel_error =
                                         OpenMiningChannelError {
                                             request_id,
-                                            error_code: "invalid-nominal-hashrate"
+                                            error_code: code
                                                 .to_string()
                                                 .try_into()
                                                 .expect("error code must be valid string"),
@@ -377,12 +377,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     )
                                         .into()]);
                                 }
-                                ExtendedChannelError::RequestedMinExtranonceSizeTooLarge => {
-                                    error!("OpenMiningChannelError: min-extranonce-size-too-large");
+                                ExtendedChannelError::RequestedMinExtranonceSizeTooLarge(code) => {
+                                    error!("OpenMiningChannelError: {}", code);
                                     let open_extended_mining_channel_error =
                                         OpenMiningChannelError {
                                             request_id,
-                                            error_code: "min-extranonce-size-too-large"
+                                            error_code: code
                                                 .to_string()
                                                 .try_into()
                                                 .expect("error code must be valid string"),
@@ -557,12 +557,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     let submit_shares_error = SubmitSharesError {
                         channel_id,
                         sequence_number: msg.sequence_number,
-                        error_code: "invalid-channel-id"
+                        error_code: ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID
                             .to_string()
                             .try_into()
                             .expect("error code must be valid string"),
                     };
-                    error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-channel-id ❌", downstream_id, channel_id, msg.sequence_number);
+                    error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID);
                     return Ok(vec![(downstream_id, Mining::SubmitSharesError(submit_shares_error)).into()]);
                 };
 
@@ -619,12 +619,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         };
                         messages.push((downstream_id, Mining::SubmitSharesSuccess(success)).into());
                     }
-                    Err(ShareValidationError::Invalid) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-share ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::Invalid(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "invalid-share"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
@@ -632,48 +632,60 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::Stale) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: stale-share ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::Stale(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "stale-share"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::InvalidJobId) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-job-id ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::InvalidJobId(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "invalid-job-id"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::DoesNotMeetTarget) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: difficulty-too-low ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::DoesNotMeetTarget(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "difficulty-too-low"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::DuplicateShare) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: duplicate-share ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::DuplicateShare(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "duplicate-share"
+                            error_code: code
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::VersionRollingNotAllowed(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
@@ -741,12 +753,12 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     let error = SubmitSharesError {
                         channel_id,
                         sequence_number: msg.sequence_number,
-                        error_code: "invalid-channel-id"
+                        error_code: ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID
                             .to_string()
                             .try_into()
                             .expect("error code must be valid string"),
                     };
-                    error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-channel-id ❌", downstream_id, channel_id, msg.sequence_number);
+                    error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID);
                     return Ok(vec![(downstream_id, Mining::SubmitSharesError(error)).into()]);
                 };
 
@@ -805,72 +817,84 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         };
                         messages.push((downstream_id, Mining::SubmitSharesSuccess(success)).into());
                     }
-                    Err(ShareValidationError::Invalid) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-share ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::Invalid(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "invalid-share"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::Stale) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: stale-share ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::Stale(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "stale-share"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::InvalidJobId) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-job-id ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::InvalidJobId(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "invalid-job-id"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::DoesNotMeetTarget) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: difficulty-too-low ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::DoesNotMeetTarget(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "difficulty-too-low"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::DuplicateShare) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: duplicate-share ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::DuplicateShare(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "duplicate-share"
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
                         };
                         messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
                     }
-                    Err(ShareValidationError::BadExtranonceSize) => {
-                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: bad-extranonce-size ❌", downstream_id, channel_id, msg.sequence_number);
+                    Err(ShareValidationError::BadExtranonceSize(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
                         let error = SubmitSharesError {
                             channel_id: msg.channel_id,
                             sequence_number: msg.sequence_number,
-                            error_code: "bad-extranonce-size"
+                            error_code: code
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::VersionRollingNotAllowed(code)) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: {} ❌", downstream_id, channel_id, msg.sequence_number, code);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: code
                                 .to_string()
                                 .try_into()
                                 .expect("error code must be valid string"),
@@ -942,13 +966,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     Err(e) => {
                                         error!("UpdateChannelError: {:?}", e);
                                         match e {
-                                            StandardChannelError::InvalidNominalHashrate => {
-                                                error!(
-                                                    "UpdateChannelError: invalid-nominal-hashrate"
-                                                );
+                                            StandardChannelError::UpdateChannelInvalidNominalHashrate(code) => {
+                                                error!("UpdateChannelError: {}", code);
                                                 let update_channel_error = UpdateChannelError {
                                                     channel_id,
-                                                    error_code: "invalid-nominal-hashrate"
+                                                    error_code: code
                                                         .to_string()
                                                         .try_into()
                                                         .expect("error code must be valid string"),
@@ -989,13 +1011,11 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     Err(e) => {
                                         error!("UpdateChannelError: {:?}", e);
                                         match e {
-                                            ExtendedChannelError::InvalidNominalHashrate => {
-                                                error!(
-                                                    "UpdateChannelError: invalid-nominal-hashrate"
-                                                );
+                                            ExtendedChannelError::UpdateChannelInvalidNominalHashrate(code) => {
+                                                error!("UpdateChannelError: {}", code);
                                                 let update_channel_error = UpdateChannelError {
                                                     channel_id,
-                                                    error_code: "invalid-nominal-hashrate"
+                                                    error_code: code
                                                         .to_string()
                                                         .try_into()
                                                         .expect("error code must be valid string"),
@@ -1028,7 +1048,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 error!("UpdateChannelError: invalid-channel-id");
                                 let update_channel_error = UpdateChannelError {
                                     channel_id,
-                                    error_code: "invalid-channel-id"
+                                    error_code: ERROR_CODE_UPDATE_CHANNEL_INVALID_CHANNEL_ID
                                         .to_string()
                                         .try_into()
                                         .expect("error code must be valid string"),
@@ -1072,7 +1092,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             let error = SetCustomMiningJobError {
                 request_id: msg.request_id,
                 channel_id: msg.channel_id,
-                error_code: "jd-not-supported"
+                error_code: ERROR_CODE_SET_CUSTOM_MINING_JOB_JD_NOT_SUPPORTED
                     .to_string()
                     .try_into()
                     .expect("error code must be valid string"),
@@ -1130,7 +1150,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 let error = SetCustomMiningJobError {
                                     request_id: msg_static.request_id,
                                     channel_id: msg_static.channel_id,
-                                    error_code: "invalid-channel-id"
+                                    error_code: ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_CHANNEL_ID
                                         .to_string()
                                         .try_into()
                                         .expect("error code must be valid string"),
