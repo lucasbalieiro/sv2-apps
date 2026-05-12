@@ -182,9 +182,13 @@ impl PoolSv2 {
                 cancellation_token_clone.cancelled().await;
             };
 
-            task_manager.spawn(async move {
-                if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                    error!("Monitoring server error: {}", e);
+            task_manager.spawn({
+                let cancellation_token = cancellation_token.clone();
+                async move {
+                    if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                        error!("Monitoring server error: {}", e);
+                        cancellation_token.cancel();
+                    }
                 }
             });
         }
