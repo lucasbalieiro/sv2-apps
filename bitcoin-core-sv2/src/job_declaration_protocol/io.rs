@@ -52,7 +52,7 @@ pub enum JdResponse {
         txid_list: Vec<Txid>,
     },
     Error {
-        error_code: String,
+        error_code: &'static str,
         validation_context: ValidationContext,
     },
     MissingTransactions {

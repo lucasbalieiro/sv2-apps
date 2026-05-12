@@ -12,7 +12,10 @@ use stratum_core::{
         consensus::serialize,
         hashes::Hash,
     },
-    job_declaration_sv2::PushSolution,
+    job_declaration_sv2::{
+        ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR, ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB,
+        ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP, PushSolution,
+    },
 };
 use tokio::sync::oneshot;
 
@@ -150,7 +153,7 @@ impl BitcoinCoreSv2JDP {
                     // send error response to the client
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
-                        error_code: "internal-error".to_string(),
+                        error_code: ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR,
                         validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
@@ -168,7 +171,7 @@ impl BitcoinCoreSv2JDP {
                     // send error response to the client
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
-                        error_code: "internal-error".to_string(),
+                        error_code: ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR,
                         validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
@@ -186,7 +189,7 @@ impl BitcoinCoreSv2JDP {
                     // send error response to the client
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
-                        error_code: "internal-error".to_string(),
+                        error_code: ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR,
                         validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
@@ -201,7 +204,7 @@ impl BitcoinCoreSv2JDP {
                     // send error response to the client
                     // deliberately ignore potential send errors
                     let _ = response_tx.send(JdResponse::Error {
-                        error_code: "internal-error".to_string(),
+                        error_code: ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR,
                         validation_context: initial_validation_context,
                     });
                     tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
@@ -305,9 +308,9 @@ impl BitcoinCoreSv2JDP {
                     stale_at_arrival_by_bip34,
                     "Detected stale chain tip during DeclareMiningJob validation; classifying error as stale-chain-tip"
                 );
-                "stale-chain-tip".to_string()
+                ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP
             } else {
-                "invalid-job".to_string()
+                ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB
             };
 
             JdResponse::Error {
