@@ -30,7 +30,10 @@ use stratum_apps::{
     network_helpers::accept_noise_connection,
     stratum_core::{
         handlers_sv2::HandleJobDeclarationMessagesFromClientAsync,
-        mining_sv2::{SetCustomMiningJob, SetCustomMiningJobError, SetCustomMiningJobSuccess},
+        mining_sv2::{
+            SetCustomMiningJob, SetCustomMiningJobError, SetCustomMiningJobSuccess,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+        },
         parsers_sv2::{JobDeclaration, Tlv},
     },
     task_manager::TaskManager,
@@ -429,7 +432,7 @@ impl JobDeclarator {
                 return Ok(SetCustomMiningJobResponse::error(
                     request_id,
                     channel_id,
-                    "invalid-mining-job-token",
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MINING_JOB_TOKEN,
                 ));
             }
         };
@@ -456,7 +459,7 @@ impl JobDeclarator {
                 return Ok(SetCustomMiningJobResponse::error(
                     request_id,
                     channel_id,
-                    "invalid-mining-job-token",
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MINING_JOB_TOKEN,
                 ));
             }
         };
@@ -477,9 +480,7 @@ impl JobDeclarator {
                 }))
             }
             SetCustomMiningJobResult::Error(error_code) => Ok(SetCustomMiningJobResponse::error(
-                request_id,
-                channel_id,
-                &error_code,
+                request_id, channel_id, error_code,
             )),
         }
     }

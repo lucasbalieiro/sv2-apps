@@ -12,6 +12,8 @@ use stratum_apps::{
             AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
             DeclareMiningJobError, DeclareMiningJobSuccess, ProvideMissingTransactions,
             ProvideMissingTransactionsSuccess, PushSolution,
+            ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+            ERROR_CODE_DECLARE_MINING_JOB_MISSING_TXS,
         },
         parsers_sv2::{JobDeclaration, Tlv},
     },
@@ -126,7 +128,7 @@ impl HandleJobDeclarationMessagesFromClientAsync for JobDeclarator {
                 // Send DeclareMiningJobError back to client
                 let error_message = DeclareMiningJobError {
                     request_id: msg.request_id,
-                    error_code: "invalid-mining-job-token"
+                    error_code: ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN
                         .as_bytes()
                         .to_vec()
                         .try_into()
@@ -148,7 +150,7 @@ impl HandleJobDeclarationMessagesFromClientAsync for JobDeclarator {
             // Send DeclareMiningJobError back to client
             let error_message = DeclareMiningJobError {
                 request_id: msg.request_id,
-                error_code: "invalid-mining-job-token"
+                error_code: ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN
                     .as_bytes()
                     .to_vec()
                     .try_into()
@@ -345,7 +347,7 @@ impl HandleJobDeclarationMessagesFromClientAsync for JobDeclarator {
 
                 let declare_mining_job_error = DeclareMiningJobError {
                     request_id: msg.request_id,
-                    error_code: "missing-txs"
+                    error_code: ERROR_CODE_DECLARE_MINING_JOB_MISSING_TXS
                         .as_bytes()
                         .to_vec()
                         .try_into()
