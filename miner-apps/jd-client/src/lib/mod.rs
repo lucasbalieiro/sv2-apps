@@ -170,18 +170,22 @@ impl JobDeclaratorClient {
                 };
 
                 let fallback_coordinator_clone = fallback_coordinator.clone();
-                task_manager.spawn(async move {
-                    // we just spawned a new task that's relevant to fallback coordination
-                    // so register it with the fallback coordinator
-                    let fallback_handler = fallback_coordinator_clone.register();
+                task_manager.spawn({
+                    let cancellation_token = self.cancellation_token.clone();
+                    async move {
+                        // we just spawned a new task that's relevant to fallback coordination
+                        // so register it with the fallback coordinator
+                        let fallback_handler = fallback_coordinator_clone.register();
 
-                    if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                        error!("Monitoring server error: {:?}", e);
+                        if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                            error!("Monitoring server error: {:?}", e);
+                            cancellation_token.cancel();
+                        }
+
+                        // signal fallback coordinator that this task has completed its cleanup
+                        fallback_handler.done();
+                        info!("Monitoring server task exited and signaled fallback coordinator");
                     }
-
-                    // signal fallback coordinator that this task has completed its cleanup
-                    fallback_handler.done();
-                    info!("Monitoring server task exited and signaled fallback coordinator");
                 });
             }
         }
@@ -555,19 +559,23 @@ impl JobDeclaratorClient {
                             };
 
                             let fallback_coordinator_clone = fallback_coordinator.clone();
-                            task_manager.spawn(async move {
-                                // we just spawned a new task that's relevant to fallback coordination
-                                // so register it with the fallback coordinator
-                                let fallback_handler = fallback_coordinator_clone.register();
+                            task_manager.spawn({
+                                let cancellation_token = self.cancellation_token.clone();
+                                async move {
+                                    // we just spawned a new task that's relevant to fallback coordination
+                                    // so register it with the fallback coordinator
+                                    let fallback_handler = fallback_coordinator_clone.register();
 
-                                if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                                    error!("Monitoring server error: {:?}", e);
+                                    if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                                        error!("Monitoring server error: {:?}", e);
+                                        cancellation_token.cancel();
+                                    }
+
+                                    // signal that this task has completed its cleanup
+                                    // (no-op during normal shutdown, only matters during fallback)
+                                    fallback_handler.done();
+                                    info!("Monitoring server task exited and signaled fallback coordinator");
                                 }
-
-                                // signal that this task has completed its cleanup
-                                // (no-op during normal shutdown, only matters during fallback)
-                                fallback_handler.done();
-                                info!("Monitoring server task exited and signaled fallback coordinator");
                             });
                         }
                     }
