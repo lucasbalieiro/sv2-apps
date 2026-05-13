@@ -210,6 +210,8 @@ pub enum TproxyErrorKind {
     InvalidKey,
     /// Downstream not found with given downstream_id
     DownstreamNotPresent(DownstreamId),
+    /// Coinbase payout verification failed for a solo/donation user identity
+    PayoutVerificationFailed(String),
 }
 
 impl std::error::Error for TproxyErrorKind {}
@@ -288,6 +290,7 @@ impl fmt::Display for TproxyErrorKind {
                 f,
                 "downstream not found with downstream_id: {downstream_id}"
             ),
+            PayoutVerificationFailed(e) => write!(f, "Payout verification failed: {e}"),
         }
     }
 }
