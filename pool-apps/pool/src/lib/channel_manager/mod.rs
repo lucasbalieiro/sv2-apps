@@ -536,8 +536,11 @@ impl ChannelManager {
         };
 
         let Some(new_hashrate) = new_hashrate_opt else {
+            channel_state.set_stable_hashrate(true);
             return;
         };
+
+        channel_state.set_stable_hashrate(false);
 
         match channel_state.update_channel(new_hashrate, None) {
             Ok(()) => {
@@ -578,28 +581,32 @@ impl ChannelManager {
             return;
         };
 
-        if let Some(new_hashrate) = new_hashrate_opt {
-            match channel.update_channel(new_hashrate, None) {
-                Ok(()) => {
-                    let updated_target = channel.get_target();
-                    updates.push(
-                        (
-                            downstream_id,
-                            Mining::SetTarget(SetTarget {
-                                channel_id,
-                                maximum_target: updated_target.to_le_bytes().into(),
-                            }),
-                        )
-                            .into(),
-                    );
-                    debug!(
-                        "Updated target for standard channel channel_id={channel_id} to {updated_target:?}"
-                    );
-                }
-                Err(e) => warn!(
-                    "Failed to update standard channel channel_id={channel_id} during vardiff {e:?}"
-                ),
+        let Some(new_hashrate) = new_hashrate_opt else {
+            channel.set_stable_hashrate(true);
+            return;
+        };
+
+        channel.set_stable_hashrate(false);
+        match channel.update_channel(new_hashrate, None) {
+            Ok(()) => {
+                let updated_target = channel.get_target();
+                updates.push(
+                    (
+                        downstream_id,
+                        Mining::SetTarget(SetTarget {
+                            channel_id,
+                            maximum_target: updated_target.to_le_bytes().into(),
+                        }),
+                    )
+                        .into(),
+                );
+                debug!(
+                    "Updated target for standard channel channel_id={channel_id} to {updated_target:?}"
+                );
             }
+            Err(e) => warn!(
+                "Failed to update standard channel channel_id={channel_id} during vardiff {e:?}"
+            ),
         }
     }
 
