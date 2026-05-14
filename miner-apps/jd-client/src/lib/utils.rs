@@ -368,15 +368,14 @@ pub fn validate_cached_share(
 
         Err(err) => {
             let code = match err {
-                client::share_accounting::ShareValidationError::Invalid => "invalid-share",
-                client::share_accounting::ShareValidationError::Stale => "stale-share",
-                client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
-                client::share_accounting::ShareValidationError::DoesNotMeetTarget => {
-                    "difficulty-too-low"
-                }
-                client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
-                client::share_accounting::ShareValidationError::BadExtranonceSize => {
-                    "bad-extranonce-size"
+                client::share_accounting::ShareValidationError::Invalid(code) => code,
+                client::share_accounting::ShareValidationError::Stale(code) => code,
+                client::share_accounting::ShareValidationError::InvalidJobId(code) => code,
+                client::share_accounting::ShareValidationError::DoesNotMeetTarget(code) => code,
+                client::share_accounting::ShareValidationError::DuplicateShare(code) => code,
+                client::share_accounting::ShareValidationError::BadExtranonceSize(code) => code,
+                client::share_accounting::ShareValidationError::VersionRollingNotAllowed(code) => {
+                    code
                 }
                 _ => unreachable!(),
             };

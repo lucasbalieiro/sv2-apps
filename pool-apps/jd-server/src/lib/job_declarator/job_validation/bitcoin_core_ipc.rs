@@ -27,8 +27,28 @@ use stratum_apps::{
             hashes::Hash,
             BlockHash, CompactTarget, Transaction, TxMerkleNode, Txid, Wtxid,
         },
-        job_declaration_sv2::{DeclareMiningJob, ProvideMissingTransactionsSuccess, PushSolution},
-        mining_sv2::SetCustomMiningJob,
+        job_declaration_sv2::{
+            DeclareMiningJob, ProvideMissingTransactionsSuccess, PushSolution,
+            ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR,
+            ERROR_CODE_DECLARE_MINING_JOB_INVALID_COINBASE_TX,
+            ERROR_CODE_DECLARE_MINING_JOB_INVALID_COINBASE_TX_INPUT,
+            ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+            ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP,
+        },
+        mining_sv2::{
+            SetCustomMiningJob, ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_PREFIX,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_INPUT_N_SEQUENCE,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_LOCKTIME,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_OUTPUTS,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_VERSION,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MERKLE_PATH,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_NBITS,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_VERSION,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_JOB_NOT_YET_VALIDATED,
+            ERROR_CODE_SET_CUSTOM_MINING_JOB_STALE_CHAIN_TIP,
+        },
     },
     tp_type::BitcoinNetwork,
     utils::types::{JdToken, RequestId},
@@ -76,7 +96,7 @@ impl DeclaredCustomJob {
     /// The extranonce size is calculated from the scriptSig size in the coinbase_tx_prefix
     ///
     /// Error type is () because we don't need extra granularity for error_code =
-    /// "invalid-job-param-value-coinbase-tx"
+    /// "invalid-coinbase-tx"
     fn get_coinbase_tx(&self) -> Result<Transaction, ()> {
         let declared_coinbase_tx_prefix: Vec<u8> =
             self.declare_mining_job.coinbase_tx_prefix.to_vec();
@@ -414,7 +434,11 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             .try_into()
         {
             Ok(token_bytes) => u64::from_le_bytes(token_bytes),
-            Err(_) => return DeclareMiningJobResult::Error("invalid-mining-job-token".to_string()),
+            Err(_) => {
+                return DeclareMiningJobResult::Error(
+                    ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+                )
+            }
         };
 
         // Create temporary DeclaredCustomJob for extracting coinbase (without prev_hash/nbits yet)
@@ -441,7 +465,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 }
                 Err(_) => {
                     return DeclareMiningJobResult::Error(
-                        "invalid-job-param-value-coinbase-tx".to_string(),
+                        ERROR_CODE_DECLARE_MINING_JOB_INVALID_COINBASE_TX,
                     )
                 }
             }
@@ -451,7 +475,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
         {
             if declared_coinbase_tx.input.len() != 1 {
                 return DeclareMiningJobResult::Error(
-                    "invalid-job-param-value-coinbase-tx-input".to_string(),
+                    ERROR_CODE_DECLARE_MINING_JOB_INVALID_COINBASE_TX_INPUT,
                 );
             }
         }
@@ -509,7 +533,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
         if let Err(e) = self.request_sender.send(request).await {
             tracing::error!("Failed to send DeclareMiningJob request: {}", e);
             // string here is error_code for the DeclareMiningJobError message
-            return DeclareMiningJobResult::Error("internal-error".to_string());
+            return DeclareMiningJobResult::Error(ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR);
         }
 
         // Wait for response
@@ -518,7 +542,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             Err(e) => {
                 tracing::error!("Failed to receive DeclareMiningJob response: {}", e);
                 // string here is error_code for the DeclareMiningJobError message
-                return DeclareMiningJobResult::Error("internal-error".to_string());
+                return DeclareMiningJobResult::Error(ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR);
             }
         };
 
@@ -566,7 +590,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     .unwrap_or(false);
 
                 if tip_drifted {
-                    DeclareMiningJobResult::Error("stale-chain-tip".to_string())
+                    DeclareMiningJobResult::Error(ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP)
                 } else {
                     DeclareMiningJobResult::Error(error_code)
                 }
@@ -588,7 +612,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                         .remove(&declare_mining_job.request_id);
                     self.allocated_token_entries.remove(&allocated_token);
 
-                    DeclareMiningJobResult::Error("stale-chain-tip".to_string())
+                    DeclareMiningJobResult::Error(ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP)
                 } else {
                     let declared_custom_job = DeclaredCustomJob {
                         declare_mining_job: declare_mining_job_static,
@@ -650,7 +674,9 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     "Provided token {} is not associated with any DeclareMiningJob request",
                     allocated_token
                 );
-                return SetCustomMiningJobResult::Error("invalid-mining-job-token".to_string());
+                return SetCustomMiningJobResult::Error(
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+                );
             }
         };
 
@@ -662,7 +688,9 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 Some((_request_id, declared_custom_job)) => declared_custom_job,
                 None => {
                     tracing::debug!("DeclaredCustomJob associated with allocated token {} and request id {} not found", allocated_token, request_id);
-                    return SetCustomMiningJobResult::Error("invalid-mining-job-token".to_string());
+                    return SetCustomMiningJobResult::Error(
+                        ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MINING_JOB_TOKEN,
+                    );
                 }
             }
         };
@@ -670,7 +698,9 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
         // Job may be pending retry after missing txs and not fully validated yet.
         if !declared_custom_job.validated {
             tracing::error!("Job not yet validated");
-            return SetCustomMiningJobResult::Error("job-not-yet-validated".to_string());
+            return SetCustomMiningJobResult::Error(
+                ERROR_CODE_SET_CUSTOM_MINING_JOB_JOB_NOT_YET_VALIDATED,
+            );
         }
 
         // Get declared values from stored job
@@ -680,13 +710,11 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
 
         // Extract values from SetCustomMiningJob message
         let custom_job_prev_hash = {
-            let bytes: [u8; 32] = match set_custom_mining_job.prev_hash.to_vec().try_into() {
-                Ok(arr) => arr,
-                Err(_) => {
-                    tracing::error!("Invalid prev_hash length");
-                    return SetCustomMiningJobResult::Error("invalid-prev-hash-length".to_string());
-                }
-            };
+            let bytes: [u8; 32] = set_custom_mining_job
+                .prev_hash
+                .to_vec()
+                .try_into()
+                .expect("U256 is 32 bytes");
             BlockHash::from_byte_array(bytes)
         };
         let custom_job_nbits: u32 = set_custom_mining_job.nbits;
@@ -700,7 +728,9 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     custom_job_prev_hash,
                     declared_prev_hash
                 );
-                return SetCustomMiningJobResult::Error("stale-chain-tip".to_string());
+                return SetCustomMiningJobResult::Error(
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_STALE_CHAIN_TIP,
+                );
             }
         }
 
@@ -713,7 +743,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declared_nbits
                 );
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-nbits".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_NBITS,
                 );
             }
         }
@@ -727,7 +757,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declared_version
                 );
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-version".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_VERSION,
                 );
             }
         }
@@ -738,7 +768,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                 Ok(tx) => tx,
                 Err(_) => {
                     return SetCustomMiningJobResult::Error(
-                        "invalid-job-param-value-coinbase-tx".to_string(),
+                        ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX,
                     )
                 }
             };
@@ -750,7 +780,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declared_coinbase_tx.version.0
                 );
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-coinbase-tx-version".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_VERSION,
                 );
             }
 
@@ -759,7 +789,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             if !script_sig.starts_with(&coinbase_prefix) {
                 tracing::debug!("coinbase prefix mismatch");
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-coinbase-prefix".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_PREFIX,
                 );
             }
 
@@ -772,7 +802,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declared_coinbase_tx.input[0].sequence.0
                 );
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-coinbase-tx-input-n-sequence".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_INPUT_N_SEQUENCE,
                 );
             }
 
@@ -781,7 +811,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             if declared_outputs_bytes != set_custom_mining_job.coinbase_tx_outputs.to_vec() {
                 tracing::debug!("coinbase outputs mismatch");
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-coinbase-tx-outputs".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_OUTPUTS,
                 );
             }
 
@@ -794,7 +824,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declared_coinbase_tx.lock_time.to_consensus_u32()
                 );
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-coinbase-tx-locktime".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_COINBASE_TX_LOCKTIME,
                 );
             }
         }
@@ -804,7 +834,9 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
             let declared_merkle_path = match declared_custom_job.get_merkle_path() {
                 Ok(path) => path,
                 Err(_) => {
-                    return SetCustomMiningJobResult::Error("job-not-yet-validated".to_string())
+                    return SetCustomMiningJobResult::Error(
+                        ERROR_CODE_SET_CUSTOM_MINING_JOB_JOB_NOT_YET_VALIDATED,
+                    )
                 }
             };
 
@@ -825,7 +857,7 @@ impl JobValidationEngine for BitcoinCoreIPCEngine {
                     declared_merkle_path
                 );
                 return SetCustomMiningJobResult::Error(
-                    "invalid-job-param-value-merkle-path".to_string(),
+                    ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_MERKLE_PATH,
                 );
             }
         }

@@ -256,7 +256,8 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
         if matches!(
             error_code.as_str(),
-            "template-id-not-found" | "stale-template-id"
+            ERROR_CODE_REQUEST_TRANSACTION_DATA_TEMPLATE_ID_NOT_FOUND
+                | ERROR_CODE_REQUEST_TRANSACTION_DATA_STALE_TEMPLATE_ID
         ) {
             return Ok(());
         }

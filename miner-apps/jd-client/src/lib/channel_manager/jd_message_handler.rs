@@ -10,6 +10,7 @@ use stratum_apps::{
         job_declaration_sv2::{
             AllocateMiningJobTokenSuccess, DeclareMiningJobError, DeclareMiningJobSuccess,
             ProvideMissingTransactions, ProvideMissingTransactionsSuccess,
+            ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP,
         },
         parsers_sv2::{AnyMessage, JobDeclaration, Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::CoinbaseOutputConstraints,
@@ -132,7 +133,7 @@ impl HandleJobDeclarationMessagesFromServerAsync for ChannelManager {
         warn!("Received: {}", msg);
 
         let error_code = msg.error_code.as_utf8_or_hex();
-        if error_code == "stale-chain-tip" {
+        if error_code == ERROR_CODE_DECLARE_MINING_JOB_STALE_CHAIN_TIP {
             warn!(
                 "Received non-fatal DeclareMiningJobError from JDS: stale-chain-tip (request_id={})",
                 msg.request_id

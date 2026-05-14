@@ -55,12 +55,12 @@ pub trait JobValidationEngine: Send + Sync {
 /// Result of a [`JobValidationEngine::handle_declare_mining_job`] call.
 pub enum DeclareMiningJobResult {
     Success,
-    Error(String), // error_code string
+    Error(&'static str),
     MissingTransactions(Vec<Wtxid>),
 }
 
 /// Result of a [`JobValidationEngine::handle_set_custom_mining_job`] call.
 pub enum SetCustomMiningJobResult {
     Success,
-    Error(String), // error_code string
+    Error(&'static str),
 }
