@@ -85,6 +85,21 @@ impl TranslatorSv2 {
         let cancellation_token = self.cancellation_token.clone();
         let mut fallback_coordinator = FallbackCoordinator::new();
         let tproxy_mode = TproxyMode::from(self.config.aggregate_channels);
+        let expected_payout_distribution = match self.config.expected_payout_distribution() {
+            Ok(distribution) => distribution,
+            Err(e) => {
+                error!("Invalid payout user_identity configuration: {e}");
+                self.shutdown_notify.notify_waiters();
+                self.is_alive.store(false, Ordering::Relaxed);
+                return;
+            }
+        };
+        if let Some(distribution) = &expected_payout_distribution {
+            info!(
+                "Payout verification enabled for configured user_identity: {}",
+                distribution
+            );
+        }
 
         let task_manager = Arc::new(TaskManager::new());
 
@@ -152,6 +167,7 @@ impl TranslatorSv2 {
             sv1_server_to_channel_manager_receiver,
             self.config.supported_extensions.clone(),
             self.config.required_extensions.clone(),
+            expected_payout_distribution.clone(),
             tproxy_mode,
             #[cfg(feature = "monitoring")]
             self.config.downstream_difficulty_config.enable_vardiff,
@@ -279,6 +295,7 @@ impl TranslatorSv2 {
                                     sv1_server_to_channel_manager_receiver,
                                     self.config.supported_extensions.clone(),
                                     self.config.required_extensions.clone(),
+                                    expected_payout_distribution.clone(),
                                     tproxy_mode,
                                     #[cfg(feature = "monitoring")]
                                     self.config.downstream_difficulty_config.enable_vardiff
