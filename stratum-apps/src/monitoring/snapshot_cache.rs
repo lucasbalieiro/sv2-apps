@@ -42,6 +42,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use stratum_core::mining_sv2::{
+    ERROR_CODE_SUBMIT_SHARES_BAD_EXTRANONCE_SIZE, ERROR_CODE_SUBMIT_SHARES_DIFFICULTY_TOO_LOW,
+    ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID,
+    ERROR_CODE_SUBMIT_SHARES_INVALID_JOB_ID, ERROR_CODE_SUBMIT_SHARES_INVALID_SHARE,
+    ERROR_CODE_SUBMIT_SHARES_STALE_SHARE,
+};
 use tracing::debug;
 
 use super::{
@@ -51,6 +57,22 @@ use super::{
     sv1::{Sv1ClientInfo, Sv1ClientsMonitoring, Sv1ClientsSummary},
 };
 
+/// All `SubmitSharesError.error_code` values defined by `mining_sv2`.
+///
+/// Pre-seeding these labels with `0` on every refresh ensures the
+/// `sv2_*_shares_rejected_total` GaugeVec emits its series even before
+/// the first rejection — so Grafana panels and alerting rules that
+/// reference the metric never see "no data".
+const SHARE_REJECTION_CODES: &[&str] = &[
+    ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID,
+    ERROR_CODE_SUBMIT_SHARES_INVALID_SHARE,
+    ERROR_CODE_SUBMIT_SHARES_STALE_SHARE,
+    ERROR_CODE_SUBMIT_SHARES_INVALID_JOB_ID,
+    ERROR_CODE_SUBMIT_SHARES_DIFFICULTY_TOO_LOW,
+    ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE,
+    ERROR_CODE_SUBMIT_SHARES_BAD_EXTRANONCE_SIZE,
+];
+
 /// Tracks which label combinations were set on the previous refresh so we can
 /// remove only stale series instead of calling `.reset()` (which would create a
 /// gap where all label series momentarily disappear).
@@ -58,8 +80,13 @@ use super::{
 struct PreviousPrometheusLabelSets {
     /// Labels for server per-channel GaugeVecs: [channel_id, user_identity]
     server_channel_labels: HashSet<[String; 2]>,
+    /// Labels for server per-rejection GaugeVecs: [channel_id, user_identity, error_code]
+    server_rejected_share_labels: HashSet<[String; 3]>,
     /// Labels for client per-channel GaugeVecs: [client_id, channel_id, user_identity]
     client_channel_labels: HashSet<[String; 3]>,
+    /// Labels for client per-rejection GaugeVecs: [client_id, channel_id, user_identity,
+    /// error_code]
+    client_rejected_share_labels: HashSet<[String; 4]>,
 }
 
 /// Cached snapshot of monitoring data.
@@ -118,7 +145,13 @@ impl Clone for SnapshotCache {
             metrics: self.metrics.clone(),
             previous_metrics_labels: Mutex::new(PreviousPrometheusLabelSets {
                 server_channel_labels: previous_metrics_labels.server_channel_labels.clone(),
+                server_rejected_share_labels: previous_metrics_labels
+                    .server_rejected_share_labels
+                    .clone(),
                 client_channel_labels: previous_metrics_labels.client_channel_labels.clone(),
+                client_rejected_share_labels: previous_metrics_labels
+                    .client_rejected_share_labels
+                    .clone(),
             }),
         }
     }
@@ -219,7 +252,9 @@ impl SnapshotCache {
     /// label combinations that are no longer present.
     fn update_metrics(&self, metrics: &PrometheusMetrics, snapshot: &MonitoringSnapshot) {
         let mut current_server_labels: HashSet<[String; 2]> = HashSet::new();
+        let mut current_server_rejected_labels: HashSet<[String; 3]> = HashSet::new();
         let mut current_client_labels: HashSet<[String; 3]> = HashSet::new();
+        let mut current_client_rejected_labels: HashSet<[String; 4]> = HashSet::new();
 
         // Server metrics
         if let Some(ref summary) = snapshot.server_summary {
@@ -244,6 +279,27 @@ impl SnapshotCache {
                     m.with_label_values(&[&channel_id, user])
                         .set(channel.shares_acknowledged as f64);
                 }
+                if let Some(ref m) = metrics.sv2_server_shares_rejected_total {
+                    // Pre-seed spec-defined rejection codes so the metric is always emitted
+                    // (avoids GaugeVec lazy-loading hiding the series until first rejection).
+                    for &reason in SHARE_REJECTION_CODES {
+                        m.with_label_values(&[&channel_id, user, reason]).set(0.0);
+                        current_server_rejected_labels.insert([
+                            channel_id.clone(),
+                            user.clone(),
+                            reason.to_string(),
+                        ]);
+                    }
+                    for (error_code, count) in &channel.shares_rejected_by_reason {
+                        m.with_label_values(&[&channel_id, user, error_code])
+                            .set(*count as f64);
+                        current_server_rejected_labels.insert([
+                            channel_id.clone(),
+                            user.clone(),
+                            error_code.clone(),
+                        ]);
+                    }
+                }
                 if let (Some(ref m), Some(hashrate)) = (
                     &metrics.sv2_server_channel_hashrate,
                     channel.nominal_hashrate,
@@ -262,6 +318,27 @@ impl SnapshotCache {
                 if let Some(ref m) = metrics.sv2_server_shares_accepted_total {
                     m.with_label_values(&[&channel_id, user])
                         .set(channel.shares_acknowledged as f64);
+                }
+                if let Some(ref m) = metrics.sv2_server_shares_rejected_total {
+                    // Pre-seed spec-defined rejection codes so the metric is always emitted
+                    // (avoids GaugeVec lazy-loading hiding the series until first rejection).
+                    for &reason in SHARE_REJECTION_CODES {
+                        m.with_label_values(&[&channel_id, user, reason]).set(0.0);
+                        current_server_rejected_labels.insert([
+                            channel_id.clone(),
+                            user.clone(),
+                            reason.to_string(),
+                        ]);
+                    }
+                    for (error_code, count) in &channel.shares_rejected_by_reason {
+                        m.with_label_values(&[&channel_id, user, error_code])
+                            .set(*count as f64);
+                        current_server_rejected_labels.insert([
+                            channel_id.clone(),
+                            user.clone(),
+                            error_code.clone(),
+                        ]);
+                    }
                 }
                 if let (Some(ref m), Some(hashrate)) = (
                     &metrics.sv2_server_channel_hashrate,
@@ -318,6 +395,30 @@ impl SnapshotCache {
                         m.with_label_values(&[&client_id, &channel_id, user])
                             .set(channel.shares_accepted as f64);
                     }
+                    if let Some(ref m) = metrics.sv2_client_shares_rejected_total {
+                        // Pre-seed spec-defined rejection codes so the metric is always emitted
+                        // (avoids GaugeVec lazy-loading hiding the series until first rejection).
+                        for &reason in SHARE_REJECTION_CODES {
+                            m.with_label_values(&[&client_id, &channel_id, user, reason])
+                                .set(0.0);
+                            current_client_rejected_labels.insert([
+                                client_id.clone(),
+                                channel_id.clone(),
+                                user.clone(),
+                                reason.to_string(),
+                            ]);
+                        }
+                        for (error_code, count) in &channel.shares_rejected_by_reason {
+                            m.with_label_values(&[&client_id, &channel_id, user, error_code])
+                                .set(*count as f64);
+                            current_client_rejected_labels.insert([
+                                client_id.clone(),
+                                channel_id.clone(),
+                                user.clone(),
+                                error_code.clone(),
+                            ]);
+                        }
+                    }
                     if let Some(ref m) = metrics.sv2_client_channel_hashrate {
                         m.with_label_values(&[&client_id, &channel_id, user])
                             .set(channel.nominal_hashrate as f64);
@@ -334,6 +435,30 @@ impl SnapshotCache {
                     if let Some(ref m) = metrics.sv2_client_shares_accepted_total {
                         m.with_label_values(&[&client_id, &channel_id, user])
                             .set(channel.shares_accepted as f64);
+                    }
+                    if let Some(ref m) = metrics.sv2_client_shares_rejected_total {
+                        // Pre-seed spec-defined rejection codes so the metric is always emitted
+                        // (avoids GaugeVec lazy-loading hiding the series until first rejection).
+                        for &reason in SHARE_REJECTION_CODES {
+                            m.with_label_values(&[&client_id, &channel_id, user, reason])
+                                .set(0.0);
+                            current_client_rejected_labels.insert([
+                                client_id.clone(),
+                                channel_id.clone(),
+                                user.clone(),
+                                reason.to_string(),
+                            ]);
+                        }
+                        for (error_code, count) in &channel.shares_rejected_by_reason {
+                            m.with_label_values(&[&client_id, &channel_id, user, error_code])
+                                .set(*count as f64);
+                            current_client_rejected_labels.insert([
+                                client_id.clone(),
+                                channel_id.clone(),
+                                user.clone(),
+                                error_code.clone(),
+                            ]);
+                        }
                     }
                     if let Some(ref m) = metrics.sv2_client_channel_hashrate {
                         m.with_label_values(&[&client_id, &channel_id, user])
@@ -383,6 +508,18 @@ impl SnapshotCache {
         }
 
         for stale in previous_metrics_labels
+            .server_rejected_share_labels
+            .difference(&current_server_rejected_labels)
+        {
+            let label_refs: Vec<&str> = stale.iter().map(|s| s.as_str()).collect();
+            if let Some(ref m) = metrics.sv2_server_shares_rejected_total {
+                if let Err(e) = m.remove_label_values(&label_refs) {
+                    debug!(labels = ?label_refs, error = %e, "failed to remove stale server rejected shares label");
+                }
+            }
+        }
+
+        for stale in previous_metrics_labels
             .client_channel_labels
             .difference(&current_client_labels)
         {
@@ -399,8 +536,22 @@ impl SnapshotCache {
             }
         }
 
+        for stale in previous_metrics_labels
+            .client_rejected_share_labels
+            .difference(&current_client_rejected_labels)
+        {
+            let label_refs: Vec<&str> = stale.iter().map(|s| s.as_str()).collect();
+            if let Some(ref m) = metrics.sv2_client_shares_rejected_total {
+                if let Err(e) = m.remove_label_values(&label_refs) {
+                    debug!(labels = ?label_refs, error = %e, "failed to remove stale client rejected shares label");
+                }
+            }
+        }
+
         previous_metrics_labels.server_channel_labels = current_server_labels;
+        previous_metrics_labels.server_rejected_share_labels = current_server_rejected_labels;
         previous_metrics_labels.client_channel_labels = current_client_labels;
+        previous_metrics_labels.client_rejected_share_labels = current_client_rejected_labels;
     }
 
     /// Get the refresh interval
