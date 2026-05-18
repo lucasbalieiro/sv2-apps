@@ -500,7 +500,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
 
         // if None, the channel may be closed/missing, so we ignore this accounting update
         if let Some(mut ch) = self.extended_channels.get_mut(&key) {
-            ch.on_share_acknowledgement(m.new_submits_accepted_count, m.new_shares_sum as f64);
+            ch.on_share_acknowledgement(m.new_submits_accepted_count, m.new_shares_sum);
         }
 
         Ok(())

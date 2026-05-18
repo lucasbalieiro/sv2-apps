@@ -988,7 +988,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 channel_id,
                                 last_sequence_number: share_accounting.get_last_share_sequence_number(),
                                 new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
-                                new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                                new_shares_sum: share_accounting.get_last_batch_work_sum(),
                             };
                             info!("SubmitSharesStandard on downstream channel: {} ✅", success);
                             messages.push((downstream.downstream_id, Mining::SubmitSharesSuccess(success)).into());
@@ -1022,7 +1022,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             channel_id,
                             last_sequence_number: share_accounting.get_last_share_sequence_number(),
                             new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
-                            new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                            new_shares_sum: share_accounting.get_last_batch_work_sum(),
                         };
                         messages.push((
                             downstream.downstream_id,
@@ -1253,7 +1253,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 channel_id,
                                 last_sequence_number: share_accounting.get_last_share_sequence_number(),
                                 new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
-                                new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                                new_shares_sum: share_accounting.get_last_batch_work_sum(),
                             };
                             info!("SubmitSharesExtended on downstream channel: {} ✅", success);
                             messages.push((downstream.downstream_id, Mining::SubmitSharesSuccess(success)).into());
@@ -1285,7 +1285,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             channel_id,
                             last_sequence_number: share_accounting.get_last_share_sequence_number(),
                             new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
-                            new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                            new_shares_sum: share_accounting.get_last_batch_work_sum(),
                         };
                         is_downstream_share_valid = true;
                         messages.push((

@@ -23,7 +23,10 @@ pub struct ServerExtendedChannelInfo {
     pub shares_submitted: u32,
     pub shares_rejected: u32,
     pub shares_rejected_by_reason: HashMap<String, u32>,
-    pub share_work_sum: f64,
+    /// Work acknowledged by upstream via `SubmitSharesSuccess.new_shares_sum`.
+    pub acknowledged_work_sum: u64,
+    /// Work locally validated by the client channel.
+    pub validated_work_sum: f64,
     pub best_diff: f64,
     pub blocks_found: u32,
 }
@@ -41,7 +44,10 @@ pub struct ServerStandardChannelInfo {
     pub shares_submitted: u32,
     pub shares_rejected: u32,
     pub shares_rejected_by_reason: HashMap<String, u32>,
-    pub share_work_sum: f64,
+    /// Work acknowledged by upstream via `SubmitSharesSuccess.new_shares_sum`.
+    pub acknowledged_work_sum: u64,
+    /// Work locally validated by the client channel.
+    pub validated_work_sum: f64,
     pub best_diff: f64,
     pub blocks_found: u32,
 }
@@ -122,7 +128,8 @@ mod tests {
             shares_acknowledged: 10,
             shares_rejected: 0,
             shares_rejected_by_reason: HashMap::new(),
-            share_work_sum: 100.0,
+            acknowledged_work_sum: 100,
+            validated_work_sum: 100.0,
             shares_submitted: 12,
             best_diff: 50.0,
             blocks_found: 0,
@@ -143,7 +150,8 @@ mod tests {
             shares_submitted: 22,
             shares_rejected: 1,
             shares_rejected_by_reason: HashMap::from([("duplicate-share".to_string(), 1)]),
-            share_work_sum: 200.0,
+            acknowledged_work_sum: 200,
+            validated_work_sum: 200.0,
             best_diff: 80.0,
             blocks_found: 0,
         }
