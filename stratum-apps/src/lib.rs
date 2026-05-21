@@ -90,5 +90,8 @@ pub mod payout;
 #[cfg(feature = "fallback-coordinator")]
 pub mod fallback_coordinator;
 
+/// Share synchronous primitives
+pub mod sync;
+
 /// Shared async channel cleanup helpers.
 pub mod channel_utils;
