@@ -569,7 +569,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 };
 
                 let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
-                    return Ok(vec![(downstream_id, Mining::CloseChannel(create_close_channel_msg(channel_id, "invalid-channel-id"))).into()]);
+                    return Ok(vec![(downstream_id, Mining::CloseChannel(create_close_channel_msg(channel_id, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID))).into()]);
                 };
 
                 let res = standard_channel.validate_share(msg.clone());
@@ -769,7 +769,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 }
 
                 let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
-                    return Ok(vec![(downstream_id, Mining::CloseChannel(create_close_channel_msg(channel_id, "invalid-channel-id"))).into()]);
+                    return Ok(vec![(downstream_id, Mining::CloseChannel(create_close_channel_msg(channel_id, ERROR_CODE_SUBMIT_SHARES_INVALID_CHANNEL_ID))).into()]);
                 };
 
                 let res = extended_channel.validate_share(msg.clone());
