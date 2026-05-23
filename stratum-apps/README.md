@@ -40,6 +40,7 @@ use stratum_apps::{network_helpers, config_helpers};
 - `config` - Configuration helpers (enabled by default)
 - `payout` - Shared payout-mode parsing and coinbase-output distribution helpers (optional)
 - `monitoring` - HTTP and Prometheus monitoring helpers (optional)
+  - Uses vendored Swagger UI assets to support offline/sandboxed documentation builds
 - `std` - Standard-library support for key and random utilities (enabled by default)
 - `core` - Re-export and enable `stratum-core`
 
