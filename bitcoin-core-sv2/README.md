@@ -42,7 +42,9 @@ The `min_interval` parameter (in seconds) determines the minimum amount of time 
 |--------------------|--------------|
 | v0.1.0             | v30.2        |
 | v0.1.1             | v30.2        |
+| v0.1.2             | v30.2        |
 | v0.2.0             | v31.0        |
+| v0.3.0             | v31.0        |
 
 ## License
 
