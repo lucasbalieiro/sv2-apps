@@ -6,6 +6,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["The Stratum V2 Developers"]
 homepage = "https://stratumprotocol.org"
+documentation = "https://docs.rs/bitcoin_core_sv2"
 readme = "README.md"
 keywords = ["stratum", "mining", "bitcoin", "bitcoin-core"]
 
