@@ -158,7 +158,7 @@ async fn pool_solo_mining_invalid_payout_address() {
     };
     assert_eq!(
         error_ext.error_code.as_utf8_or_hex(),
-        "invalid-user-identity"
+        ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
     );
 
     // === Standard Channel - invalid payout address ===
@@ -192,7 +192,7 @@ async fn pool_solo_mining_invalid_payout_address() {
     };
     assert_eq!(
         error_std.error_code.as_utf8_or_hex(),
-        "invalid-user-identity"
+        ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
     );
 
     shutdown_all!(pool);
@@ -247,7 +247,7 @@ async fn pool_solo_mining_wrong_user_identity() {
     };
     assert_eq!(
         error_ext.error_code.as_utf8_or_hex(),
-        "invalid-user-identity"
+        ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
     );
 
     // === Standard Channel - missing keyword ===
@@ -278,7 +278,7 @@ async fn pool_solo_mining_wrong_user_identity() {
     };
     assert_eq!(
         error_std.error_code.as_utf8_or_hex(),
-        "invalid-user-identity"
+        ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
     );
 
     shutdown_all!(pool);

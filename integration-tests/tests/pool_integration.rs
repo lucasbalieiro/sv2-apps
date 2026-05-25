@@ -444,7 +444,7 @@ async fn pool_reject_setup_connection_with_non_mining_protocol() {
     };
     assert_eq!(
         setup_connection_error.error_code.as_utf8_or_hex(),
-        "unsupported-protocol",
+        ERROR_CODE_SETUP_CONNECTION_UNSUPPORTED_PROTOCOL,
         "SetupConnectionError message error code should be unsupported-protocol"
     );
     shutdown_all!(translator, pool);
@@ -516,7 +516,7 @@ async fn pool_without_jds_rejects_set_custom_mining_job() {
     assert_eq!(set_custom_mining_job_error.channel_id, 1);
     assert_eq!(
         set_custom_mining_job_error.error_code.as_utf8_or_hex(),
-        "jd-not-supported",
+        ERROR_CODE_SET_CUSTOM_MINING_JOB_JD_NOT_SUPPORTED,
         "SetCustomMiningJobError should use jd-not-supported when pool has no embedded JDS"
     );
 

@@ -787,6 +787,7 @@ mod tests {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use std::{collections::HashMap, sync::Mutex};
+    use stratum_core::mining_sv2::ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE;
     use tower::ServiceExt;
 
     // ── helpers ──────────────────────────────────────────────────────
@@ -834,7 +835,10 @@ mod tests {
             expected_shares_per_minute: 2.0,
             shares_accepted: 20,
             shares_rejected: 1,
-            shares_rejected_by_reason: HashMap::from([("duplicate-share".to_string(), 1)]),
+            shares_rejected_by_reason: HashMap::from([(
+                ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE.to_string(),
+                1,
+            )]),
             share_work_sum: 200.0,
             last_share_sequence_number: 8,
             best_diff: 80.0,
@@ -882,7 +886,10 @@ mod tests {
             shares_acknowledged: 20,
             shares_submitted: 22,
             shares_rejected: 1,
-            shares_rejected_by_reason: HashMap::from([("duplicate-share".to_string(), 1)]),
+            shares_rejected_by_reason: HashMap::from([(
+                ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE.to_string(),
+                1,
+            )]),
             acknowledged_work_sum: 200,
             validated_work_sum: 200.0,
             best_diff: 80.0,
@@ -1237,7 +1244,10 @@ mod tests {
         let channel = &json["standard_channels"][0];
 
         assert_eq!(channel["shares_rejected"], 1);
-        assert_eq!(channel["shares_rejected_by_reason"]["duplicate-share"], 1);
+        assert_eq!(
+            channel["shares_rejected_by_reason"][ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE],
+            1
+        );
     }
 
     #[tokio::test]
@@ -1481,7 +1491,8 @@ mod tests {
     async fn metrics_stale_labels_removed_without_reset_gap() {
         let mut channel_2 = create_extended_channel_info(2, 200.0);
         channel_2.shares_rejected = 1;
-        channel_2.shares_rejected_by_reason = HashMap::from([("duplicate-share".to_string(), 1)]);
+        channel_2.shares_rejected_by_reason =
+            HashMap::from([(ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE.to_string(), 1)]);
 
         let initial_clients = vec![Sv2ClientInfo {
             client_id: 1,

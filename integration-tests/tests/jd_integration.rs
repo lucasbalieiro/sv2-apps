@@ -210,7 +210,7 @@ async fn jds_reject_setup_connection_with_non_job_declaration_protocol() {
     };
     assert_eq!(
         setup_connection_error.error_code.as_utf8_or_hex(),
-        "unsupported-protocol",
+        ERROR_CODE_SETUP_CONNECTION_UNSUPPORTED_PROTOCOL,
         "SetupConnectionError message error code should be unsupported-protocol"
     );
 
@@ -251,7 +251,7 @@ async fn jds_reject_setup_connection_without_declare_tx_data_flag() {
     };
     assert_eq!(
         setup_connection_error.error_code.as_utf8_or_hex(),
-        "missing-declare-tx-data-flag",
+        ERROR_CODE_SETUP_CONNECTION_MISSING_DECLARE_TX_DATA_FLAG,
         "SetupConnectionError message error code should be missing-declare-tx-data-flag"
     );
 
@@ -328,7 +328,7 @@ async fn jds_reject_declare_mining_job_with_invalid_mining_job_token() {
     assert_eq!(malformed_token_error.request_id, 10);
     assert_eq!(
         malformed_token_error.error_code.as_utf8_or_hex(),
-        "invalid-mining-job-token",
+        ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN,
         "DeclareMiningJobError should use invalid-mining-job-token for malformed token"
     );
 
@@ -374,7 +374,7 @@ async fn jds_reject_declare_mining_job_with_invalid_mining_job_token() {
     assert_eq!(unallocated_token_error.request_id, 11);
     assert_eq!(
         unallocated_token_error.error_code.as_utf8_or_hex(),
-        "invalid-mining-job-token",
+        ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN,
         "DeclareMiningJobError should use invalid-mining-job-token for unallocated token"
     );
 
@@ -477,7 +477,7 @@ async fn pool_rejects_reused_set_custom_mining_job_token() {
     );
     assert_eq!(
         set_custom_mining_job_error.error_code.as_utf8_or_hex(),
-        "invalid-mining-job-token",
+        ERROR_CODE_DECLARE_MINING_JOB_INVALID_MINING_JOB_TOKEN,
         "SetCustomMiningJobError should use invalid-mining-job-token for reused token"
     );
 

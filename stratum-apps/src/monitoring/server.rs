@@ -109,6 +109,7 @@ pub trait ServerMonitoring: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stratum_core::mining_sv2::ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE;
 
     // ── helpers ──────────────────────────────────────────────────────
 
@@ -149,7 +150,10 @@ mod tests {
             shares_acknowledged: 20,
             shares_submitted: 22,
             shares_rejected: 1,
-            shares_rejected_by_reason: HashMap::from([("duplicate-share".to_string(), 1)]),
+            shares_rejected_by_reason: HashMap::from([(
+                ERROR_CODE_SUBMIT_SHARES_DUPLICATE_SHARE.to_string(),
+                1,
+            )]),
             acknowledged_work_sum: 200,
             validated_work_sum: 200.0,
             best_diff: 80.0,
