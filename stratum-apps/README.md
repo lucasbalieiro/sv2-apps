@@ -14,7 +14,6 @@ This crate is organized into several main modules:
 - **`config_helpers`** - Configuration management helpers (from `config_helpers_sv2`)  
 - **`payout`** - Shared payout-mode parsing and coinbase-output distribution helpers
 - **`fallback_coordinator`** - Runtime fallback cancellation and acknowledgement helpers
-- **`rpc`** - RPC utilities with custom serializable types (from `rpc_sv2`) - *feature-gated*
 
 The crate also re-exports `stratum-core`, the central hub for the Stratum V2 ecosystem that provides a cohesive API for all low-level protocol functionality.
 
@@ -31,10 +30,6 @@ Basic usage:
 
 ```rust
 use stratum_apps::{network_helpers, config_helpers};
-
-// For RPC functionality (when rpc feature is enabled)
-#[cfg(feature = "rpc")]
-use stratum_apps::rpc::{BlockHash, MiniRpcClient};
 ```
 
 ## Features
@@ -44,9 +39,6 @@ use stratum_apps::rpc::{BlockHash, MiniRpcClient};
 - `fallback-coordinator` - Runtime fallback coordination helpers (enabled by default)
 - `config` - Configuration helpers (enabled by default)
 - `payout` - Shared payout-mode parsing and coinbase-output distribution helpers (optional)
-- `rpc` - RPC utilities with custom serializable types (optional)
-  - Provides `Hash`, `BlockHash`, `Amount` types with proper JSON serialization
-  - `MiniRpcClient` for Bitcoin RPC communication
 - `monitoring` - HTTP and Prometheus monitoring helpers (optional)
 - `std` - Standard-library support for key and random utilities (enabled by default)
 - `core` - Re-export and enable `stratum-core`
@@ -87,20 +79,4 @@ let connection = network_helpers::Connection::new(stream, HandshakeRole::Respond
 
 // Use configuration
 let config: PoolConfig = config_helpers::parse_config("pool.toml")?;
-```
-
-### JD Server Application
-
-```toml
-[dependencies]
-stratum-apps = { version = "0.4.0", features = ["jd_server", "rpc"] }
-```
-
-```rust
-use stratum_apps::{config_helpers, rpc};
-
-// RPC functionality with custom types
-use stratum_apps::rpc::{BlockHash, MiniRpcClient};
-
-// Configuration helpers plus RPC server utilities with proper serialization
 ```

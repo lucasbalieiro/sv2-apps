@@ -11,7 +11,6 @@
 //! - `fallback-coordinator` - Runtime fallback coordination helpers (enabled by default)
 //! - `config` - Configuration management helpers (enabled by default)
 //! - `payout` - Shared payout-mode parsing and coinbase-output distribution helpers
-//! - `rpc` - RPC utilities with custom types for JSON-RPC communication (optional)
 //! - `monitoring` - HTTP and Prometheus monitoring helpers (optional)
 //! - `std` - Standard-library support for key and random utilities (enabled by default)
 //! - `core` - Re-export and enable `stratum-core`
@@ -28,7 +27,6 @@
 //! - [`network_helpers`] - High-level networking utilities for SV2 connections
 //! - [`config_helpers`] - Configuration management and parsing utilities
 //! - [`payout`] - Payout-mode parsing and coinbase-output construction/verification helpers
-//! - [`rpc`] - RPC utilities with custom serializable types (`Hash`, `BlockHash`, `Amount`)
 
 /// Re-export all the modules from `stratum_core`
 #[cfg(feature = "core")]
@@ -52,13 +50,6 @@ pub mod config_helpers;
 ///
 /// A wrapper around std::sync::Mutex
 pub mod custom_mutex;
-/// RPC utilities for Job Declaration Server
-///
-/// HTTP-based RPC server implementation for JD Server functionality.
-/// Originally from the `rpc_sv2` crate.
-#[cfg(feature = "rpc")]
-pub mod rpc;
-
 /// Key utilities for cryptographic operations
 ///
 /// Provides Secp256k1 key management, serialization/deserialization, and signature services.
