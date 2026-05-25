@@ -89,4 +89,4 @@ path = "src/bin/generate-openapi.rs"
 required-features = ["monitoring"]
 
 [package.metadata.docs.rs]
-features = ["pool", "jd_client", "jd_server", "translator", "sv1"]
+features = ["pool", "jd_client", "jd_server", "translator", "sv1", "monitoring"]
