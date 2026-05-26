@@ -38,13 +38,9 @@ secp256k1 = { version = "0.28.2", default-features = false, features = ["alloc",
 rand = { version = "0.8.5", default-features = false }
 rustversion = "1.0"
 
-# RPC optional dependencies
+# Shared optional dependencies
+# Used by both `sv1` networking helpers and `monitoring` HTTP JSON APIs.
 serde_json = { version = "1.0", default-features = false, features = ["alloc", "raw_value"], optional = true }
-hex = { version = "0.4.3", optional = true }
-base64 = { version = "0.21.5", optional = true }
-hyper = { version = "1.1.0", features = ["full"], optional = true }
-hyper-util = { version = "0.1", features = ["full"], optional = true }
-http-body-util = { version = "0.1", optional = true }
 
 # Monitoring optional dependencies
 axum = { version = "0.8.7", optional = true }
@@ -65,7 +61,6 @@ network = ["tokio-util", "core"]
 fallback-coordinator = ["tokio-util"]
 config = []
 payout = ["config", "core"]
-rpc = ["serde_json", "hex", "base64", "hyper", "hyper-util", "http-body-util"]
 monitoring = ["serde_json", "axum", "prometheus", "utoipa", "utoipa-swagger-ui"]
 std = ["bs58/std", "secp256k1/rand-std", "rand/std", "rand/std_rng"]
 core = ["stratum-core"]
@@ -77,10 +72,10 @@ with_buffer_pool = ["stratum-core/with_buffer_pool"]
 # Convenience feature bundles for different role types
 pool = ["network", "config", "with_buffer_pool", "core", "payout"]
 jd_client = ["network", "fallback-coordinator", "config", "with_buffer_pool", "core"]
-# Note: jd_server intentionally excludes 'core', 'network', and 'rpc' - it uses crates.io crates directly
+# Note: jd_server intentionally excludes 'core' and 'network' - it uses crates.io crates directly
 jd_server = ["config"]
 translator = ["network", "fallback-coordinator", "config", "sv1", "with_buffer_pool", "core", "payout"]
-# Note: mining_device intentionally excludes 'core', 'network', and 'rpc' - it uses crates.io crates directly
+# Note: mining_device intentionally excludes 'core' and 'network' - it uses crates.io crates directly
 mining_device = ["config"]
 
 [dev-dependencies]
@@ -94,4 +89,4 @@ path = "src/bin/generate-openapi.rs"
 required-features = ["monitoring"]
 
 [package.metadata.docs.rs]
-features = ["pool", "jd_client", "jd_server", "translator", "sv1", "rpc"]
+features = ["pool", "jd_client", "jd_server", "translator", "sv1"]
