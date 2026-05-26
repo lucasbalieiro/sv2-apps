@@ -46,7 +46,7 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc", "
 axum = { version = "0.8.7", optional = true }
 prometheus = { version = "0.13", optional = true }
 utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
-utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"], optional = true }
 
 # Common external dependencies that roles always need
 ext-config = { version = "0.14.0", features = ["toml"], package = "config" }
@@ -89,4 +89,4 @@ path = "src/bin/generate-openapi.rs"
 required-features = ["monitoring"]
 
 [package.metadata.docs.rs]
-features = ["pool", "jd_client", "jd_server", "translator", "sv1"]
+features = ["pool", "jd_client", "jd_server", "translator", "sv1", "monitoring"]
