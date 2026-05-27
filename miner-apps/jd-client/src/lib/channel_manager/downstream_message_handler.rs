@@ -529,11 +529,19 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 };
 
                 downstream.downstream_data.super_safe_lock(|data| {
-                        let mut messages: Vec<RouteMessageTo> = vec![];
-                        let extended_channel_id =
-                            data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
+                    if data.require_std_job {
+                        return Ok(vec![(
+                            downstream_id,
+                            build_error(ERROR_CODE_OPEN_MINING_CHANNEL_EXTENDED_CHANNELS_NOT_SUPPORTED_FOR_STANDARD_JOBS),
+                        )
+                        .into()])
+                    }
 
-                        let extranonce_prefix = match channel_manager_data
+                    let mut messages: Vec<RouteMessageTo> = vec![];
+                    let extended_channel_id =
+                        data.channel_id_factory.fetch_add(1, Ordering::Relaxed);
+
+                    let extranonce_prefix = match channel_manager_data
                             .extranonce_allocator
                             .allocate_extended(requested_min_rollable_extranonce_size.into())
                         {
@@ -789,7 +797,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     _ => "internal-error",
                                 };
                                     if err_code == "internal-error" {
-                                        warn!("Failed to update extended channel {channel_id}");
+                                        warn!("Failed to update standard channel {channel_id}");
                                     } else {
                                         return vec![(downstream_id, build_error(err_code)).into()];
                                     }
@@ -815,7 +823,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 let new_target = extended_channel.get_target();
 
                                 if let Err(e) = update_channel {
-                                    error!(channel_id, ?e, "StandardChannel update failed");
+                                    error!(channel_id, ?e, "ExtendedChannel update failed");
                                     let err_code = match e {
                                     ExtendedChannelError::UpdateChannelInvalidNominalHashrate(
                                         code,
