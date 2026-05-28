@@ -1,5 +1,16 @@
-use integration_tests_sv2::{interceptor::MessageDirection, template_provider::DifficultyLevel, *};
-use stratum_apps::stratum_core::{common_messages_sv2::*, mining_sv2::*};
+use integration_tests_sv2::{
+    interceptor::MessageDirection,
+    mock_roles::{MockUpstream, WithSetup},
+    start_jdc_with_user_identities,
+    template_provider::DifficultyLevel,
+    utils::get_available_address,
+    *,
+};
+use stratum_apps::stratum_core::{
+    common_messages_sv2::*,
+    mining_sv2::*,
+    parsers_sv2::{AnyMessage, CommonMessages, Mining},
+};
 
 #[tokio::test]
 async fn jd_non_aggregated_tproxy_integration() {
@@ -180,4 +191,79 @@ async fn jd_aggregated_tproxy_integration() {
         )
         .await;
     shutdown_all!(translator, jdc, pool);
+}
+
+// Verifies that when a per-upstream `user_identity` is set on a JDC upstream entry,
+// that identity is sent as-is in `OpenExtendedMiningChannel`.
+#[tokio::test]
+async fn jdc_sends_per_upstream_identity() {
+    start_tracing();
+
+    let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (_pool, _pool_addr, jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+
+    let mock_pool_addr = get_available_address();
+    let mock_pool = MockUpstream::new(mock_pool_addr, WithSetup::no());
+    let pool_sender = mock_pool.start().await;
+
+    let (pool_sniffer, pool_sniffer_addr) =
+        start_sniffer("pool", mock_pool_addr, false, vec![], None);
+
+    const PER_UPSTREAM_IDENTITY: &str = "bc1qtest.worker";
+
+    let (jdc, jdc_addr, _) = start_jdc_with_user_identities(
+        &[(
+            pool_sniffer_addr,
+            jds_addr,
+            PER_UPSTREAM_IDENTITY.to_string(),
+        )],
+        sv2_tp_config(tp_addr),
+        vec![],
+        vec![],
+        false,
+        None,
+    );
+
+    pool_sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+
+    // Respond with success so JDC proceeds to connect to JDS and open channels.
+    pool_sender
+        .send(AnyMessage::Common(CommonMessages::SetupConnectionSuccess(
+            SetupConnectionSuccess {
+                used_version: 2,
+                flags: 0,
+            },
+        )))
+        .await
+        .unwrap();
+
+    let (translator, tproxy_addr, _) =
+        start_sv2_translator(&[jdc_addr], false, vec![], vec![], None, false).await;
+    let (_minerd, _) = start_minerd(tproxy_addr, None, None, false).await;
+
+    pool_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .await;
+
+    let oemc = loop {
+        match pool_sniffer.next_message_from_downstream() {
+            Some((_, AnyMessage::Mining(Mining::OpenExtendedMiningChannel(msg)))) => break msg,
+            _ => continue,
+        }
+    };
+
+    let identity_str =
+        std::str::from_utf8(oemc.user_identity.as_ref()).expect("user_identity is not valid UTF-8");
+    assert_eq!(
+        identity_str, PER_UPSTREAM_IDENTITY,
+        "expected per-upstream identity '{PER_UPSTREAM_IDENTITY}', got '{identity_str}'"
+    );
+
+    shutdown_all!(translator, jdc);
 }

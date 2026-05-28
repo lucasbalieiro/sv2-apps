@@ -2,6 +2,7 @@
 use integration_tests_sv2::{
     interceptor::{MessageDirection, ReplaceMessage},
     mock_roles::{MockDownstream, WithSetup},
+    start_jdc_with_user_identities,
     template_provider::DifficultyLevel,
     *,
 };
@@ -10,7 +11,7 @@ use stratum_apps::stratum_core::{
     common_messages_sv2::*,
     job_declaration_sv2::{ProvideMissingTransactionsSuccess, PushSolution, *},
     mining_sv2::*,
-    parsers_sv2::{self, AnyMessage, Mining},
+    parsers_sv2::{self, AnyMessage, JobDeclaration, Mining},
     template_distribution_sv2::*,
 };
 
@@ -1298,4 +1299,81 @@ async fn jdc_require_standard_jobs_set_rejects_open_extended_mining_channel() {
     );
 
     shutdown_all!(jdc, pool);
+}
+
+// Verifies that when the primary pool disconnects, JDC falls back to the next upstream entry
+// and sends *that* upstream's `user_identity` in `AllocateMiningJobToken` — not the primary's.
+#[tokio::test]
+async fn jdc_per_upstream_identity_switches_on_fallback() {
+    start_tracing();
+
+    let (tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (primary_pool, primary_pool_addr, primary_jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+    let (_fallback_pool, fallback_pool_addr, fallback_jds_addr, _) =
+        start_pool_with_jds(tp.bitcoin_core(), vec![], vec![], false).await;
+
+    const PRIMARY_IDENTITY: &str = "bc1qprimary.worker";
+    const FALLBACK_IDENTITY: &str = "bc1qfallback.worker";
+
+    let (primary_jds_sniffer, primary_jds_sniffer_addr) =
+        start_sniffer("primary-jds", primary_jds_addr, false, vec![], None);
+    let (fallback_jds_sniffer, fallback_jds_sniffer_addr) =
+        start_sniffer("fallback-jds", fallback_jds_addr, false, vec![], None);
+
+    let (jdc, _jdc_addr, _) = start_jdc_with_user_identities(
+        &[
+            (
+                primary_pool_addr,
+                primary_jds_sniffer_addr,
+                PRIMARY_IDENTITY.to_string(),
+            ),
+            (
+                fallback_pool_addr,
+                fallback_jds_sniffer_addr,
+                FALLBACK_IDENTITY.to_string(),
+            ),
+        ],
+        sv2_tp_config(tp_addr),
+        vec![],
+        vec![],
+        false,
+        None,
+    );
+
+    primary_jds_sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    primary_jds_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        )
+        .await;
+
+    primary_pool.shutdown().await;
+
+    fallback_jds_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToUpstream,
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        )
+        .await;
+
+    let allocate_msg = loop {
+        match fallback_jds_sniffer.next_message_from_downstream() {
+            Some((_, AnyMessage::JobDeclaration(JobDeclaration::AllocateMiningJobToken(msg)))) => {
+                break msg
+            }
+            _ => continue,
+        }
+    };
+    let allocate_identity = std::str::from_utf8(allocate_msg.user_identifier.as_ref())
+        .expect("user_identifier is not valid UTF-8");
+    assert_eq!(
+        allocate_identity, FALLBACK_IDENTITY,
+        "expected fallback identity in AllocateMiningJobToken '{FALLBACK_IDENTITY}', got '{allocate_identity}'"
+    );
+
+    shutdown_all!(jdc);
 }
