@@ -102,7 +102,8 @@ async fn pool_monitoring_with_sv2_mining_device() {
     shutdown_all!(pool);
 }
 
-// Pool + tProxy + SV1 miner: Pool sees 1 SV2 client, tProxy sees 1 SV1 client and 1 upstream channel.
+// Pool + tProxy + SV1 miner: Pool sees 1 SV2 client, tProxy sees 1 SV1 client and 1 upstream
+// channel.
 #[tokio::test]
 async fn pool_and_tproxy_monitoring_with_sv1_miner() {
     start_tracing();
@@ -239,7 +240,7 @@ async fn jd_aggregated_topology_monitoring() {
                 &[
                     ("client_id", "1"),
                     ("channel_id", "2"),
-                    ("user_identity", "IT-test"),
+                    ("user_identity", "IT_TEST"),
                 ],
             ),
             1.0,
