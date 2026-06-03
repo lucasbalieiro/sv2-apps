@@ -812,7 +812,7 @@ impl ChannelManager {
 
                 // Remove from any group channels that contain it
                 for mut group_channel in self.group_channels.iter_mut() {
-                    if group_channel.get_channel_ids().contains(&m.channel_id) {
+                    if group_channel.has_channel_id(m.channel_id) {
                         group_channel.remove_channel_id(m.channel_id);
                         debug!("Removed channel {} from group channel", m.channel_id);
                     }
@@ -942,7 +942,7 @@ impl ChannelManager {
                             aggregated_channel.get_active_job().map(|j| j.0.clone()),
                             aggregated_channel
                                 .get_future_jobs()
-                                .values()
+                                .map(|(_, job)| job)
                                 .map(|j| j.0.clone())
                                 .collect::<Vec<_>>(),
                             aggregated_channel.get_chain_tip().cloned(),
