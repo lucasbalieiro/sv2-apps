@@ -625,6 +625,69 @@ async fn test_translator_keepalive_job_sent_and_share_received_by_pool() {
     shutdown_all!(translator, pool);
 }
 
+// Verifies that aggregated tProxy does not send UpdateChannel upstream if an SV1
+// downstream disconnects before the aggregated upstream channel has opened (see #543).
+#[tokio::test]
+async fn aggregated_translator_does_not_send_update_channel_before_channel_opens() {
+    start_tracing();
+
+    let (_tp, tp_addr) = start_template_provider(None, DifficultyLevel::Low);
+    let (pool, pool_addr, _) = start_pool(sv2_tp_config(tp_addr), vec![], vec![], false).await;
+    let ignore_open_channel = IgnoreMessage::new(
+        MessageDirection::ToUpstream,
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+    );
+    let (pool_translator_sniffer, pool_translator_sniffer_addr) = start_sniffer(
+        "0",
+        pool_addr,
+        false,
+        vec![ignore_open_channel.into()],
+        None,
+    );
+    let (translator, tproxy_addr, _) = start_sv2_translator(
+        &[pool_translator_sniffer_addr],
+        true,
+        vec![],
+        vec![],
+        None,
+        false,
+    )
+    .await;
+    let (sv1_sniffer, sv1_sniffer_addr) = start_sv1_sniffer(tproxy_addr);
+
+    pool_translator_sniffer
+        .wait_for_message_type(MessageDirection::ToUpstream, MESSAGE_TYPE_SETUP_CONNECTION)
+        .await;
+    pool_translator_sniffer
+        .wait_for_message_type(
+            MessageDirection::ToDownstream,
+            MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+        )
+        .await;
+    pool_translator_sniffer.clean_queue(MessageDirection::ToUpstream);
+
+    let (minerd_process, _) = start_minerd(sv1_sniffer_addr, None, None, false).await;
+    sv1_sniffer
+        .wait_for_message(&["mining.subscribe"], MessageDirection::ToUpstream)
+        .await;
+    // Give tProxy time to process the subscribed downstream and hit the ignored OpenExtended path.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    drop(minerd_process);
+
+    assert!(
+        pool_translator_sniffer
+            .assert_message_not_present(
+                MessageDirection::ToUpstream,
+                MESSAGE_TYPE_UPDATE_CHANNEL,
+                Duration::from_secs(2),
+            )
+            .await
+    );
+
+    shutdown_all!(translator, pool);
+}
+
 // This test launches a tProxy in aggregated mode and leverages a MockUpstream to test the correct
 // functionalities of grouping extended channels.
 #[tokio::test]
