@@ -751,6 +751,12 @@ impl ChannelManager {
                     {
                         aggregated_extended_channel.set_nominal_hashrate(m.nominal_hash_rate);
                         m.channel_id = aggregated_extended_channel.get_channel_id();
+                    } else {
+                        warn!(
+                            "Ignoring aggregated UpdateChannel before upstream channel is open: {}",
+                            m
+                        );
+                        return Ok(());
                     }
                 } else {
                     // Non-aggregated: update the specific channel's nominal hashrate
@@ -1122,6 +1128,42 @@ mod tests {
             }
             _ => panic!("Expected UpdateChannel"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_aggregated_update_channel_without_open_channel_is_not_forwarded() {
+        let (upstream_sender, upstream_receiver) = unbounded();
+        let (_upstream_sender, upstream_receiver_for_manager) = unbounded();
+        let (sv1_server_sender, _sv1_server_receiver) = unbounded();
+        let (sv1_server_sender_for_test, sv1_server_receiver) = unbounded();
+
+        let manager = std::sync::Arc::new(ChannelManager::new(
+            upstream_sender,
+            upstream_receiver_for_manager,
+            sv1_server_sender,
+            sv1_server_receiver,
+            vec![],
+            vec![],
+            TproxyMode::Aggregated,
+            #[cfg(feature = "monitoring")]
+            true,
+        ));
+
+        let update_channel = UpdateChannel {
+            channel_id: 0,
+            nominal_hash_rate: 0.0,
+            maximum_target: [0xFFu8; 32].try_into().unwrap(),
+        };
+
+        sv1_server_sender_for_test
+            .send((Mining::UpdateChannel(update_channel), None))
+            .await
+            .unwrap();
+
+        manager.clone().handle_downstream_message().await.unwrap();
+
+        // The pre-open UpdateChannel must be dropped before reaching upstream.
+        assert!(upstream_receiver.try_recv().is_err());
     }
 
     #[test]
