@@ -106,6 +106,18 @@ impl PayoutMode {
         }
     }
 
+    /// Returns whether two payout modes produce the same coinbase outputs.
+    ///
+    /// The 100-satoshi reference value distinguishes all supported donation percentages while
+    /// keeping the comparison independent of a particular template's reward value.
+    pub fn has_same_coinbase_outputs_as(
+        &self,
+        other: &Self,
+        pool_script: &CoinbaseRewardScript,
+    ) -> bool {
+        self.coinbase_outputs(100, pool_script) == other.coinbase_outputs(100, pool_script)
+    }
+
     /// Verifies that spendable outputs match the miner-side payout encoded by this mode.
     ///
     /// OP_RETURN outputs are ignored. [`PayoutMode::FullDonation`] has no miner payout address, so
@@ -621,6 +633,24 @@ mod tests {
         let full_donation_outputs = full_donation.coinbase_outputs(1_000, &pool_script);
         assert_eq!(full_donation_outputs.len(), 1);
         assert_eq!(full_donation_outputs[0].value.to_sat(), 1_000);
+    }
+
+    #[test]
+    fn compares_payout_modes_by_coinbase_outputs() {
+        let pool_script = script_from_address(OTHER_ADDRESS).unwrap();
+        let legacy_solo = PayoutMode::try_from(MINER_ADDRESS).unwrap();
+        let solo =
+            PayoutMode::try_from(format!("sri/solo/{MINER_ADDRESS}/worker").as_str()).unwrap();
+        let other_solo =
+            PayoutMode::try_from(format!("sri/solo/{TESTNET_ADDRESS}/worker").as_str()).unwrap();
+        let full_donation = PayoutMode::FullDonation;
+
+        assert!(legacy_solo.has_same_coinbase_outputs_as(&solo, &pool_script));
+        assert!(!legacy_solo.has_same_coinbase_outputs_as(&other_solo, &pool_script));
+        assert!(!legacy_solo.has_same_coinbase_outputs_as(&full_donation, &pool_script));
+        assert!(
+            full_donation.has_same_coinbase_outputs_as(&PayoutMode::FullDonation, &pool_script)
+        );
     }
 
     #[test]

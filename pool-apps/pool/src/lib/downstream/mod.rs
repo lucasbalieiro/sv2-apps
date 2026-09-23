@@ -8,6 +8,7 @@ use async_channel::{Receiver, Sender, unbounded};
 use stratum_apps::{
     bitcoin_core_sv2::CancellationToken,
     channel_utils::ReceiverCleanup,
+    config_helpers::CoinbaseRewardScript,
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
         channels_sv2::server::{
@@ -70,7 +71,7 @@ pub struct Downstream {
     pub channel_id_factory: Arc<AtomicU32>,
     /// Extensions that have been successfully negotiated with this client
     pub negotiated_extensions: SharedLock<Vec<u16>>,
-    /// Payout mode derived from user_identity (None until channel is opened)
+    /// Payout policy for this connection, derived from the first channel's user_identity.
     pub payout_mode: SharedLock<Option<PayoutMode>>,
     downstream_io: DownstreamIo,
     pub downstream_id: usize,
@@ -88,6 +89,21 @@ pub struct Downstream {
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl Downstream {
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn payout_is_compatible(
+        &self,
+        payout_mode: &PayoutMode,
+        pool_reward_script: &CoinbaseRewardScript,
+    ) -> Result<bool, PoolError<error::ChannelManager>> {
+        self.payout_mode
+            .with(|current| {
+                current.as_ref().is_none_or(|current| {
+                    current.has_same_coinbase_outputs_as(payout_mode, pool_reward_script)
+                })
+            })
+            .map_err(PoolError::shutdown)
+    }
+
     fn handle_error_action(
         &self,
         context: &str,

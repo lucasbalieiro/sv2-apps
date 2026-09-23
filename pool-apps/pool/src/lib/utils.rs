@@ -15,6 +15,9 @@ pub use stratum_apps::payout::{PayoutMode, PayoutModeError};
 
 pub(crate) type DownstreamMessage = (MiningOwned, Option<Vec<Tlv>>);
 
+pub(crate) const ERROR_CODE_OPEN_MINING_CHANNEL_INCOMPATIBLE_PAYOUT_MODE: &str =
+    "incompatible-payout-mode";
+
 /// Constructs a `SetupConnection` message for the mining protocol.
 #[allow(clippy::result_large_err)]
 pub fn get_setup_connection_message(

@@ -38,7 +38,10 @@ use jd_server_sv2::job_declarator::SetCustomMiningJobResponse;
 use crate::{
     channel_manager::{CLIENT_SEARCH_SPACE_BYTES, ChannelManager, RouteMessageTo},
     error::{self, PoolError, PoolErrorKind},
-    utils::{PayoutMode, PayoutModeError, create_close_channel_msg},
+    utils::{
+        ERROR_CODE_OPEN_MINING_CHANNEL_INCOMPATIBLE_PAYOUT_MODE, PayoutMode, PayoutModeError,
+        create_close_channel_msg,
+    },
 };
 
 fn extranonce_allocation_error_code(
@@ -109,6 +112,12 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
                 .map_err(PoolError::shutdown)?;
             downstream.standard_channels.remove(&msg.channel_id);
             downstream.extended_channels.remove(&msg.channel_id);
+            if downstream.standard_channels.is_empty() && downstream.extended_channels.is_empty() {
+                downstream
+                    .payout_mode
+                    .set(None)
+                    .map_err(PoolError::shutdown)?;
+            }
             Ok(())
         })?;
         self.vardiff.remove(&(downstream_id, msg.channel_id).into());
@@ -188,15 +197,33 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
                     }
                 };
 
+                if !downstream
+                    .payout_is_compatible(&payout_mode, &self.coinbase_reward_script)?
+                {
+                    warn!(
+                        downstream_id,
+                        request_id,
+                        user_identity = %user_identity,
+                        "Rejecting standard channel with an incompatible payout policy"
+                    );
+                    let open_standard_mining_channel_error = OpenMiningChannelErrorOwned {
+                        request_id,
+                        error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INCOMPATIBLE_PAYOUT_MODE
+                            .to_string()
+                            .try_into()
+                            .expect("error code must be valid string"),
+                    };
+                    return Ok(vec![(
+                        downstream_id,
+                        MiningOwned::OpenMiningChannelError(open_standard_mining_channel_error),
+                    )
+                        .into()]);
+                }
+
                 let coinbase_outputs = payout_mode.coinbase_outputs(
                     last_future_template.coinbase_tx_value_remaining,
                     &self.coinbase_reward_script,
                 );
-
-                downstream
-                    .payout_mode
-                    .set(Some(payout_mode))
-                    .map_err(PoolError::shutdown)?;
 
                 let nominal_hash_rate = msg.nominal_hash_rate;
                 let requested_max_target = Target::from_le_bytes(msg.max_target.to_array());
@@ -346,6 +373,10 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
                 downstream
                     .standard_channels
                     .insert(channel_id, standard_channel);
+                downstream
+                    .payout_mode
+                    .set(Some(payout_mode.clone()))
+                    .map_err(PoolError::shutdown)?;
                 if !downstream.requires_standard_jobs.load(Ordering::SeqCst) {
                     downstream
                         .group_channel
@@ -407,6 +438,52 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
                         .into()]);
                 }
 
+                let payout_mode = match PayoutMode::try_from(user_identity.as_str()) {
+                    Ok(mode) => mode,
+                    Err(PayoutModeError::NoPayoutMode(_)) => PayoutMode::FullDonation,
+                    Err(_) => {
+                        error!(
+                            "Invalid user_identity '{}': does not match any supported identity format",
+                            user_identity
+                        );
+                        let open_extended_mining_channel_error = OpenMiningChannelErrorOwned {
+                            request_id,
+                            error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        return Ok(vec![(
+                            downstream_id,
+                            MiningOwned::OpenMiningChannelError(open_extended_mining_channel_error),
+                        )
+                            .into()]);
+                    }
+                };
+
+                if !downstream
+                    .payout_is_compatible(&payout_mode, &self.coinbase_reward_script)?
+                {
+                    warn!(
+                        downstream_id,
+                        request_id,
+                        user_identity = %user_identity,
+                        "Rejecting extended channel with an incompatible payout policy"
+                    );
+                    let open_extended_mining_channel_error = OpenMiningChannelErrorOwned {
+                        request_id,
+                        error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INCOMPATIBLE_PAYOUT_MODE
+                            .to_string()
+                            .try_into()
+                            .expect("error code must be valid string"),
+                    };
+                    return Ok(vec![(
+                        downstream_id,
+                        MiningOwned::OpenMiningChannelError(open_extended_mining_channel_error),
+                    )
+                        .into()]);
+                }
+
                 let mut messages: Vec<RouteMessageTo> = Vec::new();
 
                 let extranonce_prefix = match self
@@ -437,34 +514,6 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
                             .into()]);
                     }
                 };
-
-                let payout_mode = match PayoutMode::try_from(user_identity.as_str()) {
-                    Ok(mode) => mode,
-                    Err(PayoutModeError::NoPayoutMode(_)) => PayoutMode::FullDonation,
-                    Err(_) => {
-                        error!(
-                            "Invalid user_identity '{}': does not match any supported identity format",
-                            user_identity
-                        );
-                        let open_extended_mining_channel_error = OpenMiningChannelErrorOwned {
-                            request_id,
-                            error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
-                                .to_string()
-                                .try_into()
-                                .expect("error code must be valid string"),
-                        };
-                        return Ok(vec![(
-                            downstream_id,
-                            MiningOwned::OpenMiningChannelError(open_extended_mining_channel_error),
-                        )
-                            .into()]);
-                    }
-                };
-
-                downstream
-                    .payout_mode
-                    .set(Some(payout_mode.clone()))
-                    .map_err(PoolError::shutdown)?;
 
                 let channel_id = downstream.channel_id_factory.fetch_add(1, Ordering::SeqCst);
 
@@ -650,6 +699,10 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
                 downstream
                     .extended_channels
                     .insert(channel_id, extended_channel);
+                downstream
+                    .payout_mode
+                    .set(Some(payout_mode))
+                    .map_err(PoolError::shutdown)?;
                 let vardiff = VardiffState::new().map_err(PoolError::shutdown)?;
                 self.vardiff
                     .insert((downstream_id, channel_id).into(), vardiff);
