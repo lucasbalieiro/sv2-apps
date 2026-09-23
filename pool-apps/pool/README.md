@@ -122,6 +122,7 @@ cargo run -- -c config-examples/pool-config-hosted-sv2-tp-example.toml
 The solo/donation payout mode is computed during runtime from the `user_identity` value of `OpenStandardMiningChannel`/`OpenExtendedMiningChannel`.
 Pool uses the shared `stratum-apps` payout helper so this parsing is consistent with other applications that need to verify the same distribution.
 If the `user_identity` does not match any supported pattern, the pool continues with the payout to the pool. If the `user_identity` starts with the `sri` prefix but the pattern is malformed, the pool sends an `OpenMiningChannelError`.
+Each downstream connection uses one effective coinbase payout policy. A channel open with an incompatible policy is rejected with `incompatible-payout-mode`. Supporting multiple payout policies on one connection would require separate groups and is not currently implemented.
 
 ### User Identity Patterns
 
@@ -144,3 +145,4 @@ the pool's portion and must be between 1 and 99.
 | Error Code | Cause |
 |------------|-------|
 | `invalid-user-identity` | Pattern doesn't match expected format |
+| `incompatible-payout-mode` | Payout policy differs from the policy already bound to the connection |
