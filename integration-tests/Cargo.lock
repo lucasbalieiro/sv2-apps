@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "integration_tests_sv2"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-channel 1.9.0",
  "clap",
@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "pool_sv2"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-channel 1.9.0",
  "clap",
@@ -4366,7 +4366,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stratum-apps"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "asic-rs",
  "async-channel 1.9.0",

@@ -1,6 +1,6 @@
 [package]
 name = "stratum-apps"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["The Stratum V2 Developers"]
 edition = "2024"
 rust-version = "1.88"
